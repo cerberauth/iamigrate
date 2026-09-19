@@ -1,0 +1,87 @@
+---
+title: Installation
+description: Install iamigrate as a CLI tool.
+sidebar:
+  order: 2
+---
+
+import { Tabs, TabItem } from '@/components/docs';
+
+## CLI
+
+<Tabs>
+  <TabItem label="Homebrew">
+
+```sh
+brew install cerberauth/tap/iamigrate
+```
+
+  </TabItem>
+  <TabItem label="Docker">
+
+```sh
+docker run --rm ghcr.io/cerberauth/iamigrate --help
+```
+
+Also published to Docker Hub as `cerberauth/iamigrate`.
+
+  </TabItem>
+  <TabItem label="Scoop">
+
+```sh
+scoop bucket add cerberauth https://github.com/cerberauth/scoop-bucket.git
+scoop install iamigrate
+```
+
+  </TabItem>
+  <TabItem label="WinGet">
+
+```sh
+winget install CerberAuth.iamigrate
+```
+
+  </TabItem>
+  <TabItem label="Chocolatey">
+
+```sh
+choco install iamigrate
+```
+
+  </TabItem>
+  <TabItem label="Linux packages">
+
+Prebuilt `.deb`, `.rpm`, `.apk`, and Arch Linux packages are attached to each [GitHub release](https://github.com/cerberauth/iamigrate/releases).
+
+  </TabItem>
+  <TabItem label="Binary">
+
+Download the archive for your platform from the [releases page](https://github.com/cerberauth/iamigrate/releases), extract it, and move the `iamigrate` binary onto your `PATH`.
+
+  </TabItem>
+  <TabItem label="Go">
+
+```sh
+go install github.com/cerberauth/iamigrate@latest
+```
+
+Requires Go 1.24 or later.
+
+  </TabItem>
+</Tabs>
+
+Verify the installation:
+
+```sh
+iamigrate --help
+```
+
+## Auth0 target setup
+
+`iamigrate import auth0` and `iamigrate diff` need a Management API token and a target database connection ID:
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_TOKEN=...   # Management API token with create:users, create:roles, create:organizations scopes
+```
+
+Both flags can also be passed directly via `--domain`/`--token` instead of the environment variables.

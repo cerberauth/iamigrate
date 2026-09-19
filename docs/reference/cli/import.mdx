@@ -1,0 +1,33 @@
+---
+title: import auth0
+description: Chunk, submit, poll, and import a CMF file into an Auth0 tenant.
+---
+
+import { Aside } from '@/components/docs';
+
+Streams a CMF file, chunks it to Auth0's 500KB Bulk User Import job limit, submits and polls each chunk, and merges the per-user results into `import-report.json`. If `organizations.cmf.jsonl` and/or `roles.cmf.jsonl` sit alongside the users file, the organizations/roles/memberships phase runs automatically afterward, through a bounded, rate-limit-aware worker pool.
+
+## Usage
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_TOKEN=...
+
+iamigrate import auth0 --in users.cmf.jsonl.gz --connection-id con_xxx
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--mapping` | `mapping.yaml` path (optional; can supply `--connection-id` instead) |
+| `--connection-id` | Auth0 database connection ID |
+| `--upsert` | Allow re-running this import against existing users. Forces the password translator to always use `custom_password_hash` (updatable) instead of the simpler, write-once `password_hash` field. |
+| `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
+| `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
+| `--report` | `import-report.json` output path (default: alongside `--in`) |
+
+<Aside type="caution">
+  Password hashes marked `portable: false`, `webauthn` factors, and `recovery_codes` are never imported — the report flags affected users under `requires_password_reset`, `requires_reenrollment`, and `requires_recovery_code_regen` respectively.
+</Aside>

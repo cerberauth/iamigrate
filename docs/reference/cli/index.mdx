@@ -1,0 +1,23 @@
+---
+title: CLI Reference
+description: All iamigrate commands and flags.
+---
+
+| Command | Does |
+| --- | --- |
+| [`testdata generate`](./testdata/) | Generate a synthetic CMF fixture and `answer-key.json` |
+| [`export`](./export/) | Export identities from a source into CMF |
+| [`map`](./map/) | Scaffold or update the CMF → target field mapping |
+| [`validate`](./validate/) | Dry-run a CMF file against a target's capabilities (no network calls) |
+| [`import auth0`](./import/) | Chunk, submit, poll, and import a CMF file into an Auth0 tenant |
+| [`diff`](./diff/) | Reconcile a CMF file against a live Auth0 tenant |
+
+## End-to-end flow
+
+```
+testdata generate ─┐
+                    ├─▶ validate ─▶ import auth0 ─▶ diff
+export ─▶ map ──────┘
+```
+
+`testdata generate` feeds the same `validate` → `import` → `diff` path as a real export, so it's a genuine rehearsal rather than a separate toy path.

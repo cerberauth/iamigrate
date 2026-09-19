@@ -1,0 +1,60 @@
+---
+title: Get Started
+description: CIAM identity migration toolkit — export identities into a canonical format, map, validate, and import them into your target provider.
+template: splash
+hero:
+  tagline: Migrate CIAM identities between providers via one canonical format. Export, map, validate, and import from the CLI.
+  actions:
+    - text: Get started
+      link: ./installation/
+      icon: right-arrow
+      variant: primary
+    - text: CLI reference
+      link: ./reference/cli/
+      icon: open-book
+sidebar:
+  order: 1
+---
+
+import { Card, CardGrid, LinkCard } from '@/components/docs';
+
+<CardGrid stagger>
+  <Card title="Export" icon="magnifier">
+    Export identities from a synthetic fixture or a flat CSV/JSON file into the Canonical Migration Format (CMF).
+  </Card>
+  <Card title="Map" icon="pencil">
+    Scaffold a mapping.yaml from source fields to CMF, with custom metadata flagged for review rather than guessed at.
+  </Card>
+  <Card title="Validate" icon="approve-check">
+    Dry-run a CMF file against a target's capabilities — no network calls — to catch unsupported hash algorithms or MFA types early.
+  </Card>
+  <Card title="Import" icon="setting">
+    Chunk, submit, and poll your target's bulk import job, translating every portable password hash and MFA factor along the way.
+  </Card>
+  <Card title="Diff" icon="warning">
+    Reconcile a CMF file against the live target after import.
+  </Card>
+</CardGrid>
+
+## Quick start
+
+```sh
+# Install (see the installation guide for Docker, Homebrew, and package options)
+brew install cerberauth/tap/iamigrate
+
+# Generate synthetic test data + a cleartext answer key for login verification
+iamigrate testdata generate --count 1000 --hash bcrypt:cost=10 --mfa totp:rate=0.3 --out ./fixtures/
+
+# Dry-run against your target's capabilities, no network calls
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target auth0
+
+# Import into a disposable Auth0 tenant
+iamigrate import auth0 --in ./fixtures/users.cmf.jsonl.gz --connection-id con_xxx
+```
+
+## Explore the docs
+
+<CardGrid>
+  <LinkCard title="Installation" description="Install via go install or from source." href="./installation/" />
+  <LinkCard title="CLI reference" description="All commands and flags." href="./reference/cli/" />
+</CardGrid>

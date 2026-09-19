@@ -1,0 +1,20 @@
+---
+title: diff
+description: Reconcile a CMF file against a live Auth0 tenant.
+---
+
+Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint) and reports anyone missing, plus any drift in `blocked` status.
+
+## Usage
+
+```sh
+iamigrate diff --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --token $AUTH0_TOKEN
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
+| `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |

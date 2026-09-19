@@ -1,0 +1,41 @@
+---
+title: testdata generate
+description: Generate a synthetic CMF fixture and answer-key.json.
+---
+
+Generates synthetic users directly in the Canonical Migration Format (CMF) — it's a `SourceConnector` like any other, so the same `validate`/`import`/`diff` path a real export goes through gets exercised from day one.
+
+It also writes `answer-key.json`, pairing each generated user's `source_id` with the cleartext password (and TOTP secret, where enrolled) used to produce their record. This file is gitignored by default and is what lets the live integration test prove a translated hash actually verifies.
+
+## Usage
+
+```sh
+iamigrate testdata generate \
+  --count 5000 \
+  --hash bcrypt:cost=10 \
+  --hash scrypt:cost=16384,blockSize=8,parallelization=1,keylen=32 \
+  --hash pbkdf2:digest=sha256,iterations=100000,keylen=32 \
+  --hash argon2:memory=65536,time=2,parallelism=1 \
+  --mfa totp:rate=0.3 --mfa sms:rate=0.1 --mfa recovery_codes:rate=0.2 \
+  --locale en --seed 42 --out ./fixtures/
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--count` | Number of synthetic users to generate (default `100`) |
+| `--hash` | Repeatable: `<algo>:<params>`, e.g. `bcrypt:cost=10`. Algorithms are distributed evenly across generated users. At least one is required. |
+| `--mfa` | Repeatable: `<type>:rate=<0-1>`, e.g. `totp:rate=0.3`. Multiple factors can co-occur on one user. |
+| `--locale` | Passed to the fake-data generator (default `en`) |
+| `--seed` | Seed for deterministic output (default `1`) |
+| `--out` | Output directory (default `./fixtures/`) |
+| `--no-answer-key` | Skip writing `answer-key.json` |
+
+## Output
+
+| File | Contents |
+| --- | --- |
+| `users.cmf.jsonl.gz` | The generated CMF records |
+| `manifest.json` | Record counts, per-algorithm hash counts, non-portable MFA counts |
+| `answer-key.json` | Cleartext password + TOTP secret per `source_id` (gitignored) |

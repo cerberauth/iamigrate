@@ -1,0 +1,29 @@
+---
+title: export
+description: Export identities from a source into CMF.
+---
+
+Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Phase 1 supports the `flatfile` source: a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`). Any other column is passed through as `app_metadata` and flagged as a manual mapping step rather than silently dropped.
+
+## Usage
+
+```sh
+iamigrate export --source flatfile --in users.csv --format csv --out ./export/
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--source` | Source connector name (Phase 1: `flatfile` only) |
+| `--in` | Input file path |
+| `--format` | Input format: `csv` \| `json` (default `csv`) |
+| `--out` | Output directory (default `./export/`) |
+
+## Output
+
+| File | Contents |
+| --- | --- |
+| `users.cmf.jsonl.gz` | The CMF records |
+| `manifest.json` | Record counts, per-algorithm hash counts, skipped records |
+| `mapping.yaml` | Scaffolded field mapping; empty for the recognized-column simple case, with `manual_steps` flagged for any custom `app_metadata` |

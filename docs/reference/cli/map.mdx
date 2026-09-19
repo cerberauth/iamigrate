@@ -1,0 +1,20 @@
+---
+title: map
+description: Scaffold or update the CMF -> target field mapping.
+---
+
+Loads an existing `mapping.yaml` (or starts a new one) and sets its target and connection ID. Custom fields an automatic mapping can't confidently place — most often `app_metadata` keys — are flagged under `manual_steps` for a human to confirm rather than guessed at.
+
+## Usage
+
+```sh
+iamigrate map --mapping mapping.yaml --target auth0 --connection-id con_xxx
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--mapping` | `mapping.yaml` path (default `mapping.yaml`) |
+| `--target` | Target connector name (default `auth0`) |
+| `--connection-id` | Target connection ID (Auth0 database connection) |

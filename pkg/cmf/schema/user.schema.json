@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cerberauth.com/iamigrate/schema/user-1.0.json",
+  "title": "CMF User (v1.0)",
+  "type": "object",
+  "required": ["cmf_version", "source_id", "profile", "provenance"],
+  "properties": {
+    "cmf_version": { "type": "string" },
+    "source_id": { "type": "string", "minLength": 1 },
+    "emails": { "type": "array", "items": { "$ref": "#/$defs/contact" } },
+    "phones": { "type": "array", "items": { "$ref": "#/$defs/contact" } },
+    "username": { "type": "string" },
+    "profile": { "type": "object" },
+    "blocked": { "type": "boolean" },
+    "password": {
+      "type": ["object", "null"],
+      "required": ["algorithm", "hash", "portable"],
+      "properties": {
+        "algorithm": {
+          "enum": ["bcrypt", "scrypt", "pbkdf2", "argon2", "md5", "sha1", "sha256", "sha512", "md4", "hmac", "ldap"]
+        },
+        "phc_string": { "type": "string" },
+        "hash": {
+          "type": "object",
+          "required": ["value", "encoding"],
+          "properties": {
+            "value": { "type": "string" },
+            "encoding": { "enum": ["hex", "base64", "utf8"] },
+            "digest": { "type": "string" }
+          }
+        },
+        "salt": {
+          "type": "object",
+          "required": ["value", "encoding"],
+          "properties": {
+            "value": { "type": "string" },
+            "encoding": { "enum": ["hex", "base64", "utf8"] },
+            "position": { "enum": ["prefix", "suffix"] }
+          }
+        },
+        "key": {
+          "type": "object",
+          "required": ["value", "encoding"],
+          "properties": {
+            "value": { "type": "string" },
+            "encoding": { "enum": ["hex", "base64", "utf8"] }
+          }
+        },
+        "params": { "type": "object" },
+        "portable": { "type": "boolean" }
+      }
+    },
+    "mfa_factors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "value", "portable"],
+        "properties": {
+          "type": { "enum": ["totp", "sms", "email", "webauthn", "recovery_codes", "push"] },
+          "value": { "type": "string" },
+          "totp_params": { "type": "object" },
+          "portable": { "type": "boolean" },
+          "enrolled_at": { "type": "string" }
+        }
+      }
+    },
+    "app_metadata": { "type": "object" },
+    "user_metadata": { "type": "object" },
+    "roles": { "type": "array", "items": { "type": "string" } },
+    "global_roles": { "type": "array", "items": { "type": "string" } },
+    "memberships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["organization"],
+        "properties": {
+          "organization": { "type": "string" },
+          "roles": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["source_connector", "exported_at"],
+      "properties": {
+        "source_connector": { "type": "string" },
+        "exported_at": { "type": "string" },
+        "source_record_hash": { "type": "string" }
+      }
+    }
+  },
+  "$defs": {
+    "contact": {
+      "type": "object",
+      "required": ["value"],
+      "properties": {
+        "value": { "type": "string" },
+        "verified": { "type": "boolean" },
+        "primary": { "type": "boolean" }
+      }
+    }
+  }
+}
