@@ -8,6 +8,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
 )
@@ -23,10 +24,15 @@ func newValidateCmd() *cobra.Command {
 		Use:   "validate",
 		Short: "Dry-run a CMF file against a target's Capabilities (no network calls)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if target != "auth0" {
-				return fmt.Errorf("unsupported --target %q (Phase 1 only supports \"auth0\")", target)
+			var caps connector.Capabilities
+			switch target {
+			case auth0.Name:
+				caps = (&auth0.Connector{}).Capabilities()
+			case kratos.Name:
+				caps = (&kratos.Connector{}).Capabilities()
+			default:
+				return fmt.Errorf("unsupported --target %q (supports \"auth0\" and \"kratos\")", target)
 			}
-			caps := (&auth0.Connector{}).Capabilities()
 
 			if mappingPath != "" {
 				m, err := mapping.Load(mappingPath)
@@ -76,8 +82,9 @@ func newValidateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
-	cmd.Flags().StringVar(&target, "target", "auth0", "target connector name")
+	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos")
 	_ = cmd.MarkFlagRequired("in")
+	_ = cmd.MarkFlagRequired("target")
 	return cmd
 }
 

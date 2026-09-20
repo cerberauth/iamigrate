@@ -1,5 +1,5 @@
 ---
-title: diff
+title: diff auth0
 description: Reconcile a CMF file against a live Auth0 tenant.
 ---
 
@@ -8,7 +8,7 @@ Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Em
 ## Usage
 
 ```sh
-iamigrate diff --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --token $AUTH0_TOKEN
+iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --token $AUTH0_TOKEN
 ```
 
 ## Flags

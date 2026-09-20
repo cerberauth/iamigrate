@@ -9,6 +9,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
 )
@@ -16,6 +17,7 @@ import (
 func newImportCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "import", Short: "Import CMF identities into a target"}
 	cmd.AddCommand(newImportAuth0Cmd())
+	cmd.AddCommand(newImportKratosCmd())
 	return cmd
 }
 
@@ -31,7 +33,7 @@ func newImportAuth0Cmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "auth0",
+		Use:   auth0.Name,
 		Short: "Chunk, submit, poll, and import a CMF file into an Auth0 tenant",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if domain == "" {
@@ -111,6 +113,69 @@ func newImportAuth0Cmd() *cobra.Command {
 	cmd.Flags().BoolVar(&upsert, "upsert", false, "allow re-running this import against existing users")
 	cmd.Flags().StringVar(&domain, "domain", "", "Auth0 tenant domain (or $AUTH0_DOMAIN)")
 	cmd.Flags().StringVar(&token, "token", "", "Auth0 Management API token (or $AUTH0_TOKEN)")
+	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newImportKratosCmd() *cobra.Command {
+	var (
+		in         string
+		schemaID   string
+		adminURL   string
+		reportPath string
+	)
+
+	cmd := &cobra.Command{
+		Use:   kratos.Name,
+		Short: "Create Ory Kratos identities from a CMF file via the Admin API",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if adminURL == "" {
+				adminURL = os.Getenv("KRATOS_ADMIN_URL")
+			}
+			if adminURL == "" {
+				return fmt.Errorf("--admin-url (or $KRATOS_ADMIN_URL) is required")
+			}
+
+			f, err := os.Open(in)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r, err := cmf.NewReader(f)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+
+			client := kratos.NewClient(adminURL)
+			target := kratos.New(client, schemaID)
+
+			report, err := target.Import(cmd.Context(), r, mapping.Mapping{}, connector.ImportOptions{})
+			if err != nil {
+				return err
+			}
+
+			b, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if reportPath == "" {
+				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
+			}
+			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+				return err
+			}
+
+			fmt.Fprintf(cmd.OutOrStdout(), "imported: %d succeeded, %d failed -> report %s\n",
+				len(report.Succeeded), len(report.Failed), reportPath)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&schemaID, "schema-id", "default", "Kratos identity schema ID to create identities against")
+	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd

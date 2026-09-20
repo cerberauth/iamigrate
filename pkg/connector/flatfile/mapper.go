@@ -46,7 +46,7 @@ func rowToUser(row map[string]string, hints map[string]cmf.Algorithm) (cmf.User,
 		},
 		Blocked: parseBool(row[colBlocked]),
 		Provenance: cmf.Provenance{
-			SourceConnector: "flatfile",
+			SourceConnector: Name,
 			ExportedAt:      time.Now().UTC(),
 		},
 	}

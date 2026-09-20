@@ -20,7 +20,7 @@ import { Card, CardGrid, LinkCard } from '@/components/docs';
 
 <CardGrid stagger>
   <Card title="Export" icon="magnifier">
-    Export identities from a synthetic fixture or a flat CSV/JSON file into the Canonical Migration Format (CMF).
+    Export identities from a synthetic fixture, a flat CSV/JSON file, or a running Ory Kratos instance into the Canonical Migration Format (CMF).
   </Card>
   <Card title="Map" icon="pencil">
     Scaffold a mapping.yaml from source fields to CMF, with custom metadata flagged for review rather than guessed at.
@@ -50,6 +50,9 @@ iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target auth0
 
 # Import into a disposable Auth0 tenant
 iamigrate import auth0 --in ./fixtures/users.cmf.jsonl.gz --connection-id con_xxx
+
+# ...or into a running Ory Kratos instance
+KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate import kratos --in ./fixtures/users.cmf.jsonl.gz --schema-id default
 ```
 
 ## Explore the docs

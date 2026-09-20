@@ -3,22 +3,26 @@ title: export
 description: Export identities from a source into CMF.
 ---
 
-Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Phase 1 supports the `flatfile` source: a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`). Any other column is passed through as `app_metadata` and flagged as a manual mapping step rather than silently dropped.
+Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Two sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); and `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash. Any other flat-file column is passed through as `app_metadata` and flagged as a manual mapping step rather than silently dropped.
 
 ## Usage
 
 ```sh
 iamigrate export --source flatfile --in users.csv --format csv --out ./export/
+
+# or, from a running Kratos instance
+KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate export --source kratos --out ./export/
 ```
 
 ## Flags
 
 | Flag | Description |
 | --- | --- |
-| `--source` | Source connector name (Phase 1: `flatfile` only) |
-| `--in` | Input file path |
-| `--format` | Input format: `csv` \| `json` (default `csv`) |
+| `--source` | Source connector name: `flatfile` \| `kratos` (required) |
+| `--in` | Input file path (flatfile source) |
+| `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
 | `--out` | Output directory (default `./export/`) |
+| `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
 
 ## Output
 

@@ -1,0 +1,19 @@
+---
+title: diff kratos
+description: Reconcile a CMF file against a live Ory Kratos instance.
+---
+
+Looks up every CMF user in the live instance by its email trait (via the Admin API's `credentials_identifier` filter) and reports anyone missing, plus any drift in `blocked`/`inactive` state.
+
+## Usage
+
+```sh
+iamigrate diff kratos --in users.cmf.jsonl.gz --admin-url http://127.0.0.1:4434
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |

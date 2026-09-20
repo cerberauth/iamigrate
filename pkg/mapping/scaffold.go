@@ -13,7 +13,7 @@ func Scaffold(target, connectionID string, appMetadataKeys, userMetadataKeys []s
 		m.AppMetadata = append(m.AppMetadata, MetadataPlacement{Key: k, Destination: "app_metadata"})
 		m.ManualSteps = append(m.ManualSteps, ManualStep{
 			Field:  "app_metadata." + k,
-			Reason: fmt.Sprintf("confirm %s should map to %s's app_metadata rather than user_metadata, or be dropped", k, target),
+			Reason: fmt.Sprintf("confirm %s should map to the target's app_metadata rather than user_metadata, or be dropped", k),
 		})
 	}
 	for _, k := range userMetadataKeys {

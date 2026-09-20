@@ -42,6 +42,30 @@ iamigrate export --source flatfile --in users.csv --format csv --out ./export/
 iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target auth0
 ```
 
+## Migrating with Ory Kratos
+
+Kratos can be either side of a migration: export identities out of a running
+instance via its Admin API, or import a CMF file into one.
+
+```sh
+export KRATOS_ADMIN_URL=http://127.0.0.1:4434
+
+# Export every identity (with its bcrypt/argon2id password hash) into CMF
+iamigrate export --source kratos --out ./export/
+
+# ...or import a CMF file as new identities against a given schema
+iamigrate import kratos --in ./fixtures/users.cmf.jsonl.gz --schema-id default
+
+# Reconcile a CMF file against the live instance after import
+iamigrate diff kratos --in ./fixtures/users.cmf.jsonl.gz
+```
+
+Kratos only supports importing pre-existing bcrypt and argon2id password
+hashes and totp/lookup_secret (recovery codes) MFA factors -- see
+`iamigrate validate --target kratos` to catch anything else before running
+an import. A disposable Kratos instance for trying this locally is in
+[`.docker/kratos`](.docker/kratos).
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)

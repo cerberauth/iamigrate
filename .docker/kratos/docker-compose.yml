@@ -1,0 +1,47 @@
+# Spins up a disposable Ory Kratos instance for the gated e2e test in
+# pkg/connector/kratos/live_test.go.
+#
+# Usage:
+#   docker compose -f .docker/kratos/docker-compose.yml up --wait
+#   KRATOS_ADMIN_URL=http://127.0.0.1:4434 go test ./pkg/connector/kratos/... -run TestLiveKratos
+#   docker compose -f .docker/kratos/docker-compose.yml down -v
+services:
+  kratos-migrate:
+    image: oryd/kratos:v1.3.1
+    volumes:
+      - type: bind
+        source: .
+        target: /etc/config/kratos
+      - type: volume
+        source: kratos-sqlite
+        target: /var/lib/sqlite
+    environment:
+      - DSN=sqlite:///var/lib/sqlite/db.sqlite?_fk=true&mode=rwc
+    command: migrate sql -e --yes
+    restart: on-failure
+
+  kratos:
+    image: oryd/kratos:v1.3.1
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    ports:
+      - "4433:4433"
+      - "4434:4434"
+    volumes:
+      - type: bind
+        source: .
+        target: /etc/config/kratos
+      - type: volume
+        source: kratos-sqlite
+        target: /var/lib/sqlite
+    command: serve -c /etc/config/kratos/kratos.yml --dev --watch-courier
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4434/admin/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  kratos-sqlite:

@@ -23,7 +23,10 @@ func New(client *Client) *Connector {
 	return &Connector{Client: client, Concurrency: defaultConcurrency}
 }
 
-func (*Connector) Name() string { return "auth0" }
+// Name is the connector's identifier, as used for --source/--target.
+const Name = "auth0"
+
+func (*Connector) Name() string { return Name }
 
 // Capabilities declares Auth0's bulk-import support: all 11
 // custom_password_hash algorithms, but only totp/sms/email MFA factors

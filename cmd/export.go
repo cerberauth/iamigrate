@@ -8,27 +8,30 @@ import (
 	"sort"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
+	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
+	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
 )
 
 func newExportCmd() *cobra.Command {
 	var (
-		source string
-		in     string
-		format string
-		outDir string
+		source   string
+		in       string
+		format   string
+		outDir   string
+		adminURL string
 	)
 
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export identities from a source into CMF",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if source != "flatfile" {
-				return fmt.Errorf("unsupported --source %q (Phase 1 only supports \"flatfile\"; use `iamigrate testdata generate` for the fixture source)", source)
+			if source != flatfile.Name && source != kratos.Name {
+				return fmt.Errorf("unsupported --source %q (supports \"flatfile\" and \"kratos\"; use `iamigrate testdata generate` for the fixture source)", source)
 			}
-			if in == "" {
+			if source == flatfile.Name && in == "" {
 				return fmt.Errorf("--in is required for --source flatfile")
 			}
 
@@ -44,8 +47,20 @@ func newExportCmd() *cobra.Command {
 			defer f.Close()
 
 			w := cmf.NewWriter(f)
-			opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
-			manifest, err := flatfile.New().Export(cmd.Context(), w, opts)
+			var manifest connector.Manifest
+			if source == kratos.Name {
+				if adminURL == "" {
+					adminURL = os.Getenv("KRATOS_ADMIN_URL")
+				}
+				if adminURL == "" {
+					return fmt.Errorf("--admin-url (or $KRATOS_ADMIN_URL) is required for --source kratos")
+				}
+				client := kratos.NewClient(adminURL)
+				manifest, err = kratos.New(client, "").Export(cmd.Context(), w, kratos.ExportOptions{})
+			} else {
+				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
+				manifest, err = flatfile.New().Export(cmd.Context(), w, opts)
+			}
 			if err != nil {
 				return err
 			}
@@ -64,7 +79,7 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			m := mapping.Scaffold("auth0", "", appKeys, userKeys)
+			m := mapping.Scaffold("", "", appKeys, userKeys)
 			if err := mapping.Save(filepath.Join(outDir, "mapping.yaml"), m); err != nil {
 				return err
 			}
@@ -75,10 +90,12 @@ func newExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&source, "source", "flatfile", "source connector name (Phase 1: flatfile)")
+	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos")
+	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
+	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
 	return cmd
 }
 
