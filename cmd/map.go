@@ -39,7 +39,8 @@ func newMapCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&mappingPath, "mapping", "mapping.yaml", "mapping.yaml path")
-	cmd.Flags().StringVar(&target, "target", "auth0", "target connector name")
+	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos")
 	cmd.Flags().StringVar(&connectionID, "connection-id", "", "target connection ID (Auth0 database connection)")
+	_ = cmd.MarkFlagRequired("target")
 	return cmd
 }

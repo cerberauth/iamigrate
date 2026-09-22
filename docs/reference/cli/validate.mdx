@@ -3,12 +3,14 @@ title: validate
 description: Dry-run a CMF file against a target's Capabilities, no network calls.
 ---
 
-Checks every user in a CMF file against the target's `Capabilities()` — which password algorithms and MFA types it accepts — before any API call is made. Catches an unsupported hash algorithm or a portable MFA type the target can't import (for Auth0: `webauthn` and `recovery_codes` are never portable) early, rather than failing mid-import.
+Checks every user in a CMF file against the target's `Capabilities()` — which password algorithms and MFA types it accepts — before any API call is made. Catches an unsupported hash algorithm or a portable MFA type the target can't import (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported) early, rather than failing mid-import.
 
 ## Usage
 
 ```sh
 iamigrate validate --in users.cmf.jsonl.gz --mapping mapping.yaml --target auth0
+# or
+iamigrate validate --in users.cmf.jsonl.gz --target kratos
 ```
 
 ## Flags
@@ -17,6 +19,6 @@ iamigrate validate --in users.cmf.jsonl.gz --mapping mapping.yaml --target auth0
 | --- | --- |
 | `--in` | CMF `users.cmf.jsonl.gz` path (required) |
 | `--mapping` | `mapping.yaml` path (optional) |
-| `--target` | Target connector name (Phase 1: `auth0` only) |
+| `--target` | Target connector name: `auth0` \| `kratos` (required) |
 
 Exits non-zero and lists every problem found if validation fails.

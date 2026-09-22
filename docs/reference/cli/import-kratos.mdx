@@ -1,0 +1,31 @@
+---
+title: import kratos
+description: Create Ory Kratos identities from a CMF file via the Admin API.
+---
+
+import { Aside } from '@/components/docs';
+
+Streams a CMF file and creates one identity per user via `POST /admin/identities` against the Kratos instance at `--admin-url`. Kratos has no bulk-import job like Auth0's, so identities are created one at a time; a failed identity is recorded in `import-report.json` without stopping the run.
+
+## Usage
+
+```sh
+export KRATOS_ADMIN_URL=http://127.0.0.1:4434
+
+iamigrate import kratos --in users.cmf.jsonl.gz --schema-id default
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--schema-id` | Kratos identity schema ID to create identities against (default `default`) |
+| `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |
+| `--report` | `import-report.json` output path (default: alongside `--in`) |
+
+Each CMF user's first email becomes the `email` trait and, if present, `username` becomes the `username` trait; every other identity schema trait comes from `user_metadata`. `app_metadata` maps to `metadata_admin`, `user_metadata` to `metadata_public`, and `blocked: true` maps to Kratos' `inactive` state.
+
+<Aside type="caution">
+  Kratos only accepts pre-existing `bcrypt` and `argon2id` password hashes, and only `totp`/`recovery_codes` MFA factors can be imported with their existing secret — everything else is skipped and flagged in the report under `requires_password_reset` or `requires_reenrollment`. Run `iamigrate validate --target kratos` first to catch these before importing.
+</Aside>

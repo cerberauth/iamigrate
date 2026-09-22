@@ -51,7 +51,10 @@ func NewTarget(path string, format Format) *Connector {
 	return &Connector{targetPath: path, targetFormat: format}
 }
 
-func (*Connector) Name() string { return "flatfile" }
+// Name is the connector's identifier, as used for --source.
+const Name = "flatfile"
+
+func (*Connector) Name() string { return Name }
 
 // Export reads opts.Path (CSV or JSON, per opts.Format), maps each row's
 // fields into CMF per m, and writes the result to w.
