@@ -12,6 +12,7 @@ import (
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // Connector is a SourceConnector generating synthetic CMF users. It's used
@@ -46,6 +47,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	}
 	var answerKey AnswerKey
 	emails := map[string]bool{}
+	bar := progress.FromContext(ctx)
 
 	now := time.Now().UTC()
 	for i := 0; i < opts.Count; i++ {
@@ -102,6 +104,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			return manifest, fmt.Errorf("fixture: writing user %s: %w", sourceID, err)
 		}
 		manifest.RecordCount++
+		bar.Add(1)
 
 		if opts.AnswerKeyPath != "" {
 			answerKey.Entries = append(answerKey.Entries, AnswerKeyEntry{

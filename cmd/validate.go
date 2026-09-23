@@ -55,6 +55,10 @@ func newValidateCmd() *cobra.Command {
 			}
 			defer r.Close()
 
+			_, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+
 			var problems []string
 			count := 0
 			for {
@@ -66,9 +70,11 @@ func newValidateCmd() *cobra.Command {
 					return err
 				}
 				count++
+				bar.Add(1)
 				problems = append(problems, checkUser(u, caps)...)
 			}
 
+			bar.Done()
 			fmt.Fprintf(cmd.OutOrStdout(), "checked %d users against %s: %d problem(s)\n", count, target, len(problems))
 			for _, p := range problems {
 				fmt.Fprintln(cmd.OutOrStdout(), " -", p)

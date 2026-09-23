@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // defaultPageSize is the number of identities requested per page during
@@ -63,6 +64,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
 		NonPortableMFACounts: map[cmf.MFAType]int{},
 	}
+	bar := progress.FromContext(ctx)
 
 	path := "/admin/identities?per_page=" + strconv.Itoa(defaultPageSize) + "&include_credential=password"
 	for path != "" {
@@ -79,6 +81,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		}
 
 		for _, id := range identities {
+			bar.Add(1)
 			u, skipReason, err := userFromIdentity(id, Name)
 			if err != nil {
 				return manifest, err
@@ -184,6 +187,7 @@ func indexOf(s, sub string) int {
 // Import creates one Kratos identity per CMF user via the Admin API.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
 	var report connector.ImportReport
+	bar := progress.FromContext(ctx)
 
 	for {
 		select {
@@ -199,6 +203,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 		if err != nil {
 			return report, err
 		}
+		bar.Add(1)
 
 		id, flags, err := buildIdentity(u, c.SchemaID)
 		if err != nil {
@@ -235,6 +240,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 // looking their email trait up via the Admin API's identities list filter.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	var report connector.DiffReport
+	bar := progress.FromContext(ctx)
 
 	for {
 		u, err := r.ReadUser()
@@ -244,6 +250,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 		if err != nil {
 			return report, err
 		}
+		bar.Add(1)
 		if len(u.Emails) == 0 {
 			continue
 		}

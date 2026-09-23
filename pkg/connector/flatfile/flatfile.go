@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // Format names the flat-file encoding.
@@ -73,6 +74,8 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
 		NonPortableMFACounts: map[cmf.MFAType]int{},
 	}
+	bar := progress.FromContext(ctx)
+	bar.SetTotal(len(rows))
 
 	for _, row := range rows {
 		select {
@@ -81,6 +84,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		default:
 		}
 
+		bar.Add(1)
 		u, skipReason, err := rowToUser(row, opts.HashHints)
 		if err != nil {
 			return manifest, err

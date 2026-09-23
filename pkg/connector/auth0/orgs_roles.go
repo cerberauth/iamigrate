@@ -7,6 +7,7 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // RunOrgsRolesPhase implements DESIGN.md's post-import organizations/
@@ -30,6 +31,8 @@ func RunOrgsRolesPhase(
 		OrgIDMap:  map[string]string{},
 		RoleIDMap: map[string]string{},
 	}
+	bar := progress.FromContext(ctx)
+	bar.Stage("creating roles & organizations", len(roles)+len(orgs))
 
 	// Step 1: roles, matched by name (no source_id round-trip on Auth0's
 	// side, per the design doc).
@@ -38,6 +41,7 @@ func RunOrgsRolesPhase(
 		return report, err
 	}
 	for _, role := range roles {
+		bar.Add(1)
 		if id, ok := existingRoles[role.Name]; ok {
 			report.RoleIDMap[role.SourceID] = id
 			continue
@@ -55,6 +59,7 @@ func RunOrgsRolesPhase(
 		return report, err
 	}
 	for _, org := range orgs {
+		bar.Add(1)
 		if id, ok := existingOrgs[org.Name]; ok {
 			report.OrgIDMap[org.SourceID] = id
 			continue
@@ -101,6 +106,7 @@ func RunOrgsRolesPhase(
 		}
 	}
 
+	bar.Stage("assigning memberships & roles", len(tasks))
 	errs := runPool(ctx, concurrency, tasks)
 	for _, err := range errs {
 		if err != nil {

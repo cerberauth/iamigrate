@@ -12,6 +12,7 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // chunkMaxBytes is Auth0's per-file limit for a bulk user import job.
@@ -54,16 +55,20 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	var roleInfos []userRoleInfo
 	var chunk []map[string]any
 	chunkBytes := 2 // "[]"
+	chunkNum := 0
+	bar := progress.FromContext(ctx)
 
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk)
+		chunkNum++
+		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk, chunkNum)
 		if err != nil {
 			return err
 		}
 		mergeReport(&report, partial)
+		bar.Add(len(chunk))
 		chunk = nil
 		chunkBytes = 2
 		return nil
@@ -151,8 +156,10 @@ func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Failed = append(dst.Failed, src.Failed...)
 }
 
-func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any) (connector.ImportReport, error) {
+func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, chunkNum int) (connector.ImportReport, error) {
 	var report connector.ImportReport
+	bar := progress.FromContext(ctx)
+	defer bar.Status("")
 
 	sourceIDs := make(map[string]bool, len(chunk))
 	for _, rec := range chunk {
@@ -166,10 +173,13 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 		return report, fmt.Errorf("auth0: encoding chunk: %w", err)
 	}
 
+	bar.Status("chunk %d: uploading %d users", chunkNum, len(chunk))
 	jobID, err := submitImportJob(ctx, client, connectionID, upsert, body)
 	if err != nil {
 		return report, err
 	}
+
+	bar.Status("chunk %d: Auth0 job %s running", chunkNum, jobID)
 
 	status, err := pollJob(ctx, client, jobID)
 	if err != nil {

@@ -81,6 +81,28 @@ func (r *Reader) Close() error {
 	return r.gz.Close()
 }
 
+// CountUsers counts the user records in a gzip-compressed CMF stream
+// without decoding them, e.g. to size a progress bar before importing.
+func CountUsers(r io.Reader) (int, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return 0, fmt.Errorf("cmf: opening gzip stream: %w", err)
+	}
+	defer gz.Close()
+	sc := bufio.NewScanner(gz)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	n := 0
+	for sc.Scan() {
+		if len(sc.Bytes()) > 0 {
+			n++
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return 0, fmt.Errorf("cmf: counting user records: %w", err)
+	}
+	return n, nil
+}
+
 // WriteOrganizations writes organizations.cmf.jsonl (uncompressed; see
 // SPEC_NOTES.md open question 2).
 func WriteOrganizations(w io.Writer, orgs []Organization) error {
