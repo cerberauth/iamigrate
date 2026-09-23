@@ -2,6 +2,7 @@ package hash
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"strings"
 
@@ -85,18 +86,45 @@ func translateBcrypt(p cmf.Password, allowPasswordHash bool) (Auth0Hash, error) 
 	}, nil
 }
 
+// intParam reads an integer CMF param. Params built in-process hold int,
+// but params decoded from a CMF file hold float64 (encoding/json's
+// default for numbers), so both must be accepted.
+func intParam(params map[string]any, key string) (int, bool) {
+	switch v := params[key].(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		if v != math.Trunc(v) {
+			return 0, false
+		}
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
 func translateScrypt(p cmf.Password) (Auth0Hash, error) {
-	keylen, _ := p.Params["keylen"].(int)
+	keylen, _ := intParam(p.Params, "keylen")
 	if keylen == 0 {
 		return Auth0Hash{}, fmt.Errorf("hash: scrypt requires params.keylen for Auth0")
 	}
-	cost, _ := p.Params["cost"].(int)
+	cost, _ := intParam(p.Params, "cost")
 	if cost == 0 || cost&(cost-1) != 0 {
 		return Auth0Hash{}, fmt.Errorf("hash: scrypt params.cost must be a power of two, got %v", p.Params["cost"])
 	}
 	payload := map[string]any{
 		payloadKeyAlgorithm: "scrypt",
 		payloadKeyHash:      map[string]any{payloadKeyValue: p.Hash.Value, payloadKeyEncoding: string(p.Hash.Encoding)},
+		"keylen":            keylen,
+		"cost":              cost,
+	}
+	// blockSize and parallelization are optional in Auth0 (defaults 8 and 1).
+	for _, key := range []string{"blockSize", "parallelization"} {
+		if v, ok := intParam(p.Params, key); ok && v != 0 {
+			payload[key] = v
+		}
 	}
 	if p.Salt != nil {
 		payload["salt"] = map[string]any{payloadKeyValue: p.Salt.Value, payloadKeyEncoding: string(p.Salt.Encoding)}
@@ -105,11 +133,11 @@ func translateScrypt(p cmf.Password) (Auth0Hash, error) {
 }
 
 func translatePBKDF2(p cmf.Password) (Auth0Hash, error) {
-	iterations, ok := p.Params["iterations"].(int)
+	iterations, ok := intParam(p.Params, "iterations")
 	if !ok || iterations == 0 {
 		iterations = 100000
 	}
-	keylen, ok := p.Params["keylen"].(int)
+	keylen, ok := intParam(p.Params, "keylen")
 	if !ok || keylen == 0 {
 		keylen = 64
 	}
@@ -170,8 +198,9 @@ func translateHMAC(p cmf.Password) (Auth0Hash, error) {
 				payloadKeyValue:    p.Hash.Value,
 				payloadKeyEncoding: string(p.Hash.Encoding),
 				"digest":           p.Hash.Digest,
+				// Auth0 nests the HMAC key under hash; a top-level key is rejected.
+				"key": map[string]any{payloadKeyValue: p.Key.Value, payloadKeyEncoding: string(p.Key.Encoding)},
 			},
-			"key": map[string]any{payloadKeyValue: p.Key.Value, payloadKeyEncoding: string(p.Key.Encoding)},
 		},
 	}, nil
 }
