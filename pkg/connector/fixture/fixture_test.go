@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -59,6 +60,19 @@ func TestExportGeneratesValidCMFAndAnswerKey(t *testing.T) {
 		users = append(users, u)
 	}
 	require.Len(t, users, 20)
+
+	// Emails are derived from the profile name, unique, and on reserved domains.
+	seen := map[string]bool{}
+	for _, u := range users {
+		require.Len(t, u.Emails, 1)
+		email := u.Emails[0].Value
+		local, domain, ok := strings.Cut(email, "@")
+		require.True(t, ok)
+		require.Contains(t, []string{"example.com", "example.net", "example.org"}, domain)
+		require.True(t, strings.HasPrefix(local, strings.ToLower(u.Profile.GivenName)+"."), "email %q does not match name %q", email, u.Profile.Name)
+		require.False(t, seen[email], "duplicate email %q", email)
+		seen[email] = true
+	}
 
 	// answer-key.json entries must actually verify against the emitted hash.
 	b, err := os.ReadFile(answerKeyPath)
