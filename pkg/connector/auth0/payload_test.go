@@ -12,6 +12,7 @@ func TestBuildImportUserFlagsWebAuthnAndRecoveryCodes(t *testing.T) {
 	now := time.Now().UTC()
 	u := cmf.User{
 		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "u1@example.com", Verified: true}},
 		MFAFactors: []cmf.MFAFactor{
 			{Type: cmf.MFAWebAuthn, Value: "cred", Portable: false, EnrolledAt: &now},
 			{Type: cmf.MFARecoveryCodes, Value: "codes", Portable: false, EnrolledAt: &now},
@@ -31,6 +32,7 @@ func TestBuildImportUserFlagsWebAuthnAndRecoveryCodes(t *testing.T) {
 func TestBuildImportUserNonPortablePasswordRequiresReset(t *testing.T) {
 	u := cmf.User{
 		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "u1@example.com", Verified: true}},
 		Password: &cmf.Password{Algorithm: cmf.AlgBcrypt, Portable: false, Hash: cmf.HashValue{Value: "x"}},
 	}
 	rec, flags, err := buildImportUser(u, false)
@@ -45,6 +47,7 @@ func TestBuildImportUserNonPortablePasswordRequiresReset(t *testing.T) {
 func TestBuildImportUserPasswordHashVsCustomPasswordHash(t *testing.T) {
 	u := cmf.User{
 		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "u1@example.com", Verified: true}},
 		Password: &cmf.Password{
 			Algorithm: cmf.AlgBcrypt,
 			Portable:  true,
@@ -61,4 +64,30 @@ func TestBuildImportUserPasswordHashVsCustomPasswordHash(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, rec2, "custom_password_hash")
 	require.NotContains(t, rec2, "password_hash")
+}
+
+func TestBuildImportUserUsernameAndPhone(t *testing.T) {
+	u := cmf.User{
+		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "u1@example.com", Verified: true}},
+		Username: "jane.doe",
+		Phones:   []cmf.Contact{{Value: "+12025550142", Verified: true}},
+	}
+	rec, _, err := buildImportUser(u, false)
+	require.NoError(t, err)
+	require.Equal(t, "jane.doe", rec["username"])
+	require.Equal(t, "+12025550142", rec["phone_number"])
+	require.Equal(t, true, rec["phone_verified"])
+}
+
+func TestBuildImportUserWithoutEmailIsRejected(t *testing.T) {
+	for name, u := range map[string]cmf.User{
+		"username only": {SourceID: "u1", Username: "jane.doe"},
+		"phone only":    {SourceID: "u1", Phones: []cmf.Contact{{Value: "+12025550142"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := buildImportUser(u, false)
+			require.ErrorIs(t, err, errEmailRequired)
+		})
+	}
 }

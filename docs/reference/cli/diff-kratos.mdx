@@ -3,7 +3,7 @@ title: diff kratos
 description: Reconcile a CMF file against a live Ory Kratos instance.
 ---
 
-Looks up every CMF user in the live instance by its email trait (via the Admin API's `credentials_identifier` filter) and reports anyone missing, plus any drift in `blocked`/`inactive` state.
+Looks up every CMF user in the live instance by email, else username, else phone number (via the Admin API's `credentials_identifier` filter, which matches any trait the identity schema marks as a password identifier) and reports anyone missing, plus any drift in `blocked`/`inactive` state. Users with none of the three can't be looked up and are listed as `no identifier`.
 
 ## Usage
 

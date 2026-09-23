@@ -237,7 +237,9 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 }
 
 // Verify reconciles every CMF user against the live Kratos instance by
-// looking their email trait up via the Admin API's identities list filter.
+// looking up their email, else username, else phone via the Admin API's
+// credentials_identifier filter, which matches any trait the identity
+// schema marks as a password identifier.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	var report connector.DiffReport
 	bar := progress.FromContext(ctx)
@@ -251,14 +253,16 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
-		if len(u.Emails) == 0 {
+		identifier := loginIdentifier(u)
+		if identifier == "" {
+			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
 			continue
 		}
 
 		var found []identity
-		path := "/admin/identities?credentials_identifier=" + url.QueryEscape(u.Emails[0].Value)
+		path := "/admin/identities?credentials_identifier=" + url.QueryEscape(identifier)
 		if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
-			return report, fmt.Errorf("kratos: looking up %s: %w", u.Emails[0].Value, err)
+			return report, fmt.Errorf("kratos: looking up %s: %w", identifier, err)
 		}
 
 		if len(found) == 0 {

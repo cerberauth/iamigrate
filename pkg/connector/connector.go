@@ -113,6 +113,9 @@ type DriftEntry struct {
 type DiffReport struct {
 	MissingInTarget []string     `json:"missing_in_target"`
 	AttributeDrift  []DriftEntry `json:"attribute_drift,omitempty"`
+	// NoIdentifier lists users with no email, username, or phone to look
+	// them up by, so they couldn't be checked at all.
+	NoIdentifier []string `json:"no_identifier,omitempty"`
 }
 
 // SourceConnector exports identities from a provider into CMF.

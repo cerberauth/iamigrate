@@ -15,8 +15,8 @@ import (
 const goldenPath = "testdata/golden/users.golden.jsonl"
 
 // goldenUsers covers the edge cases DESIGN.md calls out for this
-// layer: password: null, ten MFA factors on one user, and non-ASCII
-// names.
+// layer: password: null, ten MFA factors on one user, non-ASCII names,
+// and users whose only login identifier is a username or a phone.
 func goldenUsers() []cmf.User {
 	fixedTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 
@@ -71,6 +71,20 @@ func goldenUsers() []cmf.User {
 				Hash:      cmf.HashValue{Value: "RdescudvJCsgt3ub+b+dWRWJTmaaJObG", Encoding: cmf.EncodingBase64},
 				Portable:  true,
 			},
+			Provenance: cmf.Provenance{SourceConnector: "golden", ExportedAt: fixedTime},
+		},
+		{
+			CMFVersion: cmf.Version,
+			SourceID:   "golden-4",
+			Username:   "username.only",
+			Profile:    cmf.Profile{GivenName: "Username", FamilyName: "Only"},
+			Provenance: cmf.Provenance{SourceConnector: "golden", ExportedAt: fixedTime},
+		},
+		{
+			CMFVersion: cmf.Version,
+			SourceID:   "golden-5",
+			Phones:     []cmf.Contact{{Value: "+12025550142", Verified: true, Primary: true}},
+			Profile:    cmf.Profile{GivenName: "Phone", FamilyName: "Only"},
 			Provenance: cmf.Provenance{SourceConnector: "golden", ExportedAt: fixedTime},
 		},
 	}

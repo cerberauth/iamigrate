@@ -1,0 +1,60 @@
+{
+  "$id": "https://schemas.ory.sh/presets/kratos/identifiers.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "iamigrate e2e test identity: email, username, or phone login",
+  "type": "object",
+  "properties": {
+    "traits": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "title": "E-Mail",
+          "ory.sh/kratos": {
+            "credentials": {
+              "password": {
+                "identifier": true
+              }
+            },
+            "verification": {
+              "via": "email"
+            }
+          }
+        },
+        "username": {
+          "type": "string",
+          "title": "Username",
+          "ory.sh/kratos": {
+            "credentials": {
+              "password": {
+                "identifier": true
+              }
+            }
+          }
+        },
+        "phone": {
+          "type": "string",
+          "format": "tel",
+          "title": "Phone",
+          "ory.sh/kratos": {
+            "credentials": {
+              "password": {
+                "identifier": true
+              }
+            },
+            "verification": {
+              "via": "sms"
+            }
+          }
+        }
+      },
+      "anyOf": [
+        { "required": ["email"] },
+        { "required": ["username"] },
+        { "required": ["phone"] }
+      ],
+      "additionalProperties": true
+    }
+  }
+}

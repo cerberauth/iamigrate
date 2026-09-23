@@ -117,7 +117,7 @@ and the three follow-up lists (these users need an email campaign or forced rese
   for users imported in that same batch.
 - **Re-running the same batch on Kratos = all conflicts** (no upsert). Always
   build the next batch with `--exclude-report` of every previous report.
-- **Kratos only stores the `email`/`username` traits from CMF, plus every
+- **Kratos only stores the `email`/`username`/`phone` traits from CMF, plus every
   `user_metadata` key copied into traits** (and `metadata_public`); a strict
   identity schema rejects unknown `user_metadata` keys. `app_metadata` →
   `metadata_admin`. Names are dropped; `external_id` stays empty.

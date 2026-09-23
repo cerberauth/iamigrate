@@ -31,8 +31,9 @@ Each user gets:
 | Field | Value |
 | --- | --- |
 | `source_id` | `fx_` followed by 16 random hex characters |
-| `emails` | One fake email, marked `verified` and `primary` |
-| `phones` | One fake phone number, marked `verified` and `primary`, **only if the user is enrolled in `sms` MFA** |
+| `emails` | One fake email, marked `verified` and `primary`, **only if `email` is one of the user's identifiers** (the default) |
+| `username` | A `given.family` username, **only if `username` is one of the user's identifiers** |
+| `phones` | One fake phone number, marked `verified` and `primary`, **only if `phone` is one of the user's identifiers or the user is enrolled in `sms` MFA** |
 | `profile` | Fake `given_name` and `family_name`, `name` set to both joined, `locale` set to `--locale` |
 | `password` | A hash of a random cleartext password, using one of the `--hash` specs |
 | `mfa_factors` | Zero or more factors, drawn from the `--mfa` specs |
@@ -47,10 +48,30 @@ Cleartext passwords are 16 characters mixing lowercase, uppercase, digits, and s
 | `--count` | `100` | Number of users to generate |
 | `--hash` | — (required) | Repeatable. A password hash spec, `<algo>` or `<algo>:<key>=<value>,...` |
 | `--mfa` | none | Repeatable. An MFA spec, `<type>:rate=<0-1>` |
+| `--identifier` | `email` | Repeatable. The login identifiers a user gets, `<kind>[+<kind>...]` |
 | `--locale` | `en` | Value written to each user's `profile.locale` |
 | `--seed` | `1` | Seed for the fake-data generator. See [Determinism](#determinism) |
 | `--out` | `./fixtures/` | Output directory, created if missing |
 | `--no-answer-key` | `false` | Don't write `answer-key.json` |
+
+## Login identifiers (`--identifier`)
+
+By default every user signs in with an email. To test targets where users sign in with a username or a phone number, pass `--identifier` with one or more of `email`, `username`, and `phone`, joined with `+`. Like `--hash`, specs are assigned round-robin, so this gives a third of users each kind:
+
+```sh
+iamigrate testdata generate --hash bcrypt:cost=10 \
+  --identifier username \
+  --identifier phone \
+  --identifier email+username+phone
+```
+
+- **`username`** is the user's name, lowercased, as `given.family`, cut to 15 characters (Auth0's default limit) and made unique with a counter.
+- **`phone`** is a unique number with an assigned US area code and a line number in the 555-0100 to 555-0199 range, which is reserved for fictional use. There are 3,500 such numbers, so generation fails if more users than that need a phone identifier.
+- A user without the `email` identifier has no `emails` at all.
+
+<Aside type="caution">
+  Auth0's bulk import requires an email, so Auth0 reports a username-only or phone-only user under `failed` with `TRANSLATION_ERROR`. For Kratos, the identity schema must declare the `username` and `phone` traits as password identifiers.
+</Aside>
 
 ## Password hashes (`--hash`)
 
@@ -188,7 +209,7 @@ fixtures/
 }
 ```
 
-`totp_secret` is only present for users enrolled in `totp`. The answer key is never merged into `users.cmf.jsonl.gz`, and is written with `0600` permissions.
+`email`, `username`, and `phone` are present for the identifiers the user was generated with. `totp_secret` is only present for users enrolled in `totp`. The answer key is never merged into `users.cmf.jsonl.gz`, and is written with `0600` permissions.
 
 <Aside>
   iamigrate writes `.gitignore` only if the output directory doesn't already have one. If you generate into a directory with an existing `.gitignore`, make sure it excludes `answer-key.json` yourself. Pass `--no-answer-key` when you only need the CMF file, for example for validation-only tests.

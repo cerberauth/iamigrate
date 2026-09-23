@@ -26,7 +26,7 @@ iamigrate import kratos --in users.cmf.jsonl.gz --schema-id default
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
 
-Each CMF user's first email becomes the `email` trait and, if present, `username` becomes the `username` trait; every other identity schema trait comes from `user_metadata`. `app_metadata` maps to `metadata_admin`, `user_metadata` to `metadata_public`, and `blocked: true` maps to Kratos' `inactive` state.
+Each CMF user's first email becomes the `email` trait and, if present, `username` becomes the `username` trait and the first phone number becomes the `phone` trait; every other identity schema trait comes from `user_metadata`. `app_metadata` maps to `metadata_admin`, `user_metadata` to `metadata_public`, and `blocked: true` maps to Kratos' `inactive` state.
 
 <Aside type="caution">
   Only `bcrypt` and `argon2id` password hashes are translated. A user with any other algorithm is not created and is reported under `failed` with `TRANSLATION_ERROR`. `sms`, `email`, `push`, and `webauthn` factors are dropped and the user is listed under `requires_reenrollment`. `totp` and `recovery_codes` factors are sent to Kratos, but Kratos v1.3.1 rejects them, so those users fail. Run `iamigrate validate --target kratos` first to catch unsupported hashes before importing.

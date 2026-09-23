@@ -8,6 +8,14 @@ import (
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 )
 
+// Trait names the identifiers are written to and read from. The target
+// identity schema must declare the ones a user has.
+const (
+	traitEmail    = "email"
+	traitUsername = "username"
+	traitPhone    = "phone"
+)
+
 // Kratos identity states.
 const (
 	stateActive   = "active"
@@ -54,10 +62,13 @@ func buildIdentity(u cmf.User, schemaID string) (identity, userFlags, error) {
 
 	traits := map[string]any{}
 	if len(u.Emails) > 0 {
-		traits["email"] = u.Emails[0].Value
+		traits[traitEmail] = u.Emails[0].Value
 	}
 	if u.Username != "" {
-		traits["username"] = u.Username
+		traits[traitUsername] = u.Username
+	}
+	if len(u.Phones) > 0 {
+		traits[traitPhone] = u.Phones[0].Value
 	}
 	for k, v := range u.UserMetadata {
 		traits[k] = v
@@ -111,9 +122,12 @@ func buildIdentity(u cmf.User, schemaID string) (identity, userFlags, error) {
 	}
 
 	if len(u.Emails) > 0 && u.Emails[0].Verified {
-		id.VerifiableAddresses = []verifiableAddress{
-			{Value: u.Emails[0].Value, Verified: true, Via: "email"},
-		}
+		id.VerifiableAddresses = append(id.VerifiableAddresses,
+			verifiableAddress{Value: u.Emails[0].Value, Verified: true, Via: "email"})
+	}
+	if len(u.Phones) > 0 && u.Phones[0].Verified {
+		id.VerifiableAddresses = append(id.VerifiableAddresses,
+			verifiableAddress{Value: u.Phones[0].Value, Verified: true, Via: "sms"})
 	}
 
 	return id, flags, nil
@@ -129,17 +143,14 @@ func userFromIdentity(id identity, sourceConnector string) (cmf.User, string, er
 		Provenance: cmf.Provenance{SourceConnector: sourceConnector, ExportedAt: time.Now().UTC()},
 	}
 
-	if email, ok := id.Traits["email"].(string); ok && email != "" {
-		verified := false
-		for _, va := range id.VerifiableAddresses {
-			if va.Value == email && va.Verified {
-				verified = true
-			}
-		}
-		u.Emails = []cmf.Contact{{Value: email, Verified: verified, Primary: true}}
+	if email, ok := id.Traits[traitEmail].(string); ok && email != "" {
+		u.Emails = []cmf.Contact{{Value: email, Verified: id.addressVerified(email), Primary: true}}
 	}
-	if username, ok := id.Traits["username"].(string); ok {
+	if username, ok := id.Traits[traitUsername].(string); ok {
 		u.Username = username
+	}
+	if phone, ok := id.Traits[traitPhone].(string); ok && phone != "" {
+		u.Phones = []cmf.Contact{{Value: phone, Verified: id.addressVerified(phone), Primary: true}}
 	}
 
 	u.AppMetadata = id.MetadataAdmin
@@ -166,4 +177,28 @@ func userFromIdentity(id identity, sourceConnector string) (cmf.User, string, er
 	}
 
 	return u, "", nil
+}
+
+// addressVerified reports whether value is one of id's verified addresses.
+func (id identity) addressVerified(value string) bool {
+	for _, va := range id.VerifiableAddresses {
+		if va.Value == value && va.Verified {
+			return true
+		}
+	}
+	return false
+}
+
+// loginIdentifier returns the identifier to look u up by: the email, else
+// the username, else the phone, or "" when u has none of them.
+func loginIdentifier(u cmf.User) string {
+	switch {
+	case len(u.Emails) > 0:
+		return u.Emails[0].Value
+	case u.Username != "":
+		return u.Username
+	case len(u.Phones) > 0:
+		return u.Phones[0].Value
+	}
+	return ""
 }

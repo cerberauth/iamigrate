@@ -115,12 +115,15 @@ func openReader(in string) (*cmf.Reader, func(), error) {
 }
 
 func printDiffReport(cmd *cobra.Command, report connector.DiffReport) {
-	fmt.Fprintf(cmd.OutOrStdout(), "missing in target: %d, attribute drift: %d\n",
-		len(report.MissingInTarget), len(report.AttributeDrift))
+	fmt.Fprintf(cmd.OutOrStdout(), "missing in target: %d, attribute drift: %d, no identifier: %d\n",
+		len(report.MissingInTarget), len(report.AttributeDrift), len(report.NoIdentifier))
 	for _, id := range report.MissingInTarget {
 		fmt.Fprintln(cmd.OutOrStdout(), " missing:", id)
 	}
 	for _, d := range report.AttributeDrift {
 		fmt.Fprintln(cmd.OutOrStdout(), " drift:", d.SourceID, d.Fields)
+	}
+	for _, id := range report.NoIdentifier {
+		fmt.Fprintln(cmd.OutOrStdout(), " no identifier:", id)
 	}
 }
