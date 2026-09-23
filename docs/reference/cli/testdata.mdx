@@ -5,6 +5,8 @@ description: Generate a synthetic CMF fixture and answer-key.json.
 
 Generates synthetic users directly in the Canonical Migration Format (CMF) — it's a `SourceConnector` like any other, so the same `validate`/`import`/`diff` path a real export goes through gets exercised from day one.
 
+For a detailed walkthrough of every hash algorithm, MFA factor type, and parameter, see [Generate test fixtures](../../../guides/generate-test-fixtures/).
+
 It also writes `answer-key.json`, pairing each generated user's `source_id` with the cleartext password (and TOTP secret, where enrolled) used to produce their record. This file is gitignored by default and is what lets the live integration test prove a translated hash actually verifies.
 
 ## Usage

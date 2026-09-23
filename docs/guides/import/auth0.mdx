@@ -1,0 +1,326 @@
+---
+title: Import users into Auth0
+description: Step-by-step guide to importing users, password hashes, and MFA enrollments into an Auth0 tenant with iamigrate.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through a complete import into Auth0: preparing the tenant, rehearsing with synthetic users that cover every password hash algorithm and MFA factor type you're likely to meet, validating, importing, verifying logins, and handling the users Auth0 can't take as-is.
+
+The rehearsal uses `iamigrate testdata generate`, so you can run the whole flow against a development tenant before touching real data. Once it works end to end, swap the fixture for your own CMF export (see [Step 9](#9-run-the-real-migration)).
+
+## How iamigrate imports into Auth0
+
+`iamigrate import auth0` uses Auth0's [bulk user import job](https://auth0.com/docs/manage-users/user-migration/bulk-user-imports) (`POST /jobs/users-imports`). For each CMF user it:
+
+1. Translates the password hash into Auth0's `password_hash` or `custom_password_hash` format.
+2. Translates portable MFA enrollments into `mfa_factors`, so users don't have to enroll again.
+3. Batches users into chunks that stay under Auth0's 500KB per-job limit, then submits each chunk and polls it until it finishes.
+4. Collects per-user results, plus any follow-up actions users need, in `import-report.json`.
+
+If `organizations.cmf.jsonl` or `roles.cmf.jsonl` sit next to the users file, a second phase creates the organizations and roles, then assigns memberships.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- An Auth0 tenant. **Use a dedicated development tenant for the rehearsal.** Imported users stay in it until you delete them.
+- Dashboard access with the **Admin** or **Editor - Users** role.
+
+## 1. Prepare the Auth0 tenant
+
+### Create or choose a database connection
+
+Users are imported into a single **database connection**. In the Auth0 Dashboard, go to **Authentication → Database** and either create a connection or open an existing one. The connection can use the Auth0 user store, or a custom database with **Import Users to Auth0** turned on.
+
+Copy the connection **identifier**. It looks like `con_XXXXXXXXXXXXXXXX`, and you'll pass it as `--connection-id`.
+
+<Aside>
+  If the connection has **Requires Username** turned on, every imported user needs a `username` in the CMF file. Users without one will be rejected.
+</Aside>
+
+### Enable the MFA factors you import
+
+Imported `totp`, `sms`, and `email` enrollments only work if the matching factor is enabled on the tenant. Under **Security → Multi-factor Auth**, turn on the factors your users have:
+
+| CMF factor | Auth0 factor to enable |
+| --- | --- |
+| `totp` | One-time Password |
+| `sms` | Phone Message (SMS and/or voice) |
+| `email` | Email |
+
+### Create a Management API token
+
+Create a Machine-to-Machine application authorized for the **Auth0 Management API**, and grant it these scopes:
+
+| Scope | Needed for |
+| --- | --- |
+| `create:users`, `read:users` | Bulk import jobs, job status and errors, `diff auth0` |
+| `update:users` | Assigning global roles to users |
+| `read:roles`, `create:roles` | Roles phase (only if you import `roles.cmf.jsonl`) |
+| `read:organizations`, `create:organizations`, `create:organization_members`, `create:organization_member_roles` | Organizations phase (only if you import `organizations.cmf.jsonl`) |
+
+Then export the tenant domain and an access token:
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_TOKEN=eyJhbGciOi...   # Management API access token
+```
+
+Management API tokens expire (after 24 hours by default). For large imports, get a fresh token right before you start.
+
+## 2. Generate a representative test export
+
+Generate a fixture that mixes the password hash algorithms and MFA setups you'll find in most real user bases:
+
+```sh
+iamigrate testdata generate \
+  --count 200 \
+  --hash bcrypt:cost=10 \
+  --hash bcrypt:cost=12 \
+  --hash scrypt:cost=16384,blockSize=8,parallelization=1,keylen=32 \
+  --hash pbkdf2:digest=sha256,iterations=100000,keylen=32 \
+  --hash argon2:memory=65536,time=2,parallelism=1 \
+  --hash sha256 \
+  --hash md5 \
+  --hash hmac \
+  --hash ldap \
+  --mfa totp:rate=0.3 \
+  --mfa sms:rate=0.1 \
+  --mfa email:rate=0.1 \
+  --mfa webauthn:rate=0.05 \
+  --mfa recovery_codes:rate=0.2 \
+  --seed 42 \
+  --out ./fixtures/
+```
+
+Hash algorithms are spread evenly across users. Each MFA type is drawn independently, so some users end up with several factors, such as `totp` plus `recovery_codes`. Together this covers:
+
+| Case | Why it matters for Auth0 |
+| --- | --- |
+| `bcrypt` cost 10 | The one case Auth0's simple `password_hash` field accepts |
+| `bcrypt` cost 12 | Needs `custom_password_hash` |
+| `scrypt`, `pbkdf2`, `argon2` | Modern KDFs, each with parameters that must survive translation |
+| `sha256`, `md5` | Legacy unsalted/salted digests |
+| `hmac`, `ldap` (`{SSHA}`) | Keyed hashes and LDAP directory exports |
+| `totp`, `sms`, `email` | MFA enrollments Auth0 can import |
+| `webauthn`, `recovery_codes` | MFA Auth0 can't import. Affected users need follow-up |
+
+The command writes:
+
+```
+fixtures/
+├── users.cmf.jsonl.gz   # the users, in CMF
+├── manifest.json        # counts per hash algorithm and non-portable MFA type
+├── answer-key.json      # cleartext password + TOTP secret per user (gitignored)
+└── .gitignore
+```
+
+`answer-key.json` is what lets you prove imported users can actually sign in. Keep it out of version control.
+
+## 3. Review the manifest
+
+```sh
+cat fixtures/manifest.json
+```
+
+```json
+{
+  "record_count": 200,
+  "hash_algorithm_counts": {
+    "argon2": 22,
+    "bcrypt": 46,
+    "hmac": 22,
+    "ldap": 22,
+    "md5": 22,
+    "pbkdf2": 22,
+    "scrypt": 22,
+    "sha256": 22
+  },
+  "non_portable_mfa_counts": {
+    "recovery_codes": 48,
+    "webauthn": 14
+  }
+}
+```
+
+With a real export, this is where you find out which algorithms you're dealing with. `non_portable_mfa_counts` tells you, before importing anything, how many users will need to re-enroll or regenerate recovery codes.
+
+## 4. Validate against Auth0 (no network calls)
+
+```sh
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target auth0
+```
+
+```
+checked 200 users against auth0: 0 problem(s)
+```
+
+`validate` checks every user against what Auth0 can import:
+
+- **Password algorithms:** all eleven `custom_password_hash` algorithms are supported: `bcrypt`, `scrypt`, `pbkdf2`, `argon2`, `md4`, `md5`, `sha1`, `sha256`, `sha512`, `hmac`, `ldap`. Any other algorithm is reported as a problem.
+- **MFA:** a portable factor Auth0 can't import is reported. For example, `push` enrollments fail with `unsupported MFA type "push"`.
+
+Factors marked non-portable in CMF (`webauthn`, `recovery_codes`) are not validation errors. By definition they can't move to any provider, so the import skips them and lists the affected users in the report (see [Step 7](#7-handle-users-that-need-follow-up)).
+
+<Aside type="caution">
+  `validate` checks algorithms and factor types, not value formats. Auth0 requires SMS factor phone numbers to be `+` followed by up to 15 digits (for example `+12125550001`), and TOTP secrets to be unpadded Base32. iamigrate passes these values through unchanged, so normalize them in your export. Otherwise Auth0 rejects the user with `MFA_FACTORS_FAILED`.
+</Aside>
+
+## 5. Understand how hashes and factors are translated
+
+You don't configure anything in this step. It explains what ends up in Auth0, which helps when you read the import report.
+
+### Password hashes
+
+| CMF algorithm | Auth0 field | Notes |
+| --- | --- | --- |
+| `bcrypt` (`$2a$`/`$2b$`, cost 10) | `password_hash` | Only without `--upsert`. `password_hash` can be set once and never updated. |
+| `bcrypt` (any other cost, or `$2y$`) | `custom_password_hash` (`bcrypt`) | |
+| `scrypt` | `custom_password_hash` (`scrypt`) | Requires `params.keylen` and a power-of-two `params.cost` |
+| `pbkdf2` | `custom_password_hash` (`pbkdf2`) | Re-encoded as a PHC string. Requires a salt. |
+| `argon2` | `custom_password_hash` (`argon2`) | Requires the full PHC string (`$argon2id$v=19$...`) |
+| `md4`, `md5`, `sha1`, `sha256`, `sha512` | `custom_password_hash` | Hash (and salt) must be `hex` or `base64` encoded. The salt position is preserved. |
+| `hmac` | `custom_password_hash` (`hmac`) | Requires `hash.digest` and the HMAC `key` |
+| `ldap` | `custom_password_hash` (`ldap`) | `{CRYPT}` values are not supported by Auth0 |
+| Any hash marked `portable: false` | none | The user is imported without a password and listed under `requires_password_reset` |
+
+A user whose hash is missing a required parameter isn't sent to Auth0. It is reported as `TRANSLATION_ERROR` in `failed`.
+
+### MFA factors
+
+| CMF factor | Auth0 result |
+| --- | --- |
+| `totp` | Imported as `{"totp": {"secret": ...}}`. The user keeps their existing authenticator app. |
+| `sms` | Imported as a verified `phone` factor |
+| `email` | Imported as a verified `email` factor |
+| `webauthn`, `push` | Not imported. The user is listed under `requires_reenrollment`. |
+| `recovery_codes` | Not imported. The user is listed under `requires_recovery_code_regen`. |
+
+### Profile
+
+`source_id` becomes the Auth0 `user_id`, and Auth0 adds the connection prefix (so `fx_ae0b6d305f0f4a20` becomes `auth0|fx_ae0b6d305f0f4a20`). The primary email and its verified flag, `username`, `given_name`, `family_name`, `name`, `nickname`, `picture`, `blocked`, `app_metadata`, and `user_metadata` are copied as-is.
+
+## 6. Run the import
+
+```sh
+iamigrate import auth0 \
+  --in ./fixtures/users.cmf.jsonl.gz \
+  --connection-id con_XXXXXXXXXXXXXXXX
+```
+
+```
+imported: 173 succeeded, 27 failed -> report fixtures/import-report.json
+  27 failed: MFA_FACTORS_FAILED
+```
+
+Users that already exist in the connection aren't counted as failures. They're listed on a separate line, for example `12 already exist: not updated; re-run with --upsert to update them`.
+
+The test data generator currently writes SMS phone numbers without the `+<country code>` prefix Auth0 requires, so expect the 27 users with an `sms` factor to fail with `MFA_FACTORS_FAILED`. This is a useful dry run of the format issue described in [Step 4](#4-validate-against-auth0-no-network-calls). To get a clean run, leave out `--mfa sms:rate=0.1` when you generate the fixture.
+
+Chunks are submitted one at a time and each job is polled until it finishes, so Auth0's limit of two concurrent import jobs per tenant isn't a concern. Don't start a second import against the same tenant while one is running.
+
+<Aside>
+  Plan whether you'll need to re-run the import **before** the first run. Without `--upsert`, cost-10 bcrypt hashes go into the write-once `password_hash` field. If you expect to re-import the same users (for example, to fix a bad translation), pass `--upsert` on every run. Every hash then goes into the updatable `custom_password_hash`.
+</Aside>
+
+## 7. Handle users that need follow-up
+
+Open the report:
+
+```sh
+cat fixtures/import-report.json
+```
+
+```json
+{
+  "succeeded": ["fx_ae0b6d305f0f4a20", "..."],
+  "failed": [
+    { "source_id": "fx_...", "code": "MFA_FACTORS_FAILED", "message": "..." }
+  ],
+  "requires_reenrollment": ["fx_a91990ed808aa2cc", "..."],
+  "requires_recovery_code_regen": ["fx_e9e838f2b3b9f8fe", "..."]
+}
+```
+
+| Field | What to do |
+| --- | --- |
+| `failed` | Each entry has a `source_id`, an Auth0 error `code`, and a `message`. See [Troubleshooting](#troubleshooting). |
+| `requires_password_reset` | The user has no importable password. Send a password reset email, or let them use "Forgot password" at first login. |
+| `requires_reenrollment` | WebAuthn/passkey or push enrollments were dropped. Ask the user to enroll again at next login. |
+| `requires_recovery_code_regen` | The old recovery codes don't work in Auth0. The user gets a new one when they next sign in with MFA. |
+
+To get a list you can feed into an email campaign or a script:
+
+```sh
+jq -r '.requires_reenrollment[]?' fixtures/import-report.json > reenroll.txt
+```
+
+## 8. Verify the import
+
+### Reconcile with the tenant
+
+```sh
+iamigrate diff auth0 --in ./fixtures/users.cmf.jsonl.gz
+```
+
+This looks up every user by email and reports any that are missing from the tenant, plus any mismatch in `blocked` status.
+
+### Prove that passwords and TOTP work
+
+A user showing up in the tenant doesn't prove their hash was translated correctly. Pick at least one user per algorithm from `answer-key.json`, then sign in as each one:
+
+```sh
+jq '.entries[0]' fixtures/answer-key.json
+```
+
+```json
+{
+  "source_id": "fx_ae0b6d305f0f4a20",
+  "email": "jonathon.marquardt@wilkinson.biz",
+  "password": "A@MkjAZV74rJ8XWZ"
+}
+```
+
+Use **Authentication → Database → your connection → Try Connection** in the Dashboard, or any application that has the connection enabled. For users with an imported TOTP factor, the answer key also includes their `totp_secret`. Generate the current code with any TOTP tool, for example:
+
+```sh
+oathtool --totp -b <totp_secret>
+```
+
+A successful sign-in shows that the hash parameters, salt, and encoding were all translated correctly.
+
+### Clean up the rehearsal
+
+Delete the test users before you import real ones. Remove them from **User Management → Users**, or delete the connection and recreate it. Users deleted by other means can still exist in Auth0's user store, which causes `DUPLICATED_USER` on later imports.
+
+## 9. Run the real migration
+
+Once the rehearsal passes, repeat steps 3–8 with your real data:
+
+1. Export your source into CMF with [`iamigrate export`](../../../reference/cli/export/), for example from a flat CSV/JSON file or from Ory Kratos (see [Export users from Ory Kratos](../../export/kratos/)).
+2. Review `mapping.yaml` with [`iamigrate map`](../../../reference/cli/map/), especially custom fields headed for `app_metadata`/`user_metadata`.
+3. Run `validate` and fix every reported problem at the source.
+4. Import a small canary batch first, and verify logins for it.
+5. Import the rest, then run `diff auth0` and handle the follow-up lists.
+
+## Troubleshooting
+
+| Error code / symptom | Cause | Fix |
+| --- | --- | --- |
+| `TRANSLATION_ERROR` | The CMF hash is missing a parameter Auth0 needs (for example scrypt `keylen`, a pbkdf2 salt, or an argon2 PHC string) | Fix the export for that algorithm and re-import the affected users |
+| `DUPLICATED_USER` | Without `--upsert`: the user already exists in the connection. With `--upsert`: the user is left over in Auth0's user store (possibly from an earlier, deleted import) | Without `--upsert`: re-run with `--upsert` to update existing users. With `--upsert`: delete the user through the Connection Users endpoint, then re-import. |
+| `MFA_FACTORS_FAILED` | An MFA value doesn't match Auth0's format: a phone number without `+` and country code, or a TOTP secret that isn't unpadded Base32 | Normalize the values in the export |
+| Login fails for one algorithm only | Wrong hash parameters or encoding for that algorithm | Check the CMF `params`/`encoding` against the source system. Re-import with `--upsert` (only possible if the user hasn't logged in yet). |
+| `401`/`403` from the Management API | Expired token or missing scope | Get a new token, and check the scopes in [Step 1](#create-a-management-api-token) |
+| Import job `failed` | Auth0 rejected the job itself (for example, a job timed out after 2 hours) | Re-run. Users that already succeeded report as duplicates unless you pass `--upsert`. |
+
+<Aside type="caution">
+  With `--upsert`, Auth0 **replaces** `app_metadata` and `user_metadata` instead of merging them, and matches users on email. Changing a user's email without also sending `email_verified` resets it to `false`.
+</Aside>
+
+## See also
+
+- [`import auth0` reference](../../../reference/cli/import-auth0/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [`diff auth0` reference](../../../reference/cli/diff-auth0/)
+- [`testdata generate` reference](../../../reference/cli/testdata/)

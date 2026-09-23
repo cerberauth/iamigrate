@@ -1,0 +1,301 @@
+---
+title: Import users into Ory Kratos
+description: Step-by-step guide to importing users and password hashes into a self-hosted Ory Kratos instance with iamigrate, including what doesn't carry over.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through a complete import into Ory Kratos: preparing the instance and its identity schema, rehearsing with synthetic users, validating, importing, verifying logins, and handling the users Kratos can't take as-is.
+
+The rehearsal uses `iamigrate testdata generate`, so you can run the whole flow against a disposable Kratos instance before touching real data. Once it works end to end, swap the fixture for your own CMF export (see [Step 9](#9-run-the-real-migration)).
+
+## How iamigrate imports into Kratos
+
+Kratos has no bulk import job. `iamigrate import kratos` creates identities one at a time with the Admin API (`POST /admin/identities`). For each CMF user it:
+
+1. Builds the identity's `traits`, metadata, and state from the CMF record.
+2. Translates the password hash into Kratos' `hashed_password` credential, so users keep their existing password.
+3. Drops MFA factors Kratos can't import and flags the user for follow-up.
+4. Records the result in `import-report.json`. A user that fails is recorded and the run continues.
+
+Kratos has no built-in organizations or roles (those live in Ory Permissions), so `organizations.cmf.jsonl` and `roles.cmf.jsonl` are not imported.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A self-hosted Kratos instance whose **Admin API** you can reach, usually on port `4434`. **Use a disposable instance for the rehearsal.** Imported identities stay until you delete them.
+
+<Aside type="caution">
+  iamigrate calls the Admin API without credentials. Kratos doesn't authenticate its Admin API itself, so this works for a self-hosted instance reached over a private network or a port-forward. Ory Network projects, whose Admin API requires an API key, aren't supported yet.
+</Aside>
+
+## 1. Prepare the Kratos instance
+
+### Start a disposable instance
+
+For the rehearsal, the iamigrate repository ships a ready-made Kratos v1.3.1 setup in [`.docker/kratos`](https://github.com/cerberauth/iamigrate/tree/main/.docker/kratos), with SQLite storage and the identity schema this guide assumes:
+
+```sh
+git clone https://github.com/cerberauth/iamigrate.git
+docker compose -f iamigrate/.docker/kratos/docker-compose.yml up -d --wait
+
+export KRATOS_ADMIN_URL=http://127.0.0.1:4434
+```
+
+`import kratos`, `diff kratos`, and `export --source kratos` all read `$KRATOS_ADMIN_URL`. You can pass `--admin-url` instead.
+
+### Check the identity schema
+
+Every identity is validated against an identity schema, and Kratos rejects any identity that doesn't match. iamigrate fills these traits:
+
+| Trait | Value |
+| --- | --- |
+| `email` | The user's first CMF email |
+| `username` | The CMF `username`, only if set |
+| Every key in `user_metadata` | Copied into `traits` as-is |
+
+So the schema you import into must:
+
+- **Have an `email` trait marked as a password identifier.** Otherwise users can't sign in with their email and password.
+- **Accept every `user_metadata` key as a trait.** Either declare them, or set `"additionalProperties": true` on `traits`. Unknown traits are otherwise rejected.
+- **Not require traits iamigrate doesn't fill.** Names and phone numbers aren't written to traits (see [Profile](#profile)), so a schema that requires `name` rejects every user.
+
+A minimal compatible schema:
+
+```json
+{
+  "$id": "https://example.com/identity.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "traits": {
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "ory.sh/kratos": {
+            "credentials": { "password": { "identifier": true } },
+            "verification": { "via": "email" },
+            "recovery": { "via": "email" }
+          }
+        },
+        "username": { "type": "string" }
+      },
+      "required": ["email"],
+      "additionalProperties": true
+    }
+  }
+}
+```
+
+Note the schema's ID in your Kratos config (`identity.schemas[].id`). You pass it as `--schema-id`, which defaults to `default`.
+
+Also check that the `password` method is enabled under `selfservice.methods`. Imported hashes are useless if users can't sign in with a password.
+
+## 2. Generate a representative test export
+
+Kratos accepts two password hash algorithms, so the fixture focuses on those, plus the MFA factors your users are likely to have:
+
+```sh
+iamigrate testdata generate \
+  --count 100 \
+  --hash bcrypt:cost=10 \
+  --hash argon2:memory=65536,time=2,parallelism=1 \
+  --mfa sms:rate=0.1 \
+  --mfa email:rate=0.1 \
+  --mfa webauthn:rate=0.05 \
+  --seed 42 \
+  --out ./fixtures/
+```
+
+| Case | Why it matters for Kratos |
+| --- | --- |
+| `bcrypt`, `argon2` | The hashes Kratos can import. Users keep their password. |
+| `sms`, `email`, `webauthn` | MFA Kratos can't import. Affected users need follow-up. |
+
+Leave out `totp` and `recovery_codes` for now: every user with them fails (see [MFA factors](#mfa-factors)). To see how other algorithms behave, add for example `--hash md5` or `--hash pbkdf2`. Those users fail with `TRANSLATION_ERROR`.
+
+For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
+
+## 3. Review the manifest
+
+```sh
+cat fixtures/manifest.json
+```
+
+With a real export, this is where you find out which algorithms you're dealing with. Any algorithm other than `bcrypt` or `argon2` in `hash_algorithm_counts` means users that won't be imported unless you deal with them first (see [Step 7](#7-handle-users-that-need-follow-up)).
+
+## 4. Validate against Kratos (no network calls)
+
+```sh
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target kratos
+```
+
+`validate` checks every user against what Kratos can import:
+
+- **Password algorithms:** only `bcrypt` and `argon2` are supported. Every other algorithm is reported, for example `unsupported password algorithm "pbkdf2"`.
+- **MFA:** a portable factor Kratos can't import is reported. `sms`, `email`, and `push` fail with `unsupported MFA type "sms"` and so on. Those users are still imported, without the factor.
+
+With the fixture above, expect problems for the `sms` and `email` users. They're expected here, since you'll handle those users in Step 7.
+
+<Aside type="caution">
+  `validate` currently lets `totp` and `recovery_codes` through, but Kratos v1.3.1 rejects them at import. Treat any user with those factors as a failure until you've tested them against your Kratos version.
+</Aside>
+
+## 5. Understand how hashes and factors are translated
+
+You don't configure anything in this step. It explains what ends up in Kratos, which helps when you read the import report.
+
+### Password hashes
+
+| CMF algorithm | Kratos result |
+| --- | --- |
+| `bcrypt` (`$2a$`, `$2b$`, `$2y$`, any cost) | `credentials.password.config.hashed_password`, passed through unchanged |
+| `argon2` | `hashed_password` set to the PHC string. Must be `$argon2id$...`. `argon2i` and `argon2d` are rejected. |
+| `scrypt`, `pbkdf2`, `md4`, `md5`, `sha1`, `sha256`, `sha512`, `hmac`, `ldap` | Not translated. The user **is not created** and is reported as `TRANSLATION_ERROR` in `failed`. |
+| Any hash marked `portable: false` | The user is created without a password and listed under `requires_password_reset` |
+
+On first sign-in, Kratos verifies the imported hash. With bcrypt, Kratos may then rehash the password with its own configured hasher.
+
+### MFA factors
+
+| CMF factor | Kratos result |
+| --- | --- |
+| `sms`, `email`, `push`, `webauthn` | Not imported. The user is created and listed under `requires_reenrollment`. |
+| `totp` | Sent as a `totp` credential. **Kratos v1.3.1 rejects it** (`unknown field "totp"`), so the user isn't created. |
+| `recovery_codes` | Sent as a `lookup_secret` credential. **Kratos v1.3.1 rejects it** (`unknown field "lookup_secret"`), so the user isn't created. |
+
+To import users who have TOTP or recovery codes, remove those factors from the CMF records first. The users are then created, and can enroll again after signing in.
+
+### Profile
+
+| CMF field | Kratos field |
+| --- | --- |
+| First email | `traits.email`, plus a verified `verifiable_addresses` entry if the email is verified |
+| `username` | `traits.username` |
+| `user_metadata` | `metadata_public`, and also merged into `traits` |
+| `app_metadata` | `metadata_admin` |
+| `blocked: true` | `state: inactive` |
+
+These are **not** imported: `source_id` (Kratos assigns a new UUID), additional emails, phone numbers, and the `profile` fields (`given_name`, `family_name`, `name`, and so on). If you need names in Kratos, add them to `user_metadata` in your export, under the trait names your schema expects.
+
+## 6. Run the import
+
+```sh
+iamigrate import kratos --in ./fixtures/users.cmf.jsonl.gz --schema-id default
+```
+
+```
+imported: 100 succeeded, 0 failed -> report fixtures/import-report.json
+```
+
+Identities are created one request at a time, so large imports take a while. The report goes next to `--in` unless you pass `--report`.
+
+<Aside type="caution">
+  The command exits with status `0` even when users fail. Always check the report, for example with `jq '.failed | length' fixtures/import-report.json`, especially in scripts.
+</Aside>
+
+The import can't be re-run over the same users: Kratos rejects an identity whose email already exists with `409 Conflict`. To retry, delete the identities first (see [Clean up the rehearsal](#clean-up-the-rehearsal)), or re-import only the users listed in `failed`.
+
+## 7. Handle users that need follow-up
+
+Open the report:
+
+```sh
+cat fixtures/import-report.json
+```
+
+```json
+{"succeeded":["fx_ae0b6d305f0f4a20","..."],"failed":null,"requires_reenrollment":["fx_0ed9a8ec493c0f4c","..."]}
+```
+
+The report lists users by their CMF `source_id`, not by Kratos identity ID.
+
+| Field | What to do |
+| --- | --- |
+| `failed` | Each entry has a `source_id`, a `code` (`TRANSLATION_ERROR` or `REQUEST_ERROR`), and a `message`. See [Troubleshooting](#troubleshooting). |
+| `requires_password_reset` | The user was created without a password. Send them a recovery link, or let them use account recovery at first login. |
+| `requires_reenrollment` | SMS, email, push, or WebAuthn enrollments were dropped. Ask the user to set up a second factor again after signing in. |
+
+To get a list you can feed into an email campaign or a script:
+
+```sh
+jq -r '.requires_reenrollment[]?' fixtures/import-report.json > reenroll.txt
+```
+
+Users whose hash algorithm Kratos can't import land in `failed`, not `requires_password_reset`. To import them anyway, have them reset their password, then either drop the `password` from their CMF records before importing, or mark it `"portable": false`.
+
+## 8. Verify the import
+
+### Reconcile with the instance
+
+```sh
+iamigrate diff kratos --in ./fixtures/users.cmf.jsonl.gz
+```
+
+```
+missing in target: 0, attribute drift: 0
+```
+
+This looks up every user by email and reports any that are missing, plus any mismatch between CMF `blocked` and Kratos' `inactive` state. Users in `failed` show up here as missing.
+
+### Prove that passwords work
+
+An identity existing in Kratos doesn't prove its hash was imported correctly. Pick at least one user per algorithm from `answer-key.json`, then sign in as each one through Kratos' API login flow on the **public** port:
+
+```sh
+export KRATOS_PUBLIC_URL=http://127.0.0.1:4433
+
+EMAIL=$(jq -r '.entries[0].email' fixtures/answer-key.json)
+PASSWORD=$(jq -r '.entries[0].password' fixtures/answer-key.json)
+
+FLOW=$(curl -s "$KRATOS_PUBLIC_URL/self-service/login/api" | jq -r .id)
+curl -s -X POST "$KRATOS_PUBLIC_URL/self-service/login?flow=$FLOW" \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg i "$EMAIL" --arg p "$PASSWORD" '{method:"password",identifier:$i,password:$p}')" \
+  | jq '{signed_in: (.session_token != null), error: .ui.messages}'
+```
+
+`"signed_in": true` shows the hash was translated correctly. Hashes are assigned to fixture users in turn, so with the fixture above `entries[0]` is a bcrypt user and `entries[1]` an argon2 user.
+
+### Clean up the rehearsal
+
+With the repository's Docker setup, drop the whole database:
+
+```sh
+docker compose -f iamigrate/.docker/kratos/docker-compose.yml down -v
+```
+
+Plain `down` keeps the SQLite volume, so the identities would still be there next time. On another instance, delete identities with `DELETE /admin/identities/{id}`.
+
+## 9. Run the real migration
+
+Once the rehearsal passes, repeat steps 3–8 with your real data:
+
+1. Export your source into CMF with [`iamigrate export`](../../../reference/cli/export/).
+2. Check `hash_algorithm_counts` in `manifest.json`. Plan password resets for every user whose algorithm isn't `bcrypt` or `argon2`.
+3. Remove `totp` and `recovery_codes` factors, and move any profile fields you need into `user_metadata`.
+4. Run `validate` and review every reported problem.
+5. Import a small canary batch first, and verify logins for it.
+6. Import the rest, then run `diff kratos` and handle the follow-up lists.
+
+## Troubleshooting
+
+| Error code / symptom | Cause | Fix |
+| --- | --- | --- |
+| `TRANSLATION_ERROR` … `not one of Kratos' supported import hashers` | The hash algorithm isn't `bcrypt` or `argon2` | Reset those users' passwords (see [Step 7](#7-handle-users-that-need-follow-up)) |
+| `TRANSLATION_ERROR` … `argon2 requires a full PHC string` or `only imports argon2id` | The argon2 hash has no PHC string, or it's argon2i/argon2d | Fix the export to produce `$argon2id$...` PHC strings |
+| `REQUEST_ERROR` with status `409` | An identity with this email already exists, often from an earlier run | Delete the existing identities, or leave those users out |
+| `REQUEST_ERROR` with status `400`, `unknown field "totp"` or `"lookup_secret"` | The user has a `totp` or `recovery_codes` factor | Remove those factors from the CMF record and re-import the user |
+| `REQUEST_ERROR` with status `400` mentioning a trait | The identity doesn't match the schema: a required trait is missing, or a `user_metadata` key isn't allowed | Adjust the schema, or the export's `user_metadata` |
+| `--admin-url (or $KRATOS_ADMIN_URL) is required` | No Admin API URL set | `export KRATOS_ADMIN_URL=http://127.0.0.1:4434` |
+| Sign-in fails with the right password | Password method disabled, or `email` isn't a password identifier in the schema | Check `selfservice.methods.password` and the schema (see [Step 1](#check-the-identity-schema)) |
+
+## See also
+
+- [Export users from Ory Kratos](../../export/kratos/)
+- [`import kratos` reference](../../../reference/cli/import-kratos/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [`diff kratos` reference](../../../reference/cli/diff-kratos/)
+- [Generate test fixtures](../../generate-test-fixtures/)

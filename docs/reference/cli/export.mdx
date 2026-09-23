@@ -5,6 +5,8 @@ description: Export identities from a source into CMF.
 
 Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Two sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); and `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash. Any other flat-file column is passed through as `app_metadata` and flagged as a manual mapping step rather than silently dropped.
 
+For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/).
+
 ## Usage
 
 ```sh

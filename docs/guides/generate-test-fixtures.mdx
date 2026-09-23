@@ -1,0 +1,212 @@
+---
+title: Generate test fixtures
+description: Every option of iamigrate testdata generate — password hash algorithms and their parameters, MFA factor types, determinism, and the files it writes.
+---
+
+import { Aside } from '@/components/docs';
+
+`iamigrate testdata generate` creates synthetic users directly in the Canonical Migration Format (CMF). The fixture generator is a source connector like any other, so its output goes through the same `validate` → `import` → `diff` path as a real export. Use it to rehearse a migration end to end, with password hashes and MFA enrollments that look like your real user base, before you touch real data.
+
+Alongside the users, it writes an answer key with each user's cleartext password and TOTP secret. That's what lets you prove imported users can actually sign in on the target.
+
+This page covers every option. For the flag summary, see the [`testdata generate` reference](../../reference/cli/testdata/).
+
+## Quick example
+
+```sh
+iamigrate testdata generate \
+  --count 1000 \
+  --hash bcrypt:cost=10 \
+  --hash argon2:memory=65536,time=2,parallelism=1 \
+  --mfa totp:rate=0.3 \
+  --mfa recovery_codes:rate=0.1 \
+  --seed 42 \
+  --out ./fixtures/
+```
+
+## What a generated user looks like
+
+Each user gets:
+
+| Field | Value |
+| --- | --- |
+| `source_id` | `fx_` followed by 16 random hex characters |
+| `emails` | One fake email, marked `verified` and `primary` |
+| `phones` | One fake phone number, marked `verified` and `primary`, **only if the user is enrolled in `sms` MFA** |
+| `profile` | Fake `given_name` and `family_name`, `name` set to both joined, `locale` set to `--locale` |
+| `password` | A hash of a random cleartext password, using one of the `--hash` specs |
+| `mfa_factors` | Zero or more factors, drawn from the `--mfa` specs |
+| `provenance` | `source_connector: fixture` and the generation time |
+
+Cleartext passwords are 16 characters mixing lowercase, uppercase, digits, and special characters (no spaces).
+
+## Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--count` | `100` | Number of users to generate |
+| `--hash` | — (required) | Repeatable. A password hash spec, `<algo>` or `<algo>:<key>=<value>,...` |
+| `--mfa` | none | Repeatable. An MFA spec, `<type>:rate=<0-1>` |
+| `--locale` | `en` | Value written to each user's `profile.locale` |
+| `--seed` | `1` | Seed for the fake-data generator. See [Determinism](#determinism) |
+| `--out` | `./fixtures/` | Output directory, created if missing |
+| `--no-answer-key` | `false` | Don't write `answer-key.json` |
+
+## Password hashes (`--hash`)
+
+Pass `--hash` at least once. When you pass it several times, specs are assigned round-robin: user 1 gets the first spec, user 2 the second, and so on, wrapping around. With 4 specs and `--count 1000`, each spec covers 250 users.
+
+The same algorithm can appear more than once with different parameters, for example `--hash bcrypt:cost=10 --hash bcrypt:cost=12`. That's useful when a target treats some parameter values differently from others. The manifest counts by algorithm only, so both show up under `bcrypt`.
+
+Parameters you leave out take their default. Every generated hash gets a fresh random salt.
+
+### Supported algorithms
+
+| Algorithm | Parameters (default) | What's generated |
+| --- | --- | --- |
+| `bcrypt` | `cost` (`10`) | Standard `$2a$` bcrypt hash |
+| `scrypt` | `cost` (`16384`), `blockSize` (`8`), `parallelization` (`1`), `keylen` (`32`) | scrypt with a 16-byte salt |
+| `pbkdf2` | `digest` (`sha256`), `iterations` (`100000`), `keylen` (`32`) | PBKDF2 with a 16-byte salt |
+| `argon2` | `memory` in KiB (`65536`), `time` (`2`), `parallelism` (`1`) | Argon2id with a 16-byte salt and a 32-byte key |
+| `md5` | none | Unsalted hex digest |
+| `md4` | none | Unsalted hex digest |
+| `sha1` | none | Unsalted hex digest |
+| `sha256` | none | Unsalted hex digest |
+| `sha512` | none | Unsalted hex digest |
+| `hmac` | none | HMAC-SHA256, hex encoded, with a fixed fixture key |
+| `ldap` | none | RFC 2307 `{SSHA}` (salted SHA-1, 4-byte salt), as found in LDAP directory exports |
+
+### Parameter rules
+
+- **`bcrypt` `cost`** must be at most `31`. Values below `4` silently fall back to `10`.
+- **`scrypt` `cost`** must be a power of two (`16384`, `32768`, ...). The hash stores it as a base-2 exponent, so any other value produces a hash that won't verify.
+- **`pbkdf2` `digest`** must be `sha1`, `sha256`, or `sha512`. Anything else fails generation.
+- **`keylen`** on `scrypt` and `pbkdf2` is the derived key length in bytes. It's also recorded in the CMF `params`, since some targets need it to verify the hash.
+- **Numeric parameters that don't parse as integers** (`cost=abc`) silently fall back to their default. Check `manifest.json` or a sample record if a result looks off.
+- **Unknown parameter names** are ignored.
+- **`hmac`** always uses SHA-256 and the key `iamigrate-fixture-hmac-key`. The key travels with each CMF record, so the target can verify the hash.
+
+<Aside type="caution">
+  High-cost parameters make generation slow. A few thousand users at `bcrypt:cost=14` or `argon2:memory=262144` can take minutes. Use realistic values for a final rehearsal, and cheaper ones while iterating.
+</Aside>
+
+### Matching your real user base
+
+Pick specs that mirror what your source system actually stores:
+
+| If your source stores... | Use |
+| --- | --- |
+| Modern framework defaults (Rails, Laravel, Devise) | `bcrypt:cost=10` to `bcrypt:cost=12` |
+| Django | `pbkdf2:digest=sha256` with your Django version's iteration count (for example `iterations=600000`) |
+| Recent password-hashing libraries | `argon2` or `scrypt` |
+| Legacy PHP or homegrown apps | `md5`, `sha1`, `sha256` |
+| A keyed (peppered) hash | `hmac` |
+| An LDAP directory or Active Directory export | `ldap` |
+
+## MFA factors (`--mfa`)
+
+Each `--mfa` spec is `<type>:rate=<0-1>`. For every user, iamigrate draws independently for each spec whether the user is enrolled, with probability `rate`. That means:
+
+- A user can end up with several factors, for example `totp` and `recovery_codes`.
+- `rate=1` enrolls every user, and `rate=0` enrolls none.
+- Rates are probabilities, not exact shares. With `--count 100` and `totp:rate=0.3`, expect roughly 30 TOTP users, not exactly 30.
+
+### Supported factor types
+
+| Type | Value stored in CMF | Portable | Notes |
+| --- | --- | --- | --- |
+| `totp` | A random 160-bit secret, unpadded Base32 | Yes | The secret is also written to the answer key, so you can compute codes for login tests |
+| `sms` | The user's phone number | Yes | Also adds the number to the user's `phones` |
+| `email` | The user's email address | Yes | |
+| `push` | `opaque-device-token` placeholder | Yes | |
+| `webauthn` | `opaque-credential-id` placeholder | No | |
+| `recovery_codes` | `opaque-recovery-codes` placeholder | No | |
+
+**Portable** factors can, in principle, be carried over to a target. Whether a given target accepts them is checked by `iamigrate validate`. **Non-portable** factors are bound to the source system (a WebAuthn credential is tied to the source's relying party ID, and recovery codes are usually stored hashed), so affected users have to re-enroll. They're counted in `manifest.json` under `non_portable_mfa_counts`, which is how you size that follow-up.
+
+<Aside type="caution">
+  Factor types aren't validated. A typo like `--mfa topt:rate=0.3` is accepted and simply enrolls nobody. If a factor is missing from the output, check the spelling.
+</Aside>
+
+Passing the same type twice (for example `totp` at two rates) gives each spec its own draw, so a user can be enrolled twice. Only the last TOTP secret is written to the answer key, so avoid doing this with `totp`.
+
+## Determinism
+
+`--seed` drives the fake-data generator. For a given seed, count, and set of specs, these are identical from one run to the next:
+
+- names, emails, and phone numbers
+- cleartext passwords
+- which users are enrolled in which MFA factors
+- which hash spec each user gets
+
+These are **not** reproducible, because they come from a cryptographic random source:
+
+- `source_id`
+- password salts, and so the hash values themselves
+- TOTP secrets
+- `provenance.exported_at`
+
+So re-running with the same seed gives you the same people with the same passwords, but different IDs and hashes. If a test needs to refer to a specific user, key it on email, or reuse the same generated files instead of regenerating them.
+
+## Output files
+
+```
+fixtures/
+├── users.cmf.jsonl.gz   # the generated users, one CMF record per line, gzipped
+├── manifest.json        # counts per hash algorithm and non-portable MFA type
+├── answer-key.json      # cleartext credentials per user
+└── .gitignore           # ignores answer-key.json
+```
+
+### `manifest.json`
+
+```json
+{
+  "record_count": 1000,
+  "hash_algorithm_counts": {
+    "argon2": 500,
+    "bcrypt": 500
+  },
+  "non_portable_mfa_counts": {
+    "recovery_codes": 103
+  }
+}
+```
+
+### `answer-key.json`
+
+```json
+{
+  "entries": [
+    {
+      "source_id": "fx_f19993393c955beb",
+      "email": "logancooper@fox.info",
+      "password": "vV9fl_gz!5rN-964",
+      "totp_secret": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
+    }
+  ]
+}
+```
+
+`totp_secret` is only present for users enrolled in `totp`. The answer key is never merged into `users.cmf.jsonl.gz`, and is written with `0600` permissions.
+
+<Aside>
+  iamigrate writes `.gitignore` only if the output directory doesn't already have one. If you generate into a directory with an existing `.gitignore`, make sure it excludes `answer-key.json` yourself. Pass `--no-answer-key` when you only need the CMF file, for example for validation-only tests.
+</Aside>
+
+## Using the fixture
+
+The generated file drops straight into the rest of the pipeline:
+
+```sh
+# Check the fixture against a target's capabilities, no network calls
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target <target>
+
+# Import into a disposable environment of your target
+iamigrate import <target> --in ./fixtures/users.cmf.jsonl.gz ...
+
+# Reconcile what landed
+iamigrate diff <target> --in ./fixtures/users.cmf.jsonl.gz ...
+```
+
+Then sign in as a few users from `answer-key.json`, including at least one per hash algorithm and one with TOTP, to prove the translated credentials verify. For a complete walkthrough against a real target, see [Import users into Auth0](../import/auth0/).
