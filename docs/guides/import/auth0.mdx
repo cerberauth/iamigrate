@@ -32,7 +32,7 @@ If `organizations.cmf.jsonl` or `roles.cmf.jsonl` sit next to the users file, a 
 
 Users are imported into a single **database connection**. In the Auth0 Dashboard, go to **Authentication → Database** and either create a connection or open an existing one. The connection can use the Auth0 user store, or a custom database with **Import Users to Auth0** turned on.
 
-Copy the connection **identifier**. It looks like `con_XXXXXXXXXXXXXXXX`, and you'll pass it as `--connection-id`.
+Note the connection **name**, or copy its **identifier** (it looks like `con_XXXXXXXXXXXXXXXX`). You can pass the name as `--connection` or the identifier as `--connection-id`. If the tenant has only one database connection, you can leave out both and iamigrate uses that one. Looking up a connection by name, or automatically, needs the `read:connections` scope on your token. `--connection-id` works without it.
 
 <Aside>
   If the connection has **Requires Username** turned on, every imported user needs a `username` in the CMF file. Users without one will be rejected.
@@ -55,6 +55,7 @@ Create a Machine-to-Machine application authorized for the **Auth0 Management AP
 | Scope | Needed for |
 | --- | --- |
 | `create:users`, `read:users` | Bulk import jobs, job status and errors, `diff auth0` |
+| `read:connections` | Finding the database connection by name (`--connection`) or automatically (not needed with `--connection-id`) |
 | `update:users` | Assigning global roles to users |
 | `read:roles`, `create:roles` | Roles phase (only if you import `roles.cmf.jsonl`) |
 | `read:organizations`, `create:organizations`, `create:organization_members`, `create:organization_member_roles` | Organizations phase (only if you import `organizations.cmf.jsonl`) |
