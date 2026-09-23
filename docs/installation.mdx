@@ -77,11 +77,13 @@ iamigrate --help
 
 ## Auth0 target setup
 
-`iamigrate import auth0` and `iamigrate diff` need a Management API token. `import auth0` also needs a target database connection: pass its ID with `--connection-id`, or its name with `--connection` (the token then needs `read:connections`). If the tenant has only one database connection, `import auth0` uses it.
+`iamigrate import auth0` and `iamigrate diff` need a Management API token, or the client ID and secret of a Machine-to-Machine application authorized for the Management API (iamigrate then gets and renews the token itself through the `client_credentials` grant). `import auth0` also needs a target database connection: pass its ID with `--connection-id`, or its name with `--connection` (the token then needs `read:connections`). If the tenant has only one database connection, `import auth0` uses it.
 
 ```sh
 export AUTH0_DOMAIN=your-tenant.us.auth0.com
 export AUTH0_TOKEN=...   # Management API token with create:users, create:roles, create:organizations (and read:connections to find the connection by name) scopes
+# or, instead of AUTH0_TOKEN, a Machine-to-Machine application granted those scopes:
+# export AUTH0_CLIENT_ID=... AUTH0_CLIENT_SECRET=...
 ```
 
-Both flags can also be passed directly via `--domain`/`--token` instead of the environment variables.
+These can also be passed directly via `--domain`, `--token`, `--client-id`, and `--client-secret` instead of the environment variables.

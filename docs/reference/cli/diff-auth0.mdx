@@ -9,7 +9,11 @@ Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Em
 
 ```sh
 iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --token $AUTH0_TOKEN
+# or with client credentials:
+iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --client-id $AUTH0_CLIENT_ID --client-secret $AUTH0_CLIENT_SECRET
 ```
+
+Authenticate with either a Management API token (`--token`) or a Machine-to-Machine application's client ID and secret (`--client-id`/`--client-secret`). Flags take precedence over environment variables; if both `$AUTH0_TOKEN` and `$AUTH0_CLIENT_ID`/`$AUTH0_CLIENT_SECRET` are set, the token is used.
 
 ## Flags
 
@@ -18,3 +22,5 @@ iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com -
 | `--in` | CMF `users.cmf.jsonl.gz` path (required) |
 | `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
 | `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
+| `--client-id` | Machine-to-Machine application client ID (or `$AUTH0_CLIENT_ID`). With `--client-secret`, iamigrate gets the Management API token itself through the `client_credentials` grant and renews it before it expires. Can't be combined with `--token`. |
+| `--client-secret` | Machine-to-Machine application client secret (or `$AUTH0_CLIENT_SECRET`) |

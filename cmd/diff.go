@@ -20,23 +20,17 @@ func newDiffCmd() *cobra.Command {
 
 func newDiffAuth0Cmd() *cobra.Command {
 	var (
-		in     string
-		domain string
-		token  string
+		in   string
+		auth auth0Flags
 	)
 
 	cmd := &cobra.Command{
 		Use:   auth0.Name,
 		Short: "Reconcile a CMF file against a live Auth0 tenant",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if domain == "" {
-				domain = os.Getenv("AUTH0_DOMAIN")
-			}
-			if token == "" {
-				token = os.Getenv("AUTH0_TOKEN")
-			}
-			if domain == "" || token == "" {
-				return fmt.Errorf("--domain/--token (or AUTH0_DOMAIN/AUTH0_TOKEN) are required")
+			client, err := auth.client()
+			if err != nil {
+				return err
 			}
 
 			r, closeFn, err := openReader(in)
@@ -45,7 +39,6 @@ func newDiffAuth0Cmd() *cobra.Command {
 			}
 			defer closeFn()
 
-			client := auth0.NewClient("https://"+domain+"/api/v2", token)
 			report, err := auth0.New(client).Verify(cmd.Context(), r)
 			if err != nil {
 				return err
@@ -56,8 +49,7 @@ func newDiffAuth0Cmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
-	cmd.Flags().StringVar(&domain, "domain", "", "Auth0 tenant domain (or $AUTH0_DOMAIN)")
-	cmd.Flags().StringVar(&token, "token", "", "Auth0 Management API token (or $AUTH0_TOKEN)")
+	auth.register(cmd)
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
 }

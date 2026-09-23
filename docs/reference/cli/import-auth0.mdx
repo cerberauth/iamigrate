@@ -12,6 +12,8 @@ Streams a CMF file, chunks it to Auth0's 500KB Bulk User Import job limit, submi
 ```sh
 export AUTH0_DOMAIN=your-tenant.us.auth0.com
 export AUTH0_TOKEN=...
+# or let iamigrate get (and renew) the token from a Machine-to-Machine application:
+# export AUTH0_CLIENT_ID=... AUTH0_CLIENT_SECRET=...
 
 iamigrate import auth0 --in users.cmf.jsonl.gz --connection-id con_xxx
 # or, with a token that has read:connections:
@@ -19,6 +21,8 @@ iamigrate import auth0 --in users.cmf.jsonl.gz --connection my-database
 ```
 
 The target database connection is chosen in this order: `--connection-id`, then `--connection` (looked up by name), then `connection_id` from `--mapping`. If none is given, the tenant's only database connection is used. Looking up a connection, by name or automatically, needs the `read:connections` scope. Without that scope, pass `--connection-id`.
+
+Authenticate with either a Management API token (`--token`) or a Machine-to-Machine application's client ID and secret (`--client-id`/`--client-secret`). Flags take precedence over environment variables; if both `$AUTH0_TOKEN` and `$AUTH0_CLIENT_ID`/`$AUTH0_CLIENT_SECRET` are set, the token is used.
 
 ## Flags
 
@@ -31,6 +35,8 @@ The target database connection is chosen in this order: `--connection-id`, then 
 | `--upsert` | Allow re-running this import against existing users. Forces the password translator to always use `custom_password_hash` (updatable) instead of the simpler, write-once `password_hash` field. |
 | `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
 | `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
+| `--client-id` | Machine-to-Machine application client ID (or `$AUTH0_CLIENT_ID`). With `--client-secret`, iamigrate gets the Management API token itself through the `client_credentials` grant and renews it before it expires. Can't be combined with `--token`. |
+| `--client-secret` | Machine-to-Machine application client secret (or `$AUTH0_CLIENT_SECRET`) |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
 
 <Aside type="caution">

@@ -60,14 +60,21 @@ Create a Machine-to-Machine application authorized for the **Auth0 Management AP
 | `read:roles`, `create:roles` | Roles phase (only if you import `roles.cmf.jsonl`) |
 | `read:organizations`, `create:organizations`, `create:organization_members`, `create:organization_member_roles` | Organizations phase (only if you import `organizations.cmf.jsonl`) |
 
-Then export the tenant domain and an access token:
+Then export the tenant domain and the application's credentials. iamigrate exchanges them for a Management API token through the `client_credentials` grant, and renews the token before it expires, so long imports don't fail midway:
 
 ```sh
 export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_CLIENT_ID=...       # the Machine-to-Machine application's Client ID
+export AUTH0_CLIENT_SECRET=...   # and its Client Secret
+```
+
+If you'd rather not hand iamigrate the client secret, export a Management API access token instead:
+
+```sh
 export AUTH0_TOKEN=eyJhbGciOi...   # Management API access token
 ```
 
-Management API tokens expire (after 24 hours by default). For large imports, get a fresh token right before you start.
+Management API tokens expire (after 24 hours by default) and iamigrate can't renew them. For large imports, get a fresh token right before you start.
 
 ## 2. Generate a representative test export
 
@@ -312,7 +319,7 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 | `DUPLICATED_USER` | Without `--upsert`: the user already exists in the connection. With `--upsert`: the user is left over in Auth0's user store (possibly from an earlier, deleted import) | Without `--upsert`: re-run with `--upsert` to update existing users. With `--upsert`: delete the user through the Connection Users endpoint, then re-import. |
 | `MFA_FACTORS_FAILED` | An MFA value doesn't match Auth0's format: a phone number without `+` and country code, or a TOTP secret that isn't unpadded Base32 | Normalize the values in the export |
 | Login fails for one algorithm only | Wrong hash parameters or encoding for that algorithm | Check the CMF `params`/`encoding` against the source system. Re-import with `--upsert` (only possible if the user hasn't logged in yet). |
-| `401`/`403` from the Management API | Expired token or missing scope | Get a new token, and check the scopes in [Step 1](#create-a-management-api-token) |
+| `401`/`403` from the Management API | Expired token, wrong client credentials, or missing scope | Get a new token (or check `AUTH0_CLIENT_ID`/`AUTH0_CLIENT_SECRET`), and check the scopes in [Step 1](#create-a-management-api-token) |
 | Import job `failed` | Auth0 rejected the job itself (for example, a job timed out after 2 hours) | Re-run. Users that already succeeded report as duplicates unless you pass `--upsert`. |
 
 <Aside type="caution">
