@@ -1,0 +1,25 @@
+---
+title: diff keycloak
+description: Reconcile a CMF file against a live Keycloak realm.
+---
+
+Looks up every CMF user in the realm by email if they have one, else by the username `import keycloak` gave them (their `username`, else their first email, else their first phone number), and reports anyone missing, plus any drift between CMF `blocked` and the user's `enabled` flag. A user with neither an email nor a username/phone-derived username can't be looked up and is listed as `no identifier`.
+
+## Usage
+
+```sh
+iamigrate diff keycloak --in users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme \
+  --username admin --password admin
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--url` | Keycloak server URL (or `$KEYCLOAK_URL`) |
+| `--realm` | Realm to check users in (or `$KEYCLOAK_REALM`) |
+| `--auth-realm` | Realm the admin user or client authenticates in (or `$KEYCLOAK_AUTH_REALM`; default: `--realm`) |
+| `--username` / `--password` | Admin credentials (or `$KEYCLOAK_USERNAME`/`$KEYCLOAK_PASSWORD`) |
+| `--client-id` / `--client-secret` | A service-account client's credentials (or `$KEYCLOAK_CLIENT_ID`/`$KEYCLOAK_CLIENT_SECRET`) |

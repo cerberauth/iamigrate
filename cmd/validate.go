@@ -8,6 +8,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
@@ -30,8 +31,10 @@ func newValidateCmd() *cobra.Command {
 				caps = (&auth0.Connector{}).Capabilities()
 			case kratos.Name:
 				caps = (&kratos.Connector{}).Capabilities()
+			case keycloak.Name:
+				caps = (&keycloak.Connector{}).Capabilities()
 			default:
-				return fmt.Errorf("unsupported --target %q (supports \"auth0\" and \"kratos\")", target)
+				return fmt.Errorf("unsupported --target %q (supports \"auth0\", \"kratos\", and \"keycloak\")", target)
 			}
 
 			if mappingPath != "" {
@@ -88,7 +91,7 @@ func newValidateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
-	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos")
+	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak")
 	_ = cmd.MarkFlagRequired("in")
 	_ = cmd.MarkFlagRequired("target")
 	return cmd

@@ -1,0 +1,38 @@
+---
+title: import keycloak
+description: Create Keycloak users from a CMF file via the Admin API.
+---
+
+import { Aside } from '@/components/docs';
+
+Streams a CMF file and creates one user per record via `POST /admin/realms/{realm}/users`. Keycloak has no bulk-import job, so users are created one at a time; a failed user is recorded in `import-report.json` without stopping the run.
+
+For a step-by-step walkthrough, including realm setup and verifying logins, see [Import users into Keycloak](../../../guides/import/keycloak/).
+
+## Usage
+
+```sh
+iamigrate import keycloak --in users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme \
+  --username admin --password admin
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--url` | Keycloak server URL, e.g. `https://keycloak.example.com` (or `$KEYCLOAK_URL`) |
+| `--realm` | Realm to import users into (or `$KEYCLOAK_REALM`) |
+| `--auth-realm` | Realm the admin user or client authenticates in (or `$KEYCLOAK_AUTH_REALM`; default: `--realm`) |
+| `--username` / `--password` | Admin credentials, for the password grant (or `$KEYCLOAK_USERNAME`/`$KEYCLOAK_PASSWORD`) |
+| `--client-id` / `--client-secret` | A service-account client's credentials, for the `client_credentials` grant (or `$KEYCLOAK_CLIENT_ID`/`$KEYCLOAK_CLIENT_SECRET`); also the client ID `--username` authenticates as (default `admin-cli`) |
+| `--report` | `import-report.json` output path (default: alongside `--in`) |
+
+Either `--username`/`--password`, or `--client-id`/`--client-secret`, is required.
+
+Each CMF user's `username`, else first email, else first phone number, becomes the Keycloak username; the first email becomes `email`; the first phone number becomes the `phoneNumber` attribute; and `user_metadata`/`app_metadata` become other attributes (`app_metadata` wins on a key collision). `blocked: true` maps to `enabled: false`.
+
+<Aside type="caution">
+  Only `pbkdf2` and `argon2` password hashes are translated, Keycloak's two built-in hash providers. A user with any other algorithm is not created and is reported under `failed` with `TRANSLATION_ERROR`. Only `totp` MFA factors are imported; `sms`, `email`, `push`, and `webauthn` are dropped and the user is listed under `requires_reenrollment`, and `recovery_codes` under `requires_recovery_code_regen` since Keycloak hashes them with its own scheme. Run `iamigrate validate --target keycloak` first to catch unsupported hashes before importing.
+</Aside>

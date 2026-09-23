@@ -1,0 +1,50 @@
+# Spins up a disposable Keycloak instance for the gated e2e test in
+# pkg/connector/keycloak/live_test.go. The test creates (and deletes) its
+# own realms through the Admin API, so no realm is imported here.
+#
+# Keycloak runs on Postgres rather than its dev-mode H2 file so that
+# `kc.sh export` can run next to the live server: the export round-trip
+# test drives it via `docker exec` when KEYCLOAK_CONTAINER is set.
+#
+# Usage:
+#   docker compose -f .docker/keycloak/docker-compose.yml up --wait
+#   KEYCLOAK_URL=http://127.0.0.1:8080 KEYCLOAK_CONTAINER=iamigrate-keycloak \
+#     go test ./pkg/connector/keycloak/... -run TestLiveKeycloak
+#   docker compose -f .docker/keycloak/docker-compose.yml down -v
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=keycloak
+      - POSTGRES_USER=keycloak
+      - POSTGRES_PASSWORD=keycloak
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "keycloak"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.4
+    container_name: iamigrate-keycloak
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      - KC_BOOTSTRAP_ADMIN_USERNAME=admin
+      - KC_BOOTSTRAP_ADMIN_PASSWORD=admin
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak
+      - KC_DB_USERNAME=keycloak
+      - KC_DB_PASSWORD=keycloak
+      - KC_HEALTH_ENABLED=true
+    command: start-dev
+    healthcheck:
+      # The image ships neither curl nor wget: probe the management port
+      # through bash's /dev/tcp instead.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q UP <&3"]
+      interval: 3s
+      timeout: 3s
+      retries: 60

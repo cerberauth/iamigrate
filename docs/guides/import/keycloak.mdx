@@ -1,0 +1,276 @@
+---
+title: Import users into Keycloak
+description: Step-by-step guide to importing users and password hashes into a self-hosted Keycloak realm with iamigrate, including what doesn't carry over.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through a complete import into Keycloak: preparing the realm, rehearsing with synthetic users, validating, importing, verifying logins, and handling the users Keycloak can't take as-is.
+
+The rehearsal uses `iamigrate testdata generate`, so you can run the whole flow against a disposable Keycloak instance before touching real data. Once it works end to end, swap the fixture for your own CMF export (see [Step 9](#9-run-the-real-migration)).
+
+## How iamigrate imports into Keycloak
+
+Keycloak has no bulk import job. `iamigrate import keycloak` creates users one at a time with the Admin REST API (`POST /admin/realms/{realm}/users`). For each CMF user it:
+
+1. Builds the user's username, profile fields, attributes, and `enabled` state from the CMF record.
+2. Translates the password hash into a Keycloak password credential (`secretData`/`credentialData`), so users keep their existing password.
+3. Drops MFA factors Keycloak can't import and flags the user for follow-up.
+4. Records the result in `import-report.json`. A user that fails is recorded and the run continues.
+
+Keycloak's organizations and roles aren't imported yet, so `organizations.cmf.jsonl` and `roles.cmf.jsonl` are ignored.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A self-hosted Keycloak instance whose **Admin REST API** you can reach, usually on port `8080`. **Use a disposable instance for the rehearsal.** Imported users stay until you delete them.
+- An admin user, or a confidential client with a service account holding the `manage-users` (and `view-users`) realm-management roles on the target realm.
+
+## 1. Prepare the realm
+
+### Start a disposable instance
+
+For the rehearsal, the iamigrate repository ships a ready-made Keycloak setup, on Postgres, in [`.docker/keycloak`](https://github.com/cerberauth/iamigrate/tree/main/.docker/keycloak):
+
+```sh
+git clone https://github.com/cerberauth/iamigrate.git
+docker compose -f iamigrate/.docker/keycloak/docker-compose.yml up -d --wait
+
+export KEYCLOAK_URL=http://127.0.0.1:8080
+export KEYCLOAK_AUTH_REALM=master
+export KEYCLOAK_USERNAME=admin
+export KEYCLOAK_PASSWORD=admin
+```
+
+`import keycloak`, `diff keycloak`, and `validate` all read these (you can pass the matching flags instead), plus `KEYCLOAK_REALM` for the realm to import into.
+
+### Create the realm
+
+Create a realm for the rehearsal, and enable **unmanaged attributes**, or Keycloak drops `phoneNumber` and every `user_metadata`/`app_metadata` attribute iamigrate writes:
+
+```sh
+export KEYCLOAK_REALM=acme
+
+TOKEN=$(curl -s -d grant_type=password -d client_id=admin-cli \
+  -d username=admin -d password=admin \
+  "$KEYCLOAK_URL/realms/master/protocol/openid-connect/token" | jq -r .access_token)
+
+curl -s -X POST "$KEYCLOAK_URL/admin/realms" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d "{\"realm\":\"$KEYCLOAK_REALM\",\"enabled\":true}"
+
+curl -s "$KEYCLOAK_URL/admin/realms/$KEYCLOAK_REALM/users/profile" -H "Authorization: Bearer $TOKEN" \
+  | jq '.unmanagedAttributePolicy = "ENABLED"' \
+  | curl -s -X PUT "$KEYCLOAK_URL/admin/realms/$KEYCLOAK_REALM/users/profile" \
+    -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d @-
+```
+
+If your users sign in without an email or a name, also disable the **Verify Profile** required action (`Authentication` → `Required Actions` in the console, or `PUT /admin/realms/{realm}/authentication/required-actions/VERIFY_PROFILE` with `{"alias":"VERIFY_PROFILE","enabled":false}`), or first login prompts them to fill in a profile.
+
+## 2. Generate a representative test export
+
+Keycloak's built-in hash providers accept only PBKDF2 and Argon2, so the fixture focuses on those, plus the MFA factors your users are likely to have:
+
+```sh
+iamigrate testdata generate \
+  --count 100 \
+  --hash pbkdf2:digest=sha256,iterations=27500 \
+  --hash argon2:memory=7168,time=5,parallelism=1 \
+  --mfa sms:rate=0.1 \
+  --mfa webauthn:rate=0.05 \
+  --mfa totp:rate=0.2 \
+  --seed 42 \
+  --out ./fixtures/
+```
+
+| Case | Why it matters for Keycloak |
+| --- | --- |
+| `pbkdf2`, `argon2` | The hashes Keycloak's default hash providers can import. Users keep their password. |
+| `totp` | The only MFA credential Keycloak verifies from an imported secret. |
+| `sms`, `webauthn` | MFA Keycloak can't import. Affected users need follow-up. |
+
+Leave out `recovery_codes` for now: Keycloak hashes recovery codes with its own scheme, so existing codes can never carry over (see [MFA factors](#mfa-factors)). To see how other algorithms behave, add for example `--hash bcrypt` or `--hash md5`. Those users fail with `TRANSLATION_ERROR`.
+
+For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password (and TOTP secret) so you can prove they can sign in. Keep it out of version control.
+
+## 3. Review the manifest
+
+```sh
+cat fixtures/manifest.json
+```
+
+With a real export, this is where you find out which algorithms you're dealing with. Any algorithm other than `pbkdf2` or `argon2` in `hash_algorithm_counts` means users that won't be imported unless you deal with them first (see [Step 7](#7-handle-users-that-need-follow-up)).
+
+## 4. Validate against Keycloak (no network calls)
+
+```sh
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target keycloak
+```
+
+`validate` checks every user against what Keycloak can import:
+
+- **Password algorithms:** only `pbkdf2` and `argon2` are supported. Every other algorithm is reported, for example `unsupported password algorithm "bcrypt"`.
+- **MFA:** a portable factor Keycloak can't import is reported. `sms` and `webauthn` fail with `unsupported MFA type "sms"` and so on. Those users are still imported, without the factor.
+
+With the fixture above, expect problems for the `sms` and `webauthn` users. They're expected here, since you'll handle those users in Step 7.
+
+## 5. Understand how hashes and factors are translated
+
+You don't configure anything in this step. It explains what ends up in Keycloak, which helps when you read the import report.
+
+### Password hashes
+
+| CMF algorithm | Keycloak result |
+| --- | --- |
+| `pbkdf2` (digest `sha1`, `sha256`, or `sha512`, with a salt) | A password credential using the matching provider (`pbkdf2`, `pbkdf2-sha256`, `pbkdf2-sha512`), with `params.iterations` carried over |
+| `argon2` | A password credential using the `argon2` provider, decoded from the PHC string. Only `v=19` (1.3) and `v=16` (1.0) are supported. |
+| `bcrypt`, `scrypt`, `md4`, `md5`, `sha1`, `sha256`, `sha512`, `hmac`, `ldap` | Not translated. The user **is not created** and is reported as `TRANSLATION_ERROR` in `failed`. Keycloak has no built-in provider for these; a custom `PasswordHashProvider` could accept them, but iamigrate doesn't assume one is installed. |
+| Any hash marked `portable: false` | The user is created without a password and listed under `requires_password_reset` |
+
+On first sign-in, Keycloak verifies the imported hash directly; it doesn't rehash on login the way some providers do.
+
+### MFA factors
+
+| CMF factor | Keycloak result |
+| --- | --- |
+| `totp` | Imported as an OTP credential (`subType: totp`). The secret, `digits`, `period`, and `algorithm` are carried over from `totp_params`, or parsed out of an `otpauth://` URI in `value`. |
+| `sms`, `email`, `push`, `webauthn` | Not imported. The user is created and listed under `requires_reenrollment`. |
+| `recovery_codes` | Not imported: Keycloak stores recovery codes hashed with its own scheme, so existing codes can't be carried over. The user is created and listed under `requires_recovery_code_regen`. |
+
+### Profile
+
+| CMF field | Keycloak field |
+| --- | --- |
+| `username`, else first email, else first phone number | `username` |
+| First email | `email` / `emailVerified` |
+| First phone number | `phoneNumber` / `phoneNumberVerified` attributes |
+| `profile.given_name` / `family_name` | `firstName` / `lastName` |
+| `profile.locale` / `picture` | `locale` / `picture` attributes |
+| `user_metadata`, then `app_metadata` | Other attributes (`app_metadata` wins on a key collision) |
+| `blocked: true` | `enabled: false` |
+
+These are **not** imported: `source_id` (Keycloak assigns a new UUID), additional emails and phone numbers, and `profile.name`/`nickname`. If your realm's login theme needs `firstName`/`lastName` non-empty, make sure your CMF export sets them.
+
+## 6. Run the import
+
+```sh
+iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url "$KEYCLOAK_URL" --realm "$KEYCLOAK_REALM" \
+  --username admin --password admin
+```
+
+```
+imported: 100 succeeded, 0 failed -> report fixtures/import-report.json
+```
+
+Users are created one request at a time, so large imports take a while. The report goes next to `--in` unless you pass `--report`.
+
+<Aside type="caution">
+  The command exits with status `0` even when users fail. Always check the report, for example with `jq '.failed | length' fixtures/import-report.json`, especially in scripts.
+</Aside>
+
+The import can't be re-run over the same users: Keycloak rejects a user whose username or email already exists with `409 Conflict`, reported as `USER_EXISTS`. To retry, delete the users first, or re-import only the users listed in `failed`.
+
+## 7. Handle users that need follow-up
+
+Open the report:
+
+```sh
+cat fixtures/import-report.json
+```
+
+```json
+{"succeeded":["fx_ae0b6d305f0f4a20","..."],"failed":null,"requires_reenrollment":["fx_0ed9a8ec493c0f4c","..."]}
+```
+
+The report lists users by their CMF `source_id`, not by Keycloak user ID.
+
+| Field | What to do |
+| --- | --- |
+| `failed` | Each entry has a `source_id`, a `code` (`TRANSLATION_ERROR`, `USER_EXISTS`, or `REQUEST_ERROR`), and a `message`. See [Troubleshooting](#troubleshooting). |
+| `requires_password_reset` | The user was created without a password. Send them a recovery link, or set the `UPDATE_PASSWORD` required action for them. |
+| `requires_reenrollment` | SMS, email, push, or WebAuthn enrollments were dropped. Ask the user to set up a second factor again after signing in. |
+| `requires_recovery_code_regen` | Recovery codes were dropped. Ask the user to regenerate them after signing in. |
+
+To get a list you can feed into an email campaign or a script:
+
+```sh
+jq -r '.requires_reenrollment[]?' fixtures/import-report.json > reenroll.txt
+```
+
+Users whose hash algorithm Keycloak can't import land in `failed`, not `requires_password_reset`. To import them anyway, have them reset their password, then either drop the `password` from their CMF records before importing, or mark it `"portable": false`.
+
+## 8. Verify the import
+
+### Reconcile with the realm
+
+```sh
+iamigrate diff keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url "$KEYCLOAK_URL" --realm "$KEYCLOAK_REALM" --username admin --password admin
+```
+
+```
+missing in target: 0, attribute drift: 0
+```
+
+This looks up every user by email, or by their Keycloak username for users without one, and reports any that are missing, plus any mismatch between CMF `blocked` and the user's `enabled` flag. Users in `failed` show up here as missing.
+
+### Prove that passwords work
+
+A user existing in Keycloak doesn't prove its hash was imported correctly. Pick at least one user per algorithm from `answer-key.json`, then sign in as each one through the realm's token endpoint, using a public client with direct access grants enabled:
+
+```sh
+# One-time: create a public client for this rehearsal realm
+curl -s -X POST "$KEYCLOAK_URL/admin/realms/$KEYCLOAK_REALM/clients" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"clientId":"iamigrate-e2e","publicClient":true,"directAccessGrantsEnabled":true,"standardFlowEnabled":false}'
+
+IDENTIFIER=$(jq -r '.entries[0].email // .entries[0].username // .entries[0].phone' fixtures/answer-key.json)
+PASSWORD=$(jq -r '.entries[0].password' fixtures/answer-key.json)
+
+curl -s -d grant_type=password -d client_id=iamigrate-e2e \
+  --data-urlencode "username=$IDENTIFIER" --data-urlencode "password=$PASSWORD" \
+  "$KEYCLOAK_URL/realms/$KEYCLOAK_REALM/protocol/openid-connect/token" \
+  | jq '{signed_in: (.access_token != null), error: .error_description}'
+```
+
+`"signed_in": true` shows the hash was translated correctly. For a TOTP-enrolled user, add `-d totp=$(oathtool --totp -b "$TOTP_SECRET")` (or equivalent), using `entries[].totp_secret` from the answer key.
+
+### Clean up the rehearsal
+
+```sh
+docker compose -f iamigrate/.docker/keycloak/docker-compose.yml down -v
+```
+
+This drops the Postgres volume, so the realm and every imported user go with it. On another instance, delete the realm with `DELETE /admin/realms/{realm}`.
+
+## 9. Run the real migration
+
+Once the rehearsal passes, repeat steps 3–8 with your real data:
+
+1. Export your source into CMF with [`iamigrate export`](../../../reference/cli/export/).
+2. Check `hash_algorithm_counts` in `manifest.json`. Plan password resets for every user whose algorithm isn't `pbkdf2` or `argon2`.
+3. Move any profile fields you need into `user_metadata`, and drop `recovery_codes` factors ahead of time if you'd rather ask users to regenerate them directly.
+4. Run `validate` and review every reported problem.
+5. Import a small canary batch first, and verify logins for it.
+6. Import the rest, then run `diff keycloak` and handle the follow-up lists.
+
+## Troubleshooting
+
+| Error code / symptom | Cause | Fix |
+| --- | --- | --- |
+| `TRANSLATION_ERROR` … `not one of Keycloak's built-in hash providers` | The hash algorithm isn't `pbkdf2` or `argon2` | Reset those users' passwords (see [Step 7](#7-handle-users-that-need-follow-up)) |
+| `TRANSLATION_ERROR` … `argon2 version v=... is not supported` | The argon2 hash uses a version other than 1.0/1.3 | Reset those users' passwords; Keycloak's Argon2 provider only verifies those two versions |
+| `TRANSLATION_ERROR` … `pbkdf2 requires a salt` / `params.iterations` | The pbkdf2 hash is missing its salt or iteration count in the CMF record | Fix the export so pbkdf2 hashes carry a salt and `params.iterations` |
+| `USER_EXISTS` | A user with this username or email already exists, often from an earlier run | Delete the existing users, or leave those users out |
+| `REQUEST_ERROR` mentioning a required attribute or `VERIFY_PROFILE` | The user profile is missing a field the realm requires, or the Verify Profile action is on | Adjust the realm's user profile config, or disable Verify Profile (see [Step 1](#create-the-realm)) |
+| `--url (or $KEYCLOAK_URL) is required` / `--realm (or $KEYCLOAK_REALM) is required` | Missing connection info | Set `$KEYCLOAK_URL`/`$KEYCLOAK_REALM`, or pass `--url`/`--realm` |
+| Sign-in fails with the right password | The client used for login doesn't have direct access grants enabled | Enable `directAccessGrantsEnabled` on the client (see [Prove that passwords work](#prove-that-passwords-work)) |
+| Attributes like `phoneNumber` or metadata keys missing after import | Unmanaged attributes aren't enabled on the realm's user profile | Set `unmanagedAttributePolicy: "ENABLED"` (see [Create the realm](#create-the-realm)) |
+
+## See also
+
+- [Export users from Keycloak](../../export/keycloak/)
+- [`import keycloak` reference](../../../reference/cli/import-keycloak/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [`diff keycloak` reference](../../../reference/cli/diff-keycloak/)
+- [Generate test fixtures](../../generate-test-fixtures/)

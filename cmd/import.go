@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
@@ -20,6 +21,7 @@ func newImportCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "import", Short: "Import CMF identities into a target"}
 	cmd.AddCommand(newImportAuth0Cmd())
 	cmd.AddCommand(newImportKratosCmd())
+	cmd.AddCommand(newImportKeycloakCmd())
 	return cmd
 }
 
@@ -187,6 +189,65 @@ func newImportKratosCmd() *cobra.Command {
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
 	cmd.Flags().StringVar(&schemaID, "schema-id", "default", "Kratos identity schema ID to create identities against")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
+	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newImportKeycloakCmd() *cobra.Command {
+	var (
+		in         string
+		reportPath string
+		auth       keycloakFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   keycloak.Name,
+		Short: "Create Keycloak users from a CMF file via the Admin API",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			f, err := os.Open(in)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r, err := cmf.NewReader(f)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("importing users", countUsers(bar, in))
+			report, err := keycloak.New(client).Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{})
+			bar.Done()
+			if err != nil {
+				return err
+			}
+
+			b, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if reportPath == "" {
+				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
+			}
+			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+				return err
+			}
+
+			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd

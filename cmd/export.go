@@ -10,6 +10,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
+	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
@@ -28,11 +29,11 @@ func newExportCmd() *cobra.Command {
 		Use:   "export",
 		Short: "Export identities from a source into CMF",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if source != flatfile.Name && source != kratos.Name {
-				return fmt.Errorf("unsupported --source %q (supports \"flatfile\" and \"kratos\"; use `iamigrate testdata generate` for the fixture source)", source)
+			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name {
+				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", and \"keycloak\"; use `iamigrate testdata generate` for the fixture source)", source)
 			}
-			if source == flatfile.Name && in == "" {
-				return fmt.Errorf("--in is required for --source flatfile")
+			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
+				return fmt.Errorf("--in is required for --source %s", source)
 			}
 
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -50,7 +51,8 @@ func newExportCmd() *cobra.Command {
 			var manifest connector.Manifest
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
-			if source == kratos.Name {
+			switch source {
+			case kratos.Name:
 				if adminURL == "" {
 					adminURL = os.Getenv("KRATOS_ADMIN_URL")
 				}
@@ -60,7 +62,10 @@ func newExportCmd() *cobra.Command {
 				client := kratos.NewClient(adminURL)
 				bar.Stage("exporting users", 0)
 				manifest, err = kratos.New(client, "").Export(ctx, w, kratos.ExportOptions{})
-			} else {
+			case keycloak.Name:
+				bar.Stage("exporting users", 0)
+				manifest, err = keycloak.New(nil).Export(ctx, w, keycloak.ExportOptions{Path: in})
+			default:
 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
 				bar.Stage("exporting users", 0)
 				manifest, err = flatfile.New().Export(ctx, w, opts)
@@ -95,9 +100,9 @@ func newExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos")
+	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak")
 	_ = cmd.MarkFlagRequired("source")
-	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source)")
+	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
