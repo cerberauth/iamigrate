@@ -14,7 +14,11 @@ export AUTH0_DOMAIN=your-tenant.us.auth0.com
 export AUTH0_TOKEN=...
 
 iamigrate import auth0 --in users.cmf.jsonl.gz --connection-id con_xxx
+# or, with a token that has read:connections:
+iamigrate import auth0 --in users.cmf.jsonl.gz --connection my-database
 ```
+
+The target database connection is chosen in this order: `--connection-id`, then `--connection` (looked up by name), then `connection_id` from `--mapping`. If none is given, the tenant's only database connection is used. Looking up a connection, by name or automatically, needs the `read:connections` scope. Without that scope, pass `--connection-id`.
 
 ## Flags
 
@@ -23,6 +27,7 @@ iamigrate import auth0 --in users.cmf.jsonl.gz --connection-id con_xxx
 | `--in` | CMF `users.cmf.jsonl.gz` path (required) |
 | `--mapping` | `mapping.yaml` path (optional; can supply `--connection-id` instead) |
 | `--connection-id` | Auth0 database connection ID |
+| `--connection` | Auth0 database connection name, resolved to its ID (needs `read:connections`). Can't be combined with `--connection-id`. If both are omitted and `--mapping` has no `connection_id`, the tenant's only database connection is used. |
 | `--upsert` | Allow re-running this import against existing users. Forces the password translator to always use `custom_password_hash` (updatable) instead of the simpler, write-once `password_hash` field. |
 | `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
 | `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |

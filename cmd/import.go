@@ -28,6 +28,7 @@ func newImportAuth0Cmd() *cobra.Command {
 		in           string
 		mappingPath  string
 		connectionID string
+		connection   string
 		upsert       bool
 		domain       string
 		token        string
@@ -59,8 +60,17 @@ func newImportAuth0Cmd() *cobra.Command {
 					m.ConnectionID = connectionID
 				}
 			}
-			if m.ConnectionID == "" {
-				return fmt.Errorf("--connection-id is required (or set in mapping.yaml)")
+			client := auth0.NewClient("https://"+domain+"/api/v2", token)
+
+			// An explicit --connection-id (or mapping.yaml's connection_id)
+			// needs no extra scope; resolving by name, or picking the only
+			// database connection, needs read:connections.
+			if connection != "" || m.ConnectionID == "" {
+				id, err := auth0.ResolveConnectionID(cmd.Context(), client, connection)
+				if err != nil {
+					return fmt.Errorf("%w; pass --connection-id (or set connection_id in mapping.yaml), or --connection to pick one by name", err)
+				}
+				m.ConnectionID = id
 			}
 
 			f, err := os.Open(in)
@@ -84,7 +94,6 @@ func newImportAuth0Cmd() *cobra.Command {
 				opts.Roles = roles
 			}
 
-			client := auth0.NewClient("https://"+domain+"/api/v2", token)
 			target := auth0.New(client)
 
 			report, err := target.Import(cmd.Context(), r, m, opts)
@@ -111,11 +120,13 @@ func newImportAuth0Cmd() *cobra.Command {
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
 	cmd.Flags().StringVar(&connectionID, "connection-id", "", "Auth0 database connection ID")
+	cmd.Flags().StringVar(&connection, "connection", "", "Auth0 database connection name (needs read:connections; default: the tenant's only database connection)")
 	cmd.Flags().BoolVar(&upsert, "upsert", false, "allow re-running this import against existing users")
 	cmd.Flags().StringVar(&domain, "domain", "", "Auth0 tenant domain (or $AUTH0_DOMAIN)")
 	cmd.Flags().StringVar(&token, "token", "", "Auth0 Management API token (or $AUTH0_TOKEN)")
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")
+	cmd.MarkFlagsMutuallyExclusive("connection-id", "connection")
 	return cmd
 }
 

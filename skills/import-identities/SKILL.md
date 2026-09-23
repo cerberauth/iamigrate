@@ -24,7 +24,7 @@ Ask if not stated. What each target takes (from `iamigrate`'s capabilities, corr
 | Target | Password hashes | MFA | Orgs / roles | Invocation |
 |---|---|---|---|---|
 | `kratos` | bcrypt, argon2 | **none in practice** (see Gotchas) | no → `--annotate` | `import kratos --in F [--schema-id S]`, `$KRATOS_ADMIN_URL` |
-| `auth0` | all 11 CMF algorithms | totp, sms, email | yes, from files next to `--in` | `import auth0 --in F --connection-id C [--mapping M] [--upsert]`, `$AUTH0_DOMAIN`/`$AUTH0_TOKEN` — **not live-verified here** |
+| `auth0` | all 11 CMF algorithms | totp, sms, email | yes, from files next to `--in` | `import auth0 --in F [--connection-id C \| --connection NAME] [--mapping M] [--upsert]` (name lookup / sole-connection default need `read:connections`), `$AUTH0_DOMAIN`/`$AUTH0_TOKEN` — **not live-verified here** |
 
 ## 1. Preflight
 
