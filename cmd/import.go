@@ -30,23 +30,17 @@ func newImportAuth0Cmd() *cobra.Command {
 		connectionID string
 		connection   string
 		upsert       bool
-		domain       string
-		token        string
 		reportPath   string
+		auth         auth0Flags
 	)
 
 	cmd := &cobra.Command{
 		Use:   auth0.Name,
 		Short: "Chunk, submit, poll, and import a CMF file into an Auth0 tenant",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if domain == "" {
-				domain = os.Getenv("AUTH0_DOMAIN")
-			}
-			if token == "" {
-				token = os.Getenv("AUTH0_TOKEN")
-			}
-			if domain == "" || token == "" {
-				return fmt.Errorf("--domain/--token (or AUTH0_DOMAIN/AUTH0_TOKEN) are required")
+			client, err := auth.client()
+			if err != nil {
+				return err
 			}
 
 			m := mapping.Mapping{ConnectionID: connectionID}
@@ -60,7 +54,6 @@ func newImportAuth0Cmd() *cobra.Command {
 					m.ConnectionID = connectionID
 				}
 			}
-			client := auth0.NewClient("https://"+domain+"/api/v2", token)
 
 			// An explicit --connection-id (or mapping.yaml's connection_id)
 			// needs no extra scope; resolving by name, or picking the only
@@ -122,8 +115,7 @@ func newImportAuth0Cmd() *cobra.Command {
 	cmd.Flags().StringVar(&connectionID, "connection-id", "", "Auth0 database connection ID")
 	cmd.Flags().StringVar(&connection, "connection", "", "Auth0 database connection name (needs read:connections; default: the tenant's only database connection)")
 	cmd.Flags().BoolVar(&upsert, "upsert", false, "allow re-running this import against existing users")
-	cmd.Flags().StringVar(&domain, "domain", "", "Auth0 tenant domain (or $AUTH0_DOMAIN)")
-	cmd.Flags().StringVar(&token, "token", "", "Auth0 Management API token (or $AUTH0_TOKEN)")
+	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")
 	cmd.MarkFlagsMutuallyExclusive("connection-id", "connection")

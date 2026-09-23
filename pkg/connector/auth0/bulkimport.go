@@ -226,7 +226,9 @@ func submitImportJob(ctx context.Context, client *Client, connectionID string, u
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+client.Token)
+	if err := client.authorize(req); err != nil {
+		return "", err
+	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := client.HTTP.Do(req)

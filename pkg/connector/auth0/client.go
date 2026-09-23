@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,9 +26,12 @@ type Client struct {
 	BaseURL string
 	// Token is a Management API access token with the scopes the target
 	// connector's operations require (create:users, create:roles,
-	// create:organizations, etc).
+	// create:organizations, etc). Ignored when Credentials is set.
 	Token string
-	HTTP  *http.Client
+	// Credentials, if set, obtains (and renews) the access token through
+	// the client_credentials grant instead of using a fixed Token.
+	Credentials *ClientCredentials
+	HTTP        *http.Client
 }
 
 // NewClient returns a Client with a sane default HTTP timeout.
@@ -37,6 +41,35 @@ func NewClient(baseURL, token string) *Client {
 		Token:   token,
 		HTTP:    &http.Client{Timeout: 60 * time.Second},
 	}
+}
+
+// NewClientCredentialsClient returns a Client that gets its Management API
+// access token from tokenURL through the client_credentials grant, using
+// baseURL (plus a trailing slash) as the audience.
+func NewClientCredentialsClient(baseURL, tokenURL, clientID, clientSecret string) *Client {
+	c := NewClient(baseURL, "")
+	c.Credentials = &ClientCredentials{
+		TokenURL:     tokenURL,
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		Audience:     strings.TrimSuffix(baseURL, "/") + "/",
+	}
+	return c
+}
+
+// authorize sets req's bearer token, fetching one first if the client
+// uses client credentials.
+func (c *Client) authorize(req *http.Request) error {
+	token := c.Token
+	if c.Credentials != nil {
+		var err error
+		token, err = c.Credentials.Token(req.Context(), c.HTTP)
+		if err != nil {
+			return err
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
 }
 
 // RateLimit reports the Auth0 rate-limit headers from a response, used by
@@ -89,7 +122,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if err != nil {
 		return RateLimit{}, fmt.Errorf("auth0: building request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if err := c.authorize(req); err != nil {
+		return RateLimit{}, err
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
