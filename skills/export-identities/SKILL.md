@@ -1,6 +1,6 @@
 ---
 name: export-identities
-description: Export users/identities, organizations, roles and memberships out of an identity provider (IdP / CIAM) into an iamigrate CMF bundle, then audit it before any import. Use when asked to export, extract, dump, back up or migrate users, organizations, tenants, roles or memberships from an identity provider (Ory Kratos, a CSV/JSON user dump, or any IdP via its API).
+description: Export users/identities, organizations, roles and memberships out of an identity provider (IdP / CIAM) into an iamigrate CMF bundle, then audit it before any import. Use when asked to export, extract, dump, back up or migrate users, organizations, tenants, roles or memberships from an identity provider (Ory Kratos, Keycloak, a CSV/JSON user dump, or any IdP via its API).
 ---
 
 Produces a **CMF bundle** — the directory every `iamigrate import`/`validate`/`diff`
@@ -32,6 +32,7 @@ Ask which IdP the user is exporting from if it isn't stated. Then:
 | Source | Path |
 |---|---|
 | Ory Kratos | native: `iamigrate export --source kratos` |
+| Keycloak | native, but from a **file, not the live server**: run `kc.sh export --realm <name> --dir <out> --users realm_file` on the Keycloak host/container first (the Admin API never returns password hashes), then `iamigrate export --source keycloak --in <out>` |
 | CSV / JSON dump (DB table, legacy app) | native: `iamigrate export --source flatfile` |
 | Any other IdP | get the provider's own user export (with password hashes if it offers them), reshape it into a flatfile CSV/JSON, then `--source flatfile` |
 
@@ -46,6 +47,8 @@ export KRATOS_ADMIN_URL=http://127.0.0.1:4434          # Kratos Admin API, never
 iamigrate export --source kratos --out ./export/
 # or
 iamigrate export --source flatfile --in users.csv --format csv --out ./export/
+# or, from a Keycloak realm export directory (see the source table above)
+iamigrate export --source keycloak --in ./realm-export --out ./export/
 ```
 
 Then read `./export/manifest.json`. `export` exits 0 even when records were
@@ -129,6 +132,12 @@ counts, and every warning.
   anything else under `traits` is dropped, and `source_id` becomes the Kratos
   identity UUID. If membership data is keyed by something else, use email in
   the `user` column.
+- **Keycloak export needs a `kc.sh export` file, not a live connection** — the
+  Admin API's user endpoints never include `secretData`, so `--in` takes the
+  export's `--file` or `--dir` output, not a URL. `source_id` becomes the
+  Keycloak user UUID; realm/client roles and group membership aren't read, so
+  org/role data has to come from `attributes` (`app_metadata`/`user_metadata`)
+  the same way as Kratos.
 - **A flatfile hash with no algorithm is skipped, not errored.** A raw md5 or
   sha hex digest with an empty `password_algorithm` ends up in
   `manifest.json.skipped_records`. Always fill `password_algorithm` for raw
@@ -153,7 +162,9 @@ counts, and every warning.
 | Symptom | Fix |
 |---|---|
 | `--admin-url (or $KRATOS_ADMIN_URL) is required` | set `KRATOS_ADMIN_URL` to the Admin API (port 4434 by default) |
-| `required flag(s) "source" not set` | pass `--source kratos` or `--source flatfile` |
+| `required flag(s) "source" not set` | pass `--source kratos`, `--source keycloak`, or `--source flatfile` |
+| `keycloak: no *-realm.json or *-users-*.json file in ...` | `--in` isn't a `kc.sh export` output; re-run `kc.sh export` and point `--in` at its `--file`/`--dir` |
+| `keycloak: realm export must be a single realm object` | `--in` is an export of every realm (a JSON array); export one realm at a time with `--realm <name>` |
 | `exported N users -> ... (M skipped)` with M > 0 | read `manifest.json` `skipped_records`; for `raw digest format requires a Hint.Algorithm` fill `password_algorithm` |
 | `mapping: target is required` | `iamigrate map --target <t> --mapping ./export/mapping.yaml` |
 | `cmf_bundle: <csv>:N: user 'x' matches no source_id or email` | the user was skipped at export or is keyed differently; check `manifest.json`, use the email |

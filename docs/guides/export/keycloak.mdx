@@ -1,0 +1,173 @@
+---
+title: Export users from Keycloak
+description: Export users and password hashes from a Keycloak realm export into CMF with iamigrate, and what gets left behind.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through exporting a Keycloak realm's users into the Canonical Migration Format (CMF), checking what came out, and preparing the result for import into another provider.
+
+## How iamigrate exports from Keycloak
+
+Keycloak's Admin REST API never returns a credential's `secretData`, so there's no way to read password hashes out of a live instance. `iamigrate export --source keycloak` instead reads a `kc.sh export` realm export — the `--file`/`--dir` output of Keycloak's own export command — which does include credentials.
+
+Point `--in` at either:
+
+- A single realm file, from `kc.sh export --realm <name> --file realm.json --users same_file`.
+- A directory, from `kc.sh export --realm <name> --dir ./export --users realm_file` (or `different_files`). iamigrate reads every `*-realm.json` and `*-users-*.json` file in it.
+
+Each user becomes one CMF record. Service account users (owned by a client, not a person) and users that can't be translated are skipped and listed in `manifest.json` instead of failing the export.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- Shell access to the Keycloak server or container, to run `kc.sh export`.
+
+<Aside type="caution">
+  The export contains password hashes and personal data. Write it somewhere access-controlled, and delete it (and the realm export it came from) once the migration is done.
+</Aside>
+
+## 1. Export the realm
+
+Run `kc.sh export` on the Keycloak host or inside its container. Keycloak must not have another process using the same database while the standalone export command runs; against a running server, use a different management port:
+
+```sh
+# Inside the Keycloak container, e.g. `docker exec -it <container> sh`
+/opt/keycloak/bin/kc.sh export --dir /tmp/export --realm acme \
+  --users realm_file --http-management-port 9001
+
+# Copy it out
+docker cp <container>:/tmp/export ./realm-export
+```
+
+## 2. Run the export
+
+```sh
+iamigrate export --source keycloak --in ./realm-export --out ./export/
+```
+
+```
+exported 1250 users -> export/users.cmf.jsonl.gz (3 skipped)
+```
+
+The command writes:
+
+```
+export/
+├── users.cmf.jsonl.gz   # one CMF user per exported user
+├── manifest.json        # counts per hash algorithm, plus skipped users
+└── mapping.yaml         # scaffolded mapping, with no target set yet
+```
+
+The export is a snapshot of whenever you ran `kc.sh export`. Users created, and passwords changed, after that aren't in it, so plan a freeze or a final re-export before cutover.
+
+## 3. Review the manifest
+
+```sh
+cat export/manifest.json
+```
+
+```json
+{
+  "record_count": 1250,
+  "hash_algorithm_counts": {
+    "argon2": 120,
+    "pbkdf2": 1130
+  },
+  "skipped_records": [
+    {
+      "source_id": "b2b6b7b0-2f0a-4f0a-9b0a-2f0a4f0a9b0a",
+      "reason": "service account user of client \"admin-cli\""
+    }
+  ]
+}
+```
+
+- **`hash_algorithm_counts`** tells you which algorithms the target must accept. A realm using Keycloak's default hashing settings has `argon2`; older realms, or ones with a custom password policy, may have `pbkdf2` with any of the three digests.
+- **`skipped_records`** lists users that aren't in `users.cmf.jsonl.gz`, by Keycloak user ID.
+
+<Aside type="caution">
+  The command exits with status `0` even when users are skipped. Always check `skipped_records`.
+</Aside>
+
+| Skip reason | Cause |
+| --- | --- |
+| `service account user of client "..."` | The user is a client's service account, not a person — never migrated |
+| `password credential has no secretData (export with kc.sh export, not the Admin API)` | The input came from the Admin API rather than `kc.sh export` |
+| `unrecognized password hash format: ...` | The credential's `credentialData.algorithm` isn't `pbkdf2`/`pbkdf2-sha256`/`pbkdf2-sha512`/`argon2` — a custom `PasswordHashProvider` on the source realm |
+
+Skipped users aren't migrated at all. If you need them on the target, recreate them there and have them set a password.
+
+## 4. Understand what's exported
+
+### Exported
+
+| Keycloak field | CMF field |
+| --- | --- |
+| `id` | `source_id` |
+| `username` | `username`, unless it equals the email or phone (a realm using "email as username" doesn't get a redundant `username`) |
+| `email` | `emails[0]`, marked primary; verified if `emailVerified` |
+| `attributes.phoneNumber` | `phones[0]`, marked primary; verified if `attributes.phoneNumberVerified` is `"true"` |
+| `firstName` / `lastName` | `profile.given_name` / `family_name`, and their concatenation as `profile.name` |
+| `attributes.locale` / `picture` | `profile.locale` / `picture` |
+| Every other `attributes` entry | `user_metadata` |
+| `enabled: false` | `blocked: true` |
+| Password credential's `secretData`/`credentialData` | `password`, with the algorithm and parameters decoded from the hash |
+| An `otp` credential with `subType: totp` | a `totp` MFA factor, `portable: true` |
+| `webauthn`/`webauthn-passwordless` credentials | a `webauthn` MFA factor, `portable: false` |
+| `recovery-authn-codes` credential | a `recovery_codes` MFA factor, `portable: false` |
+
+The Keycloak user UUID becomes `source_id`, and is what import reports refer to. Some targets reuse it as the user ID; for example, Auth0 turns it into `auth0|<uuid>`.
+
+### Not exported
+
+- **Group and role memberships.** Neither realm nor client roles, nor group membership, are read; organizations and roles aren't supported by this connector yet.
+- **Federated/social identities** (`federatedIdentities`, e.g. a linked Google account).
+- **HOTP credentials.** Only TOTP OTP credentials become an MFA factor; a counter-based (`subType: hotp`) one is silently skipped, since CMF has no HOTP type.
+- **Required actions**, **consents**, and **timestamps** such as creation date.
+
+If you need any of these, pull them from the realm export yourself (it's a plain JSON file) and merge them into the CMF records before you import.
+
+## 5. Prepare for import
+
+`mapping.yaml` is scaffolded with `target: ""`. Set the target before you validate with it:
+
+```sh
+iamigrate map --target <target> --mapping ./export/mapping.yaml
+```
+
+Then check the export against the target's capabilities. No network calls are made:
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target <target>
+```
+
+From there, follow the import guide for your target:
+
+- [Import users into Auth0](../../import/auth0/)
+- [Import users into Ory Kratos](../../import/kratos/)
+- [Import users into Keycloak](../../import/keycloak/), for example to move between Keycloak realms or instances
+
+## Rehearse with test data
+
+To try the export without a real instance, import a fixture into a disposable Keycloak (see [Import users into Keycloak](../../import/keycloak/)), export the realm with `kc.sh export`, then run `iamigrate export` against it:
+
+```sh
+iamigrate testdata generate --count 50 --hash pbkdf2:digest=sha256,iterations=27500 --hash argon2 --out ./fixtures/
+iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme --username admin --password admin
+
+# inside the Keycloak container:
+kc.sh export --dir /tmp/export --realm acme --users realm_file --http-management-port 9001
+docker cp <container>:/tmp/export ./realm-export
+
+iamigrate export --source keycloak --in ./realm-export --out ./export/
+```
+
+Every fixture user comes back with the same identifiers and password hash, but with a Keycloak UUID as `source_id` and no group/role data. That's the data loss described in [Step 4](#4-understand-whats-exported).
+
+## See also
+
+- [`export` reference](../../../reference/cli/export/)
+- [`map` reference](../../../reference/cli/map/)
+- [`validate` reference](../../../reference/cli/validate/)

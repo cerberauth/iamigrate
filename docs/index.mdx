@@ -20,7 +20,7 @@ import { Card, CardGrid, LinkCard } from '@/components/docs';
 
 <CardGrid stagger>
   <Card title="Export" icon="magnifier">
-    Export identities from a synthetic fixture, a flat CSV/JSON file, or a running Ory Kratos instance into the Canonical Migration Format (CMF).
+    Export identities from a synthetic fixture, a flat CSV/JSON file, a running Ory Kratos instance, or a Keycloak realm export into the Canonical Migration Format (CMF).
   </Card>
   <Card title="Map" icon="pencil">
     Scaffold a mapping.yaml from source fields to CMF, with custom metadata flagged for review rather than guessed at.
@@ -53,6 +53,10 @@ iamigrate import auth0 --in ./fixtures/users.cmf.jsonl.gz --connection-id con_xx
 
 # ...or into a running Ory Kratos instance
 KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate import kratos --in ./fixtures/users.cmf.jsonl.gz --schema-id default
+
+# ...or into a Keycloak realm
+iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme --username admin --password admin
 ```
 
 ## Explore the docs
@@ -62,6 +66,8 @@ KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate import kratos --in ./fixtures/u
   <LinkCard title="Import users into Auth0" description="Step-by-step guide: hashes, MFA, validation, import, and verification." href="./guides/import/auth0/" />
   <LinkCard title="Import users into Ory Kratos" description="Step-by-step guide: identity schema, hashes, validation, import, and verification." href="./guides/import/kratos/" />
   <LinkCard title="Export users from Ory Kratos" description="Export identities and password hashes, and what gets left behind." href="./guides/export/kratos/" />
+  <LinkCard title="Import users into Keycloak" description="Step-by-step guide: realm setup, hashes, validation, import, and verification." href="./guides/import/keycloak/" />
+  <LinkCard title="Export users from Keycloak" description="Export identities and password hashes from a realm export, and what gets left behind." href="./guides/export/keycloak/" />
   <LinkCard title="Generate test fixtures" description="Synthetic users with every hash algorithm and MFA factor type, plus an answer key." href="./guides/generate-test-fixtures/" />
   <LinkCard title="CLI reference" description="All commands and flags." href="./reference/cli/" />
 </CardGrid>

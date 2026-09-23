@@ -7,6 +7,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/spf13/cobra"
 )
@@ -15,6 +16,7 @@ func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "diff", Short: "Reconcile a CMF file against a live target"}
 	cmd.AddCommand(newDiffAuth0Cmd())
 	cmd.AddCommand(newDiffKratosCmd())
+	cmd.AddCommand(newDiffKeycloakCmd())
 	return cmd
 }
 
@@ -97,6 +99,46 @@ func newDiffKratosCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newDiffKeycloakCmd() *cobra.Command {
+	var (
+		in   string
+		auth keycloakFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   keycloak.Name,
+		Short: "Reconcile a CMF file against a live Keycloak realm",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			r, closeFn, err := openReader(in)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+			report, err := keycloak.New(client).Verify(ctx, r)
+			bar.Done()
+			if err != nil {
+				return err
+			}
+			printDiffReport(cmd, report)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	auth.register(cmd)
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
 }

@@ -66,6 +66,32 @@ hashes and totp/lookup_secret (recovery codes) MFA factors -- see
 an import. A disposable Kratos instance for trying this locally is in
 [`.docker/kratos`](.docker/kratos).
 
+## Migrating with Keycloak
+
+Keycloak can also be either side of a migration: import a CMF file into a
+realm via the Admin API, or export a realm's users (with their password
+hashes) from a `kc.sh export` realm export, since the Admin API never
+returns hashes.
+
+```sh
+# Import a CMF file as new users into a realm
+iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme --username admin --password admin
+
+# ...or export a `kc.sh export` realm export into CMF
+iamigrate export --source keycloak --in ./realm-export --out ./export/
+
+# Reconcile a CMF file against the live realm after import
+iamigrate diff keycloak --in ./fixtures/users.cmf.jsonl.gz \
+  --url http://127.0.0.1:8080 --realm acme --username admin --password admin
+```
+
+Keycloak only supports importing pre-existing pbkdf2 and argon2 password
+hashes (its two built-in hash providers) and totp MFA factors -- see
+`iamigrate validate --target keycloak` to catch anything else before running
+an import. A disposable Keycloak instance for trying this locally is in
+[`.docker/keycloak`](.docker/keycloak).
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)

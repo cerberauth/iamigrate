@@ -1,6 +1,6 @@
 ---
 name: import-identities
-description: Import users/identities, organizations, roles and memberships from an iamigrate CMF bundle into a target identity provider (IdP / CIAM) — safely, with preflight, a canary batch, retries and post-import verification. Use when asked to import, load, migrate, move or restore users or organizations into an identity provider (Ory Kratos, Auth0), or to resume, retry or verify a migration import.
+description: Import users/identities, organizations, roles and memberships from an iamigrate CMF bundle into a target identity provider (IdP / CIAM) — safely, with preflight, a canary batch, retries and post-import verification. Use when asked to import, load, migrate, move or restore users or organizations into an identity provider (Ory Kratos, Auth0, Keycloak), or to resume, retry or verify a migration import.
 ---
 
 Takes a **CMF bundle** (`users.cmf.jsonl.gz` + optional `organizations.cmf.jsonl`,
@@ -25,6 +25,7 @@ Ask if not stated. What each target takes (from `iamigrate`'s capabilities, corr
 |---|---|---|---|---|
 | `kratos` | bcrypt, argon2 | **none in practice** (see Gotchas) | no → `--annotate` | `import kratos --in F [--schema-id S]`, `$KRATOS_ADMIN_URL` |
 | `auth0` | all 11 CMF algorithms | totp, sms, email | yes, from files next to `--in` | `import auth0 --in F [--connection-id C \| --connection NAME] [--mapping M] [--upsert]` (name lookup / sole-connection default need `read:connections`), `$AUTH0_DOMAIN`/`$AUTH0_TOKEN` — **not live-verified here** |
+| `keycloak` | pbkdf2, argon2 | totp only (`recovery_codes` never portable — see Gotchas) | no → `--annotate` | `import keycloak --in F`, `$KEYCLOAK_URL`/`$KEYCLOAK_REALM`/`$KEYCLOAK_AUTH_REALM` + `$KEYCLOAK_USERNAME`/`$KEYCLOAK_PASSWORD` or `$KEYCLOAK_CLIENT_ID`/`$KEYCLOAK_CLIENT_SECRET` — live-verified |
 
 ## 1. Preflight
 
@@ -125,6 +126,10 @@ and the three follow-up lists (these users need an email campaign or forced rese
 - **Throughput:** `import kratos` is one serial POST per user (~200 users/s against local Kratos). Plan batches accordingly.
 - **Blocked users** import as Kratos `state: inactive`; verified-email flags carry over.
 - **Staged bundles contain password hashes** (`prepare` writes them `0600`). Delete `./stage` after the migration.
+- **Keycloak drops `phoneNumber` and every metadata attribute silently** unless the realm's user profile has `unmanagedAttributePolicy: "ENABLED"` (`PUT /admin/realms/{realm}/users/profile`). No import error either way — `diff keycloak`'s `attribute drift` only checks `blocked`, so check a sample user in the console after a canary.
+- **Keycloak has no bulk import and no orgs/roles**, same shape as Kratos: `--annotate` before importing, `import keycloak` ignores org/role files next to `--in`.
+- **`recovery_codes` never imports to Keycloak** (`requires_recovery_code_regen`, not a failure) — Keycloak hashes codes with its own scheme, so there's no point asking the user to keep them; always tell them to regenerate.
+- **A 409 (`USER_EXISTS`) means the username *or* email collided**, not necessarily the same person as `diff keycloak`'s email-first lookup — same caution as Kratos's conflict-vs-lookup mismatch.
 
 ## Troubleshooting
 
@@ -136,3 +141,7 @@ and the three follow-up lists (these users need an email campaign or forced rese
 | `conflict_already_exists` = batch size | batch already imported; build the next one with `--exclude-report` |
 | `cmf: opening gzip stream: EOF` / `not a complete gzip file` | the export that produced the bundle failed halfway (e.g. CSV `wrong number of fields` from an unquoted argon2 hash — quote fields containing commas) and left an empty file; re-export |
 | `--admin-url (or $KRATOS_ADMIN_URL) is required` | export `KRATOS_ADMIN_URL` (Admin API, port 4434 by default) |
+| `TRANSLATION_ERROR ... not one of Keycloak's built-in hash providers` | `prepare --drop-password-alg <alg>` (Keycloak only imports pbkdf2/argon2) |
+| `USER_EXISTS` (Keycloak) | batch already imported; build the next one with `--exclude-report`, same as a Kratos conflict |
+| `--url (or $KEYCLOAK_URL) is required` / `--realm (or $KEYCLOAK_REALM) is required` | export `KEYCLOAK_URL`/`KEYCLOAK_REALM`, or pass `--url`/`--realm` |
+| attributes/metadata missing on Keycloak users after import, no error | realm's user profile needs `unmanagedAttributePolicy: "ENABLED"` (see Gotchas) |

@@ -3,9 +3,9 @@ title: export
 description: Export identities from a source into CMF.
 ---
 
-Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Two sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); and `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash. Any other flat-file column is passed through as `app_metadata` and flagged as a manual mapping step rather than silently dropped.
+Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Three sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; and `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible). Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
 
-For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/).
+For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/).
 
 ## Usage
 
@@ -14,14 +14,17 @@ iamigrate export --source flatfile --in users.csv --format csv --out ./export/
 
 # or, from a running Kratos instance
 KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate export --source kratos --out ./export/
+
+# or, from a `kc.sh export` realm export
+iamigrate export --source keycloak --in ./realm-export/ --out ./export/
 ```
 
 ## Flags
 
 | Flag | Description |
 | --- | --- |
-| `--source` | Source connector name: `flatfile` \| `kratos` (required) |
-| `--in` | Input file path (flatfile source) |
+| `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` (required) |
+| `--in` | Input file path (flatfile source), or `kc.sh export` realm file or directory (keycloak source) |
 | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
 | `--out` | Output directory (default `./export/`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
