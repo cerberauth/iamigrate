@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/brianvoe/gofakeit/v7"
@@ -43,6 +45,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		NonPortableMFACounts: map[cmf.MFAType]int{},
 	}
 	var answerKey AnswerKey
+	emails := map[string]bool{}
 
 	now := time.Now().UTC()
 	for i := 0; i < opts.Count; i++ {
@@ -59,8 +62,8 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 
 		given := f.FirstName()
 		family := f.LastName()
-		email := f.Email()
-		phone := f.Phone()
+		email := uniqueEmail(f, emails, given, family)
+		phone := fictionalPhone(f)
 		password := f.Password(true, true, true, true, false, 16)
 
 		spec := opts.Hashes[i%len(opts.Hashes)]
@@ -126,6 +129,39 @@ func phoneContacts(phone string, factors []cmf.MFAFactor) []cmf.Contact {
 		}
 	}
 	return nil
+}
+
+// fixtureEmailDomains are RFC 2606 reserved domains, so importing fixtures
+// into a real IdP can never send mail to a real inbox.
+var fixtureEmailDomains = []string{"example.com", "example.net", "example.org"}
+
+// uniqueEmail derives a "given.family@domain" address from the user's name,
+// appending a counter to the local part when that name was already taken.
+func uniqueEmail(f *gofakeit.Faker, seen map[string]bool, given, family string) string {
+	local := emailLocalPart(given) + "." + emailLocalPart(family)
+	domain := f.RandomString(fixtureEmailDomains)
+	email := local + "@" + domain
+	for n := 2; seen[email]; n++ {
+		email = local + strconv.Itoa(n) + "@" + domain
+	}
+	seen[email] = true
+	return email
+}
+
+func emailLocalPart(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// fictionalPhone returns an E.164 number in the NANP 555-0100..0199 range,
+// which is reserved for fictional use and never assigned to a subscriber.
+func fictionalPhone(f *gofakeit.Faker) string {
+	return fmt.Sprintf("+1%d%02d555%04d", f.IntRange(2, 9), f.IntRange(0, 99), f.IntRange(100, 199))
 }
 
 func randomSourceID() (string, error) {
