@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -167,4 +168,41 @@ func TestToAuth0RejectsNonPortable(t *testing.T) {
 	p := cmf.Password{Algorithm: cmf.AlgBcrypt, Portable: false, Hash: cmf.HashValue{Value: "x"}}
 	_, err := iamhash.ToAuth0(p, true)
 	require.Error(t, err)
+}
+
+// decodePassword mirrors how a CMF file is read: numeric params come back
+// as float64, not int.
+func decodePassword(t *testing.T, raw string) cmf.Password {
+	t.Helper()
+	var p cmf.Password
+	require.NoError(t, json.Unmarshal([]byte(raw), &p))
+	return p
+}
+
+func TestToAuth0ScryptFromDecodedCMF(t *testing.T) {
+	p := decodePassword(t, `{"algorithm":"scrypt","hash":{"value":"aGVsbG8","encoding":"base64"},"salt":{"value":"c2FsdA","encoding":"base64","position":"prefix"},"params":{"blockSize":8,"cost":16384,"keylen":32,"parallelization":1},"portable":true}`)
+
+	a0, err := iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.Equal(t, 32, a0.Payload["keylen"])
+	require.Equal(t, 16384, a0.Payload["cost"])
+	require.Equal(t, 8, a0.Payload["blockSize"])
+	require.Equal(t, 1, a0.Payload["parallelization"])
+}
+
+func TestToAuth0PBKDF2FromDecodedCMFKeepsParams(t *testing.T) {
+	p := decodePassword(t, `{"algorithm":"pbkdf2","hash":{"value":"aGVsbG8","encoding":"base64","digest":"sha256"},"salt":{"value":"c2FsdA","encoding":"base64","position":"prefix"},"params":{"digest":"sha256","iterations":10000,"keylen":32},"portable":true}`)
+
+	a0, err := iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.Equal(t, "$pbkdf2-sha256$i=10000,l=32$c2FsdA$aGVsbG8", a0.Payload["hash"].(map[string]any)["value"])
+}
+
+func TestToAuth0HMACNestsKeyUnderHash(t *testing.T) {
+	p := decodePassword(t, `{"algorithm":"hmac","hash":{"value":"abcd","encoding":"hex","digest":"sha256"},"key":{"value":"a2V5","encoding":"base64"},"portable":true}`)
+
+	a0, err := iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.NotContains(t, a0.Payload, "key")
+	require.Equal(t, map[string]any{"value": "a2V5", "encoding": "base64"}, a0.Payload["hash"].(map[string]any)["key"])
 }

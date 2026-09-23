@@ -3,8 +3,10 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -101,8 +103,7 @@ func newImportAuth0Cmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "imported: %d succeeded, %d failed -> report %s\n",
-				len(report.Succeeded), len(report.Failed), reportPath)
+			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
 			return nil
 		},
 	}
@@ -167,8 +168,7 @@ func newImportKratosCmd() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(), "imported: %d succeeded, %d failed -> report %s\n",
-				len(report.Succeeded), len(report.Failed), reportPath)
+			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
 			return nil
 		},
 	}
@@ -179,6 +179,43 @@ func newImportKratosCmd() *cobra.Command {
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
+}
+
+// printImportSummary prints the import totals, then one line per failure
+// code. Users that already exist in the target are counted apart from real
+// failures, with a hint on how to update them.
+func printImportSummary(w io.Writer, report connector.ImportReport, reportPath string, upsert bool) {
+	duplicated := 0
+	failedByCode := map[string]int{}
+	for _, f := range report.Failed {
+		if f.Code == auth0.DuplicatedUserCode {
+			duplicated++
+			continue
+		}
+		failedByCode[f.Code]++
+	}
+	failed := len(report.Failed) - duplicated
+
+	if duplicated == 0 {
+		fmt.Fprintf(w, "imported: %d succeeded, %d failed -> report %s\n", len(report.Succeeded), failed, reportPath)
+	} else {
+		fmt.Fprintf(w, "imported: %d succeeded, %d already exist, %d failed -> report %s\n",
+			len(report.Succeeded), duplicated, failed, reportPath)
+		if upsert {
+			fmt.Fprintf(w, "  %d already exist: left over in Auth0's user store outside this connection; delete them via the Connection Users endpoint and re-import\n", duplicated)
+		} else {
+			fmt.Fprintf(w, "  %d already exist: not updated; re-run with --upsert to update them\n", duplicated)
+		}
+	}
+
+	codes := make([]string, 0, len(failedByCode))
+	for code := range failedByCode {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	for _, code := range codes {
+		fmt.Fprintf(w, "  %d failed: %s\n", failedByCode[code], code)
+	}
 }
 
 func loadOrganizations(dir string) ([]cmf.Organization, error) {

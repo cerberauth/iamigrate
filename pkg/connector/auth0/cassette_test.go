@@ -122,7 +122,7 @@ func TestRunBulkImportRecordedCassette(t *testing.T) {
 
 	require.ElementsMatch(t, []string{"u1"}, report.Succeeded)
 	require.Len(t, report.Failed, 1)
-	require.Equal(t, "DUPLICATED_USER", report.Failed[0].Code)
+	require.Equal(t, auth0.DuplicatedUserCode, report.Failed[0].Code)
 	require.Equal(t, "u2", report.Failed[0].SourceID)
 
 	// Replay: point at a bogus, unreachable host. If replay actually

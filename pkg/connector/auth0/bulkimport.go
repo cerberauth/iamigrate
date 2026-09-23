@@ -130,6 +130,22 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	return report, roleInfos, nil
 }
 
+// DuplicatedUserCode is the job error code Auth0 reports for a user that
+// already exists.
+const DuplicatedUserCode = "DUPLICATED_USER"
+
+// duplicatedUserMessage explains a DUPLICATED_USER error. Without upsert,
+// Auth0 reports it for any user already in the connection. With upsert,
+// existing connection users are updated, so the user can only be left over
+// in Auth0's user store (see DESIGN.md).
+func duplicatedUserMessage(upsert bool) string {
+	if !upsert {
+		return "user already exists in this connection: re-run with --upsert to update it"
+	}
+	return "user exists in Auth0's user store but not this tenant/connection: " +
+		"delete via the Connection Users endpoint and re-import (see DESIGN.md)"
+}
+
 func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Succeeded = append(dst.Succeeded, src.Succeeded...)
 	dst.Failed = append(dst.Failed, src.Failed...)
@@ -168,9 +184,8 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 	failedIDs := map[string]bool{}
 	for _, je := range jobErrors {
 		failedIDs[je.SourceID] = true
-		if je.Code == "DUPLICATED_USER" {
-			je.Message = "user exists in Auth0's user store but not this tenant/connection: " +
-				"delete via the Connection Users endpoint and re-import (see DESIGN.md)"
+		if je.Code == DuplicatedUserCode {
+			je.Message = duplicatedUserMessage(upsert)
 		}
 		report.Failed = append(report.Failed, je)
 	}
