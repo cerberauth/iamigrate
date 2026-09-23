@@ -48,6 +48,8 @@ func newExportCmd() *cobra.Command {
 
 			w := cmf.NewWriter(f)
 			var manifest connector.Manifest
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
 			if source == kratos.Name {
 				if adminURL == "" {
 					adminURL = os.Getenv("KRATOS_ADMIN_URL")
@@ -56,11 +58,14 @@ func newExportCmd() *cobra.Command {
 					return fmt.Errorf("--admin-url (or $KRATOS_ADMIN_URL) is required for --source kratos")
 				}
 				client := kratos.NewClient(adminURL)
-				manifest, err = kratos.New(client, "").Export(cmd.Context(), w, kratos.ExportOptions{})
+				bar.Stage("exporting users", 0)
+				manifest, err = kratos.New(client, "").Export(ctx, w, kratos.ExportOptions{})
 			} else {
 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
-				manifest, err = flatfile.New().Export(cmd.Context(), w, opts)
+				bar.Stage("exporting users", 0)
+				manifest, err = flatfile.New().Export(ctx, w, opts)
 			}
+			bar.Done()
 			if err != nil {
 				return err
 			}

@@ -89,7 +89,11 @@ func newImportAuth0Cmd() *cobra.Command {
 
 			target := auth0.New(client)
 
-			report, err := target.Import(cmd.Context(), r, m, opts)
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("importing users", countUsers(bar, in))
+			report, err := target.Import(ctx, r, m, opts)
+			bar.Done()
 			if err != nil {
 				return err
 			}
@@ -155,7 +159,11 @@ func newImportKratosCmd() *cobra.Command {
 			client := kratos.NewClient(adminURL)
 			target := kratos.New(client, schemaID)
 
-			report, err := target.Import(cmd.Context(), r, mapping.Mapping{}, connector.ImportOptions{})
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("importing users", countUsers(bar, in))
+			report, err := target.Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{})
+			bar.Done()
 			if err != nil {
 				return err
 			}

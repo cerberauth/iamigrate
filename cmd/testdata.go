@@ -79,7 +79,11 @@ func newTestdataGenerateCmd() *cobra.Command {
 			defer f.Close()
 
 			w := cmf.NewWriter(f)
-			manifest, err := fixture.New().Export(cmd.Context(), w, opts)
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("generating users", count)
+			manifest, err := fixture.New().Export(ctx, w, opts)
+			bar.Done()
 			if err != nil {
 				return err
 			}

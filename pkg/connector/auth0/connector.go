@@ -10,6 +10,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // Connector is the Auth0 TargetConnector.
@@ -86,6 +87,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 // blocked status.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	var report connector.DiffReport
+	bar := progress.FromContext(ctx)
 
 	for {
 		u, err := r.ReadUser()
@@ -95,6 +97,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 		if err != nil {
 			return report, err
 		}
+		bar.Add(1)
 		if len(u.Emails) == 0 {
 			continue
 		}

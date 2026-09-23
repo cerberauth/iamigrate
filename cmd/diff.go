@@ -39,7 +39,11 @@ func newDiffAuth0Cmd() *cobra.Command {
 			}
 			defer closeFn()
 
-			report, err := auth0.New(client).Verify(cmd.Context(), r)
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+			report, err := auth0.New(client).Verify(ctx, r)
+			bar.Done()
 			if err != nil {
 				return err
 			}
@@ -78,7 +82,11 @@ func newDiffKratosCmd() *cobra.Command {
 			defer closeFn()
 
 			client := kratos.NewClient(adminURL)
-			report, err := kratos.New(client, "").Verify(cmd.Context(), r)
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+			report, err := kratos.New(client, "").Verify(ctx, r)
+			bar.Done()
 			if err != nil {
 				return err
 			}

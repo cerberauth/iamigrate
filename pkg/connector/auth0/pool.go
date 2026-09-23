@@ -4,6 +4,8 @@ import (
 	"context"
 	"sync"
 	"time"
+
+	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
 // defaultConcurrency bounds how many organization/role/membership calls
@@ -58,6 +60,7 @@ func runPool(ctx context.Context, concurrency int, tasks []poolTask) []error {
 		concurrency = defaultConcurrency
 	}
 	rl := &rateLimiter{}
+	bar := progress.FromContext(ctx)
 	sem := make(chan struct{}, concurrency)
 	errs := make([]error, len(tasks))
 	var wg sync.WaitGroup
@@ -69,6 +72,7 @@ func runPool(ctx context.Context, concurrency int, tasks []poolTask) []error {
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer bar.Add(1)
 
 			if err := rl.wait(ctx); err != nil {
 				errs[i] = err
