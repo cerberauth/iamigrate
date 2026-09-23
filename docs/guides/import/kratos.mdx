@@ -52,13 +52,15 @@ Every identity is validated against an identity schema, and Kratos rejects any i
 | --- | --- |
 | `email` | The user's first CMF email |
 | `username` | The CMF `username`, only if set |
+| `phone` | The user's first CMF phone number, only if set |
 | Every key in `user_metadata` | Copied into `traits` as-is |
 
 So the schema you import into must:
 
-- **Have an `email` trait marked as a password identifier.** Otherwise users can't sign in with their email and password.
+- **Have an `email` trait marked as a password identifier.** Otherwise users can't sign in with their email and password. If your users sign in with a username or phone number instead, mark the `username` or `phone` trait as a password identifier, and don't require `email`.
 - **Accept every `user_metadata` key as a trait.** Either declare them, or set `"additionalProperties": true` on `traits`. Unknown traits are otherwise rejected.
-- **Not require traits iamigrate doesn't fill.** Names and phone numbers aren't written to traits (see [Profile](#profile)), so a schema that requires `name` rejects every user.
+- **Declare a `phone` trait if any user has a phone number.** Kratos checks a `"format": "tel"` trait with libphonenumber, so numbers must be valid E.164.
+- **Not require traits iamigrate doesn't fill.** Names aren't written to traits (see [Profile](#profile)), so a schema that requires `name` rejects every user.
 
 A minimal compatible schema:
 
@@ -174,11 +176,12 @@ To import users who have TOTP or recovery codes, remove those factors from the C
 | --- | --- |
 | First email | `traits.email`, plus a verified `verifiable_addresses` entry if the email is verified |
 | `username` | `traits.username` |
+| First phone number | `traits.phone`, plus a verified `verifiable_addresses` entry (`via: sms`) if the number is verified |
 | `user_metadata` | `metadata_public`, and also merged into `traits` |
 | `app_metadata` | `metadata_admin` |
 | `blocked: true` | `state: inactive` |
 
-These are **not** imported: `source_id` (Kratos assigns a new UUID), additional emails, phone numbers, and the `profile` fields (`given_name`, `family_name`, `name`, and so on). If you need names in Kratos, add them to `user_metadata` in your export, under the trait names your schema expects.
+These are **not** imported: `source_id` (Kratos assigns a new UUID), additional emails and phone numbers, and the `profile` fields (`given_name`, `family_name`, `name`, and so on). If you need names in Kratos, add them to `user_metadata` in your export, under the trait names your schema expects.
 
 ## 6. Run the import
 
@@ -238,7 +241,7 @@ iamigrate diff kratos --in ./fixtures/users.cmf.jsonl.gz
 missing in target: 0, attribute drift: 0
 ```
 
-This looks up every user by email and reports any that are missing, plus any mismatch between CMF `blocked` and Kratos' `inactive` state. Users in `failed` show up here as missing.
+This looks up every user by email, or by username or phone number for users without one, and reports any that are missing, plus any mismatch between CMF `blocked` and Kratos' `inactive` state. Users in `failed` show up here as missing.
 
 ### Prove that passwords work
 

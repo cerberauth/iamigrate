@@ -76,12 +76,55 @@ func ParseMFASpec(s string) (MFASpec, error) {
 	return MFASpec{Type: cmf.MFAType(typ), Rate: rate}, nil
 }
 
+// Identifier is a login identifier a fixture user can be given.
+type Identifier string
+
+const (
+	IdentifierEmail    Identifier = "email"
+	IdentifierUsername Identifier = "username"
+	IdentifierPhone    Identifier = "phone"
+)
+
+// IdentifierSpec is one parsed --identifier flag: the set of login
+// identifiers a user gets, e.g. "username" or "email+phone".
+type IdentifierSpec []Identifier
+
+// ParseIdentifierSpec parses "kind[+kind...]" into an IdentifierSpec.
+func ParseIdentifierSpec(s string) (IdentifierSpec, error) {
+	var spec IdentifierSpec
+	for _, kind := range strings.Split(s, "+") {
+		id := Identifier(kind)
+		switch id {
+		case IdentifierEmail, IdentifierUsername, IdentifierPhone:
+		default:
+			return nil, fmt.Errorf("fixture: --identifier %q has unknown kind %q (want email, username, or phone)", s, kind)
+		}
+		if spec.has(id) {
+			return nil, fmt.Errorf("fixture: --identifier %q repeats %q", s, kind)
+		}
+		spec = append(spec, id)
+	}
+	return spec, nil
+}
+
+func (s IdentifierSpec) has(id Identifier) bool {
+	for _, i := range s {
+		if i == id {
+			return true
+		}
+	}
+	return false
+}
+
 // ExportOptions configures the fixture generator.
 type ExportOptions struct {
 	connector.BaseExportOptions
-	Count         int
-	Hashes        []HashSpec
-	MFAs          []MFASpec
+	Count  int
+	Hashes []HashSpec
+	MFAs   []MFASpec
+	// Identifiers is distributed round-robin across users, like Hashes.
+	// Empty means every user gets an email only.
+	Identifiers   []IdentifierSpec
 	Locale        string
 	Seed          int64
 	AnswerKeyPath string // if set, answer-key.json is written here

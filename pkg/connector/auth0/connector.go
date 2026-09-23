@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -82,9 +83,10 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 	return report, nil
 }
 
-// Verify reconciles every CMF user against the live tenant via Auth0's
-// Get Users by Email endpoint, reporting anyone missing and any drift in
-// blocked status.
+// Verify reconciles every CMF user against the live tenant, looking each
+// one up by email via the Get Users by Email endpoint, else by username or
+// phone via user search, and reports anyone missing, any drift in blocked
+// status, and anyone with no identifier to look up.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	var report connector.DiffReport
 	bar := progress.FromContext(ctx)
@@ -98,7 +100,9 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
-		if len(u.Emails) == 0 {
+		path, identifier := lookupPath(u)
+		if path == "" {
+			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
 			continue
 		}
 
@@ -106,9 +110,8 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			UserID  string `json:"user_id"`
 			Blocked bool   `json:"blocked"`
 		}
-		path := "/users-by-email?email=" + url.QueryEscape(u.Emails[0].Value)
 		if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
-			return report, fmt.Errorf("auth0: looking up %s: %w", u.Emails[0].Value, err)
+			return report, fmt.Errorf("auth0: looking up %s: %w", identifier, err)
 		}
 
 		if len(found) == 0 {
@@ -122,4 +125,26 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 		}
 	}
 	return report, nil
+}
+
+// lookupPath returns the Management API path finding u in the tenant, and
+// the identifier it searches by: the email, else the username, else the
+// phone. It returns "" when u has none of them.
+func lookupPath(u cmf.User) (path, identifier string) {
+	switch {
+	case len(u.Emails) > 0:
+		return "/users-by-email?email=" + url.QueryEscape(u.Emails[0].Value), u.Emails[0].Value
+	case u.Username != "":
+		return searchPath("username", u.Username), u.Username
+	case len(u.Phones) > 0:
+		return searchPath("phone_number", u.Phones[0].Value), u.Phones[0].Value
+	}
+	return "", ""
+}
+
+// searchPath builds a Get Users search for an exact field match.
+func searchPath(field, value string) string {
+	quoted := `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value) + `"`
+	q := url.Values{"q": {field + ":" + quoted}, "search_engine": {"v3"}}
+	return "/users?" + q.Encode()
 }

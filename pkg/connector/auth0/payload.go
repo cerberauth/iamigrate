@@ -1,6 +1,8 @@
 package auth0
 
 import (
+	"errors"
+
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 )
@@ -13,6 +15,11 @@ type userFlags struct {
 	requiresRecoveryCodeRegen bool
 }
 
+// errEmailRequired rejects a user Auth0's bulk import can't take: its user
+// schema requires email, so a username- or phone-only user has no import
+// path and must be created another way.
+var errEmailRequired = errors.New("auth0: bulk import requires an email; user has only a username and/or phone")
+
 // buildImportUser translates one CMF user into an Auth0 bulk-import user
 // record. allowUpsert controls whether custom_password_hash (updatable) is
 // preferred over the simpler, write-once password_hash field.
@@ -21,12 +28,17 @@ func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, e
 	rec := map[string]any{
 		"user_id": u.SourceID,
 	}
-	if len(u.Emails) > 0 {
-		rec["email"] = u.Emails[0].Value
-		rec["email_verified"] = u.Emails[0].Verified
+	if len(u.Emails) == 0 {
+		return nil, flags, errEmailRequired
 	}
+	rec["email"] = u.Emails[0].Value
+	rec["email_verified"] = u.Emails[0].Verified
 	if u.Username != "" {
 		rec["username"] = u.Username
+	}
+	if len(u.Phones) > 0 {
+		rec["phone_number"] = u.Phones[0].Value
+		rec["phone_verified"] = u.Phones[0].Verified
 	}
 	if u.Profile.GivenName != "" {
 		rec["given_name"] = u.Profile.GivenName

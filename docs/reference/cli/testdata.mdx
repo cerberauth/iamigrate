@@ -7,7 +7,7 @@ Generates synthetic users directly in the Canonical Migration Format (CMF) — i
 
 For a detailed walkthrough of every hash algorithm, MFA factor type, and parameter, see [Generate test fixtures](../../../guides/generate-test-fixtures/).
 
-It also writes `answer-key.json`, pairing each generated user's `source_id` with the cleartext password (and TOTP secret, where enrolled) used to produce their record. This file is gitignored by default and is what lets the live integration test prove a translated hash actually verifies.
+It also writes `answer-key.json`, pairing each generated user's `source_id` with their login identifiers and the cleartext password (and TOTP secret, where enrolled) used to produce their record. This file is gitignored by default and is what lets the live integration test prove a translated hash actually verifies.
 
 ## Usage
 
@@ -29,6 +29,7 @@ iamigrate testdata generate \
 | `--count` | Number of synthetic users to generate (default `100`) |
 | `--hash` | Repeatable: `<algo>:<params>`, e.g. `bcrypt:cost=10`. Algorithms are distributed evenly across generated users. At least one is required. |
 | `--mfa` | Repeatable: `<type>:rate=<0-1>`, e.g. `totp:rate=0.3`. Multiple factors can co-occur on one user. |
+| `--identifier` | Repeatable: the login identifiers a user gets, `<kind>[+<kind>...]` with kind `email`, `username`, or `phone`, e.g. `username` or `email+phone`. Distributed round-robin across users, like `--hash`. Default `email`. |
 | `--locale` | Passed to the fake-data generator (default `en`) |
 | `--seed` | Seed for deterministic output (default `1`) |
 | `--out` | Output directory (default `./fixtures/`) |
@@ -40,4 +41,4 @@ iamigrate testdata generate \
 | --- | --- |
 | `users.cmf.jsonl.gz` | The generated CMF records |
 | `manifest.json` | Record counts, per-algorithm hash counts, non-portable MFA counts |
-| `answer-key.json` | Cleartext password + TOTP secret per `source_id` (gitignored) |
+| `answer-key.json` | Login identifiers, cleartext password, and TOTP secret per `source_id` (gitignored) |

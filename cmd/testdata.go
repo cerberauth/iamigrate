@@ -23,6 +23,7 @@ func newTestdataGenerateCmd() *cobra.Command {
 		count       int
 		hashSpecs   []string
 		mfaSpecs    []string
+		idSpecs     []string
 		locale      string
 		seed        int64
 		outDir      string
@@ -52,6 +53,14 @@ func newTestdataGenerateCmd() *cobra.Command {
 				}
 				mfas = append(mfas, spec)
 			}
+			var identifiers []fixture.IdentifierSpec
+			for _, s := range idSpecs {
+				spec, err := fixture.ParseIdentifierSpec(s)
+				if err != nil {
+					return err
+				}
+				identifiers = append(identifiers, spec)
+			}
 
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return err
@@ -66,6 +75,7 @@ func newTestdataGenerateCmd() *cobra.Command {
 				Count:         count,
 				Hashes:        hashes,
 				MFAs:          mfas,
+				Identifiers:   identifiers,
 				Locale:        locale,
 				Seed:          seed,
 				AnswerKeyPath: answerKeyPath,
@@ -109,6 +119,7 @@ func newTestdataGenerateCmd() *cobra.Command {
 	cmd.Flags().IntVar(&count, "count", 100, "number of synthetic users to generate")
 	cmd.Flags().StringArrayVar(&hashSpecs, "hash", nil, "repeatable: <algo>:<params>, e.g. bcrypt:cost=10")
 	cmd.Flags().StringArrayVar(&mfaSpecs, "mfa", nil, "repeatable: <type>:rate=<0-1>, e.g. totp:rate=0.3")
+	cmd.Flags().StringArrayVar(&idSpecs, "identifier", nil, "repeatable: login identifiers per user, <kind>[+<kind>...] with kind email|username|phone, e.g. username or email+phone; spread round-robin (default email)")
 	cmd.Flags().StringVar(&locale, "locale", "en", "locale passed to the fake-data generator")
 	cmd.Flags().Int64Var(&seed, "seed", 1, "seed for deterministic output")
 	cmd.Flags().StringVar(&outDir, "out", "./fixtures/", "output directory")

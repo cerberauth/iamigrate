@@ -111,3 +111,30 @@ func TestUserFromIdentityUnrecognizedHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, skipReason)
 }
+
+func TestBuildIdentityUsernameAndPhone(t *testing.T) {
+	u := cmf.User{
+		SourceID: "u1",
+		Username: "jane.doe",
+		Phones:   []cmf.Contact{{Value: "+12025550142", Verified: true, Primary: true}},
+	}
+	id, _, err := buildIdentity(u, "default")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"username": "jane.doe", "phone": "+12025550142"}, id.Traits)
+	require.Equal(t, []verifiableAddress{{Value: "+12025550142", Verified: true, Via: "sms"}}, id.VerifiableAddresses)
+}
+
+func TestUserFromIdentityPhone(t *testing.T) {
+	id := identity{
+		ID:     "id-1",
+		Traits: map[string]any{"phone": "+12025550142"},
+		VerifiableAddresses: []verifiableAddress{
+			{Value: "+12025550142", Verified: true, Via: "sms"},
+		},
+	}
+	u, skipReason, err := userFromIdentity(id, "kratos")
+	require.NoError(t, err)
+	require.Empty(t, skipReason)
+	require.Empty(t, u.Emails)
+	require.Equal(t, []cmf.Contact{{Value: "+12025550142", Verified: true, Primary: true}}, u.Phones)
+}

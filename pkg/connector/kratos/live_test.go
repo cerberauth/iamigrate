@@ -32,6 +32,22 @@ import (
 //	KRATOS_ADMIN_URL   e.g. http://127.0.0.1:4434
 //	KRATOS_PUBLIC_URL  e.g. http://127.0.0.1:4433
 func TestLiveKratosLogin(t *testing.T) {
+	runLiveKratosLogin(t, "default", nil)
+}
+
+// TestLiveKratosLoginByUsernameAndPhone is TestLiveKratosLogin for users
+// whose login identifier is a username, a phone, or all of email, username,
+// and phone, imported against the e2e "identifiers" schema. Each user must
+// log in with every identifier they have, and diff must find them all.
+func TestLiveKratosLoginByUsernameAndPhone(t *testing.T) {
+	runLiveKratosLogin(t, "identifiers", []fixture.IdentifierSpec{
+		{fixture.IdentifierUsername},
+		{fixture.IdentifierPhone},
+		{fixture.IdentifierEmail, fixture.IdentifierUsername, fixture.IdentifierPhone},
+	})
+}
+
+func runLiveKratosLogin(t *testing.T, schemaID string, identifiers []fixture.IdentifierSpec) {
 	adminURL := os.Getenv("KRATOS_ADMIN_URL")
 	publicURL := os.Getenv("KRATOS_PUBLIC_URL")
 	if adminURL == "" || publicURL == "" {
@@ -45,9 +61,10 @@ func TestLiveKratosLogin(t *testing.T) {
 	// generating cleartext-matching PHC strings the fixture generator
 	// doesn't produce for that algorithm).
 	opts := fixture.ExportOptions{
-		Count:  5,
-		Hashes: []fixture.HashSpec{{Algorithm: cmf.AlgBcrypt, Params: map[string]string{"cost": "8"}}},
-		Seed:   time.Now().UnixNano(),
+		Count:       6,
+		Hashes:      []fixture.HashSpec{{Algorithm: cmf.AlgBcrypt, Params: map[string]string{"cost": "8"}}},
+		Identifiers: identifiers,
+		Seed:        time.Now().UnixNano(),
 	}
 	answerKeyPath := t.TempDir() + "/answer-key.json"
 	opts.AnswerKeyPath = answerKeyPath
@@ -57,14 +74,15 @@ func TestLiveKratosLogin(t *testing.T) {
 	_, err := fixture.New().Export(ctx, w, opts)
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
+	users := buf.Bytes()
 
-	r, err := cmf.NewReader(&buf)
+	r, err := cmf.NewReader(bytes.NewReader(users))
 	require.NoError(t, err)
 	defer r.Close()
 
 	// 2. import kratos
 	client := kratos.NewClient(adminURL)
-	target := kratos.New(client, "default")
+	target := kratos.New(client, schemaID)
 	report, err := target.Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{})
 	require.NoError(t, err)
 	require.Empty(t, report.Failed, "import had failures: %+v", report.Failed)
@@ -74,15 +92,29 @@ func TestLiveKratosLogin(t *testing.T) {
 	var key fixture.AnswerKey
 	require.NoError(t, json.Unmarshal(answerKeyBytes, &key))
 
-	// 3. log in as every fixture user, proving the translated hash
-	// actually verifies against a real Kratos password check.
+	// 3. log in as every fixture user with each of their identifiers,
+	// proving the translated hash actually verifies against a real Kratos
+	// password check.
 	loginClient := &kratosLoginClient{publicURL: publicURL}
 	for _, entry := range key.Entries {
 		entry := entry
 		t.Run(entry.SourceID, func(t *testing.T) {
-			require.NoError(t, loginClient.login(ctx, entry.Email, entry.Password))
+			for _, identifier := range []string{entry.Email, entry.Username, entry.Phone} {
+				if identifier != "" {
+					require.NoError(t, loginClient.login(ctx, identifier, entry.Password))
+				}
+			}
 		})
 	}
+
+	// 4. diff finds every imported user by its identifier.
+	vr, err := cmf.NewReader(bytes.NewReader(users))
+	require.NoError(t, err)
+	defer vr.Close()
+	diff, err := target.Verify(ctx, vr)
+	require.NoError(t, err)
+	require.Empty(t, diff.MissingInTarget)
+	require.Empty(t, diff.NoIdentifier)
 }
 
 // kratosLoginClient drives Kratos' API-style (no-browser) self-service

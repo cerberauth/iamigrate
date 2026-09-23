@@ -161,3 +161,32 @@ func TestConnectorVerify(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"u2"}, report.MissingInTarget)
 }
+
+func TestConnectorVerifyFallsBackToUsernameAndPhone(t *testing.T) {
+	var lookups []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/admin/identities", func(w http.ResponseWriter, r *http.Request) {
+		identifier := r.URL.Query().Get("credentials_identifier")
+		lookups = append(lookups, identifier)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"id": identifier, "state": "active"}})
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	byUsername := bcryptUser("by-username")
+	byUsername.Emails = nil
+	byUsername.Username = "jane.doe"
+	byPhone := bcryptUser("by-phone")
+	byPhone.Emails = nil
+	byPhone.Phones = []cmf.Contact{{Value: "+12025550142"}}
+	none := bcryptUser("none")
+	none.Emails = nil
+
+	target := kratos.New(kratos.NewClient(server.URL), "default")
+	report, err := target.Verify(context.Background(), writeUsers(t, []cmf.User{byUsername, byPhone, none}))
+	require.NoError(t, err)
+	require.Equal(t, []string{"jane.doe", "+12025550142"}, lookups)
+	require.Empty(t, report.MissingInTarget)
+	require.Equal(t, []string{"none"}, report.NoIdentifier)
+}

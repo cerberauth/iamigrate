@@ -125,7 +125,7 @@ counts, and every warning.
   `json: unknown field "organization_id"`. Deployments keep tenancy in
   `metadata_admin`/`metadata_public` (exported as `app_metadata`/`user_metadata`)
   or in traits, so look there.
-- **Kratos export keeps only the `email` and `username` traits.** Names or
+- **Kratos export keeps only the `email`, `username`, and `phone` traits.** Names or
   anything else under `traits` is dropped, and `source_id` becomes the Kratos
   identity UUID. If membership data is keyed by something else, use email in
   the `user` column.

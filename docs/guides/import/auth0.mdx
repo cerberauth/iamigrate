@@ -206,7 +206,9 @@ A user whose hash is missing a required parameter isn't sent to Auth0. It is rep
 
 ### Profile
 
-`source_id` becomes the Auth0 `user_id`, and Auth0 adds the connection prefix (so `fx_ae0b6d305f0f4a20` becomes `auth0|fx_ae0b6d305f0f4a20`). The primary email and its verified flag, `username`, `given_name`, `family_name`, `name`, `nickname`, `picture`, `blocked`, `app_metadata`, and `user_metadata` are copied as-is.
+`source_id` becomes the Auth0 `user_id`, and Auth0 adds the connection prefix (so `fx_ae0b6d305f0f4a20` becomes `auth0|fx_ae0b6d305f0f4a20`). The primary email and its verified flag, `username`, the first phone number and its verified flag (as `phone_number` and `phone_verified`), `given_name`, `family_name`, `name`, `nickname`, `picture`, `blocked`, `app_metadata`, and `user_metadata` are copied as-is.
+
+Auth0's bulk import requires an email. A user whose only identifiers are a username or a phone number isn't sent to Auth0, and is reported under `failed` with `TRANSLATION_ERROR`.
 
 ## 6. Run the import
 
@@ -271,7 +273,7 @@ jq -r '.requires_reenrollment[]?' fixtures/import-report.json > reenroll.txt
 iamigrate diff auth0 --in ./fixtures/users.cmf.jsonl.gz
 ```
 
-This looks up every user by email and reports any that are missing from the tenant, plus any mismatch in `blocked` status.
+This looks up every user by email, or by username or phone number for users without one, and reports any that are missing from the tenant, plus any mismatch in `blocked` status. Users with none of the three are listed under `no identifier`.
 
 ### Prove that passwords and TOTP work
 

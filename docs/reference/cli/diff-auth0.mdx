@@ -3,7 +3,7 @@ title: diff auth0
 description: Reconcile a CMF file against a live Auth0 tenant.
 ---
 
-Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint) and reports anyone missing, plus any drift in `blocked` status.
+Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint), or, for users without an email, by username or phone number (via user search), and reports anyone missing, plus any drift in `blocked` status. Users with no email, username, or phone number can't be looked up and are listed as `no identifier`.
 
 ## Usage
 
