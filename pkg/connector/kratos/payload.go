@@ -55,11 +55,10 @@ type userFlags struct {
 	requiresRecoveryCodeRegen bool
 }
 
-// buildIdentity translates one CMF user into a Kratos Admin API identity
-// creation payload for schemaID.
-func buildIdentity(u cmf.User, schemaID string) (identity, userFlags, error) {
-	var flags userFlags
-
+// buildTraits maps a CMF user's identifiers and user_metadata onto the
+// Kratos traits object, shared by buildIdentity (Import) and ValidateUser
+// (an offline check against a --schema-file identity schema).
+func buildTraits(u cmf.User) map[string]any {
 	traits := map[string]any{}
 	if len(u.Emails) > 0 {
 		traits[traitEmail] = u.Emails[0].Value
@@ -73,6 +72,15 @@ func buildIdentity(u cmf.User, schemaID string) (identity, userFlags, error) {
 	for k, v := range u.UserMetadata {
 		traits[k] = v
 	}
+	return traits
+}
+
+// buildIdentity translates one CMF user into a Kratos Admin API identity
+// creation payload for schemaID.
+func buildIdentity(u cmf.User, schemaID string) (identity, userFlags, error) {
+	var flags userFlags
+
+	traits := buildTraits(u)
 
 	id := identity{
 		SchemaID:       schemaID,

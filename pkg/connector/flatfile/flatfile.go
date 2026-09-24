@@ -131,6 +131,10 @@ func (*Connector) Capabilities() connector.Capabilities {
 	}
 }
 
+// ValidateUser has no field rules of its own, since flatfile is a generic
+// sink with no provider-side restrictions; it always returns no problems.
+func (*Connector) ValidateUser(u cmf.User) []connector.Problem { return nil }
+
 // Import writes every CMF user from r out to the flat file this connector
 // was constructed with (see NewTarget), applying m's field mapping to
 // choose output column names for CSV.
