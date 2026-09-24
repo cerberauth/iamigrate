@@ -58,6 +58,11 @@ func (*Connector) Capabilities() connector.Capabilities {
 	}
 }
 
+// ValidateUser has no Keycloak-specific field rules yet, beyond the hash
+// algorithm/MFA type checks Capabilities already covers; it always
+// returns no problems.
+func (*Connector) ValidateUser(u cmf.User) []connector.Problem { return nil }
+
 // Export streams every user of a `kc.sh export` realm export into w as
 // CMF users. Service account users are skipped.
 func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.ExportOptions) (connector.Manifest, error) {

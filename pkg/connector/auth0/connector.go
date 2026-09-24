@@ -18,6 +18,10 @@ import (
 type Connector struct {
 	Client      *Client
 	Concurrency int // worker pool size for the orgs/roles/memberships phase
+	// ConnectionConfig optionally tightens ValidateUser's default
+	// username/identifier rules to a specific database connection's
+	// configuration; see LoadConnectionConfig and --connection-config.
+	ConnectionConfig *ConnectionConfig
 }
 
 // New returns an Auth0 target connector using client.

@@ -30,6 +30,10 @@ type Connector struct {
 	// SchemaID is the identity schema new identities are created against
 	// on Import, e.g. "default".
 	SchemaID string
+	// IdentitySchema optionally tightens ValidateUser's checks to a
+	// specific identity schema's required traits, formats, and
+	// identifier traits; see LoadIdentitySchema and --schema-file.
+	IdentitySchema *IdentitySchema
 }
 
 // New returns a Kratos connector using client, importing identities

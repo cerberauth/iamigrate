@@ -1,16 +1,22 @@
 ---
 title: validate
-description: Dry-run a CMF file against a target's Capabilities, no network calls.
+description: Dry-run a CMF file against a target's Capabilities and field rules, no network calls.
 ---
 
-Checks every user in a CMF file against the target's `Capabilities()` — which password algorithms and MFA types it accepts — before any API call is made. Catches an unsupported hash algorithm or a portable MFA type the target can't import (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported; for Keycloak: only `pbkdf2`/`argon2` password hashes and `totp` MFA are supported) early, rather than failing mid-import.
+Checks every user in a CMF file against the target before any API call is made:
+
+- the target's `Capabilities()` — which password algorithms and MFA types it accepts (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported; for Keycloak: only `pbkdf2`/`argon2` password hashes and `totp` MFA are supported)
+- the target's `ValidateUser()` field rules — for Auth0: a required email, username length/characters and `requires_username`, phone E.164 format, `user_id` and metadata size limits; for Kratos: traits checked against an identity schema (required fields, formats, `additionalProperties`) and every user having a value for a trait the schema marks as an identifier, when `--schema-file`/`--connection-config` is given
+- duplicate emails, usernames, or phones within the file, which break uniqueness in any target
+
+Each problem printed shows the user's `source_id`, the field, the rule that failed, and the offending value. Catching these early avoids failing mid-import, often inside an async Auth0 job.
 
 ## Usage
 
 ```sh
-iamigrate validate --in users.cmf.jsonl.gz --mapping mapping.yaml --target auth0
+iamigrate validate --in users.cmf.jsonl.gz --mapping mapping.yaml --target auth0 --connection-config connection.json
 # or
-iamigrate validate --in users.cmf.jsonl.gz --target kratos
+iamigrate validate --in users.cmf.jsonl.gz --target kratos --schema-file identity.schema.json
 # or
 iamigrate validate --in users.cmf.jsonl.gz --target keycloak
 ```
@@ -22,5 +28,9 @@ iamigrate validate --in users.cmf.jsonl.gz --target keycloak
 | `--in` | CMF `users.cmf.jsonl.gz` path (required) |
 | `--mapping` | `mapping.yaml` path (optional) |
 | `--target` | Target connector name: `auth0` \| `kratos` \| `keycloak` (required) |
+| `--schema-file` | Kratos identity schema JSON path, to check traits against (only with `--target kratos`) |
+| `--connection-config` | Auth0 connection JSON path (a `GET /connections/{id}` response, or just its `options` object), to tighten username/identifier rules (only with `--target auth0`) |
+
+Without `--schema-file`/`--connection-config`, Auth0's and Kratos' `ValidateUser` checks fall back to documented defaults (or, for Kratos, are skipped entirely since there's no schema to check traits against). `validate` makes no network calls either way.
 
 Exits non-zero and lists every problem found if validation fails.

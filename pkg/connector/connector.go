@@ -5,6 +5,7 @@ package connector
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
@@ -70,6 +71,23 @@ func (c Capabilities) SupportsMFAType(t cmf.MFAType) bool {
 	return false
 }
 
+// Problem is one field on one user that a target's offline validation
+// rules reject, per DESIGN.md's validate command: raised by ValidateUser
+// (per-target field rules such as username length or email format) as
+// well as by `validate`'s own capability and cross-user duplicate checks.
+type Problem struct {
+	SourceID string
+	Field    string
+	Rule     string
+	Value    string
+}
+
+// String renders p as the "source_id: field rule (value=...)" line
+// `validate` prints for each problem it finds.
+func (p Problem) String() string {
+	return fmt.Sprintf("%s: %s %s (value=%q)", p.SourceID, p.Field, p.Rule, p.Value)
+}
+
 // SkippedRecord notes a source record an exporter couldn't fully translate.
 type SkippedRecord struct {
 	SourceID string `json:"source_id"`
@@ -128,6 +146,16 @@ type SourceConnector interface {
 type TargetConnector interface {
 	Name() string
 	Capabilities() Capabilities
+	// ValidateUser applies the target's offline field rules to u (e.g.
+	// Auth0's username length/characters or Kratos' identity schema),
+	// beyond the hash algorithm/MFA type checks Capabilities already
+	// covers, per DESIGN.md's validate command. It makes no network
+	// calls, so any rule that needs live configuration (an Auth0
+	// connection's validation.username, a Kratos identity schema) only
+	// applies once the connector's been given that configuration
+	// out-of-band (see auth0.Connector.ConnectionConfig,
+	// kratos.Connector.IdentitySchema).
+	ValidateUser(u cmf.User) []Problem
 	Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts ImportOptions) (ImportReport, error)
 	Verify(ctx context.Context, r *cmf.Reader) (DiffReport, error)
 }
