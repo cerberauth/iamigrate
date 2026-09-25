@@ -15,6 +15,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/cerberauth/iamigrate/pkg/httpx"
 )
 
 // Client is a minimal Ory Kratos Admin API client.
@@ -28,7 +30,10 @@ type Client struct {
 func NewClient(baseURL string) *Client {
 	return &Client{
 		BaseURL: baseURL,
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
+		HTTP: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: httpx.NewTransport(nil, nil),
+		},
 	}
 }
 
