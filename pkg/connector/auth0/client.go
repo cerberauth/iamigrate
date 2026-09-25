@@ -7,6 +7,7 @@ package auth0
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/cerberauth/iamigrate/pkg/httpx"
 )
 
 // Client is a minimal Auth0 Management API client. It's hand-rolled rather
@@ -39,8 +42,22 @@ func NewClient(baseURL, token string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		Token:   token,
-		HTTP:    &http.Client{Timeout: 60 * time.Second},
+		HTTP: &http.Client{
+			Timeout:   60 * time.Second,
+			Transport: httpx.NewTransport(nil, map[string]string{"Auth0-Client": auth0ClientHeader()}),
+		},
 	}
+}
+
+// auth0ClientHeader builds the value of Auth0's Auth0-Client header, a
+// base64-encoded JSON object identifying the calling tool, so tenant logs
+// show iamigrate made the call.
+func auth0ClientHeader() string {
+	payload, _ := json.Marshal(struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}{Name: "iamigrate", Version: httpx.Version})
+	return base64.StdEncoding.EncodeToString(payload)
 }
 
 // NewClientCredentialsClient returns a Client that gets its Management API

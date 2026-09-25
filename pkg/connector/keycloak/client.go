@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cerberauth/iamigrate/pkg/httpx"
 )
 
 // tokenRefreshMargin is how long before expiry a cached access token is
@@ -43,7 +45,10 @@ func NewClient(baseURL, realm string, creds *Credentials) *Client {
 		BaseURL:     strings.TrimSuffix(baseURL, "/"),
 		Realm:       realm,
 		Credentials: creds,
-		HTTP:        &http.Client{Timeout: 30 * time.Second},
+		HTTP: &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: httpx.NewTransport(nil, nil),
+		},
 	}
 }
 
