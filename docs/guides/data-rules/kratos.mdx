@@ -1,0 +1,140 @@
+---
+title: Ory Kratos data rules
+description: The rules a user record must meet to be imported into Ory Kratos, with the length limits, regular expressions, and SQL to check your own user database, without iamigrate or Kratos.
+---
+
+import { Aside } from '@/components/docs';
+
+This page lists every rule a user must meet for Kratos to accept them, as iamigrate imports them: which fields are required, their minimum and maximum lengths, their format, and which must be unique. Each rule comes with a regular expression or a SQL condition, so you can check your current user database **before** you migrate, without iamigrate and without a Kratos instance.
+
+The rules were tested against Kratos v1.3.1 on PostgreSQL, with an identity schema like the one in [Check the identity schema](../../import/kratos/#check-the-identity-schema): an `email` trait with `"format": "email"`, a `username` trait, and a `phone` trait with `"format": "tel"`, all three marked as password identifiers.
+
+<Aside type="caution">
+  Most of Kratos' rules come from your identity schema. The email and phone formats only apply to traits declared with `"format": "email"` and `"format": "tel"`. A schema that requires a trait, or sets `minLength`, `maxLength`, or `pattern` on it, adds rules of its own. Check your schema before relying on this list.
+</Aside>
+
+## Field rules
+
+Every field iamigrate writes to a Kratos identity. Lengths count characters, not bytes, except for the request size.
+
+| Kratos field | Comes from | Required | Length | Format | Unique |
+| --- | --- | --- | --- | --- | --- |
+| `traits.email` | The first email | At least one of email, username, or phone number. Your schema may require a specific one. | At most 254, at most 64 before the `@`, at most 63 per domain label | ``^[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`` | Yes, across all three identifiers, ignoring case |
+| `traits.username` | The username | Same as email | 1–255 | Any characters, with no leading or trailing whitespace | Same as email |
+| `traits.phone` | The first phone number | Same as email | 3–16: `+`, then up to 15 digits | E.164: `^\+[1-9][0-9]{1,14}$`, and a number that exists in its country's numbering plan | Same as email |
+| Other traits | Each `user_metadata` key | No | Counted in the request size | Any key except `email`, `username`, and `phone` | No |
+| `metadata_public` | `user_metadata` | No | Counted in the request size | | No |
+| `metadata_admin` | `app_metadata` | No | Counted in the request size | | No |
+| `hashed_password` | The password hash | No | | bcrypt: `^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`<br />argon2id: `^\$argon2id\$v=19\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$` | No |
+| Whole identity | | | The request creating it must be at most 5 MiB (5,242,880 bytes). `user_metadata` counts twice, since it's sent as traits and as `metadata_public`. | | |
+
+What happens when a rule is broken:
+
+- **Email, phone number, username length, request size:** Kratos rejects the identity, and iamigrate reports the user as `REQUEST_ERROR`. A username over 255 characters, or made only of whitespace, makes Kratos fail with a `500` error. `validate` reports those usernames, with or without `--schema-file`.
+- **Duplicates:** Kratos rejects the second identity with `409 Conflict`. Kratos stores identifiers trimmed and lowercased, so `" Bob "`, `"bob"`, and `"BOB"` are the same identifier, and so is an email used as another user's username.
+- **A `user_metadata` key named `email`, `username`, or `phone`** silently replaces the user's real email, username, or phone number, because iamigrate copies `user_metadata` into the traits after the identifiers.
+- **Password hash:** iamigrate only translates bcrypt and argon2id hashes, so a user with any other hash fails with `TRANSLATION_ERROR`. To import them anyway, drop the hash, or mark it non-portable, and have them reset their password.
+- **MFA:** Kratos v1.3.1 rejects imported TOTP secrets and recovery codes. Drop them and have the user enroll again.
+
+A few more things to know:
+
+- **Phone numbers:** Kratos accepts `+33 6 12 34 56 78` and `+1-202-555-0143`, but stores them as written, so the same number written two ways becomes two identifiers, and two users can end up with one number. Store numbers in E.164. Kratos also rejects numbers outside their country's numbering plan, which no regular expression can check: `+10005550100` matches the expression, but no US area code starts with `0`. To check this before migrating, run your numbers through a [libphonenumber](https://github.com/google/libphonenumber) port in your language of choice.
+- **Password hashes:** Kratos itself also verifies PBKDF2, scrypt, Firebase scrypt, MD5, salted SHA, SSHA, crypt(3), and HMAC hashes (see [Ory's import guide](https://www.ory.com/docs/kratos/manage-identities/import-user-accounts-identities)). Only iamigrate's translation is limited to bcrypt and argon2id.
+- **The email regular expression is stricter than Kratos:** it rejects addresses with no dot in the domain (`a@b`), and addresses with non-ASCII characters or quotes before the `@`. Kratos accepts all three, but they're rare enough that you'll want to look at them anyway.
+- **Trait keys** have no restrictions: dots, `$`, spaces, and even an empty key are accepted.
+
+## Check your database with SQL
+
+The queries below are written for PostgreSQL, against a `users` table with these columns. Replace the table and column names with yours, and remove the conditions for columns you don't have.
+
+| Column | Content |
+| --- | --- |
+| `id` | The user's ID in your system |
+| `email`, `username`, `phone` | The user's login identifiers. Use `NULL` or `''` when the user doesn't have one. |
+| `password_hash` | The password hash, in PHC format |
+| `user_metadata`, `app_metadata` | Data you'll import as metadata, as `jsonb` |
+
+### Find users that break a rule
+
+```sql
+select id, problems from (
+  select id, concat_ws('; ',
+    case when coalesce(email, '') = '' and coalesce(username, '') = '' and coalesce(phone, '') = ''
+         then 'no email, username, or phone to sign in with' end,
+    case when email !~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+         then 'email: invalid format' end,
+    case when char_length(email) > 254 or char_length(split_part(email, '@', 1)) > 64
+         then 'email: over 254 characters, or over 64 before the @' end,
+    case when username ~ '^\s+$'
+         then 'username: only whitespace' end,
+    case when username ~ '\S' and username ~ '^\s|\s$'
+         then 'username: leading or trailing whitespace' end,
+    case when char_length(username) > 255
+         then 'username: over 255 characters' end,
+    case when phone !~ '^\+[1-9][0-9]{1,14}$'
+         then 'phone: not E.164' end,
+    case when password_hash !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$'
+          and password_hash !~ '^\$argon2id\$v=19\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+\$[A-Za-z0-9+/]+$'
+         then 'password_hash: not bcrypt or argon2id, user must reset their password' end,
+    case when user_metadata ?| array['email', 'username', 'phone']
+         then 'user_metadata: key would overwrite the email, username, or phone trait' end,
+    case when 2 * octet_length(coalesce(user_metadata::text, '')) + octet_length(coalesce(app_metadata::text, '')) > 5000000
+         then 'metadata: identity too large for Kratos'' 5 MiB request limit' end
+  ) as problems
+  from users
+) checked
+where problems <> ''
+order by id;
+```
+
+The size check leaves about 240 KB for the identifiers and the password hash, and measures metadata as PostgreSQL prints it, which is slightly larger than what iamigrate sends.
+
+It returns one row per user that breaks at least one rule, with every rule they break:
+
+```
+ id  |                                problems
+-----+-------------------------------------------------------------------------
+ h1  | password_hash: not bcrypt or argon2id, user must reset their password
+ p2  | phone: not E.164
+ ws2 | username: leading or trailing whitespace
+```
+
+### Find duplicates
+
+This lists every identifier used by more than one user, whichever field it's in. Usernames are trimmed, and phone numbers are compared without spaces, dashes, or parentheses, so it also finds one value written two ways:
+
+```sql
+with identifiers as (
+  select id, lower(email) as identifier from users where email <> ''
+  union
+  select id, lower(regexp_replace(username, '^\s+|\s+$', '', 'g')) from users where username ~ '\S'
+  union
+  select id, regexp_replace(phone, '[^0-9+]', '', 'g') from users where phone <> ''
+)
+select identifier, array_agg(id order by id) as users
+  from identifiers
+ group by identifier
+having count(distinct id) > 1
+ order by identifier;
+```
+
+```
+      identifier      |  users
+----------------------+----------
+ +33612345670         | {d1,d2}
+ jane.doe@example.com | {d3,ok1}
+```
+
+Here `d1` has the number `+33612345670` and `d2` has `+33 6 12 34 56 70`, and `d3`'s username is `ok1`'s email. Kratos would reject the second user of each pair with `409 Conflict`.
+
+## Other databases
+
+These variants haven't been tested.
+
+- **MySQL 8:** Replace `x ~ 'pattern'` with `regexp_like(x, 'pattern', 'c')`, and `x !~ 'pattern'` with `not regexp_like(x, 'pattern', 'c')`. The `'c'` flag makes the match case-sensitive, which the rules need, since MySQL's default collations ignore case. Double every backslash in the patterns (`\$` becomes `\\$`). Replace `split_part(email, '@', 1)` with `substring_index(email, '@', 1)`, `user_metadata ?| array[...]` with `json_contains_path(user_metadata, 'one', '$.email', '$.username', '$.phone')`, `regexp_replace(x, p, r, 'g')` with `regexp_replace(x, p, r)`, and `array_agg(id order by id)` with `group_concat(id order by id)`.
+- **SQL Server** has no regular expressions before SQL Server 2025. Export the columns and check them with a script.
+
+## See also
+
+- [Import users into Ory Kratos](../../import/kratos/)
+- [`validate` reference](../../../reference/cli/validate/)

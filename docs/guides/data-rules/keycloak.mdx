@@ -1,0 +1,154 @@
+---
+title: Keycloak data rules
+description: The rules a user record must meet to be imported into Keycloak, with the length limits, regular expressions, and SQL to check your own user database, without iamigrate or Keycloak.
+---
+
+import { Aside } from '@/components/docs';
+
+This page lists every rule a user must meet for Keycloak to accept them, as iamigrate imports them: which fields are required, their minimum and maximum lengths, their format, and which must be unique. Each rule comes with a regular expression or a SQL condition, so you can check your current user database **before** you migrate, without iamigrate and without a Keycloak instance.
+
+The rules were tested against Keycloak 26 with a new realm's default settings: the default user profile, unmanaged attributes enabled, email login allowed, and duplicate emails not allowed.
+
+<Aside type="caution">
+  The user profile can be changed per realm. If your realm sets other `length` limits, or removes the `username-prohibited-characters` or `person-name-prohibited-characters` validators, adjust the rules below to match. Check them in **Realm settings → User profile**, or with `GET /admin/realms/{realm}/users/profile`.
+</Aside>
+
+## Field rules
+
+Every field iamigrate writes to a Keycloak user. Lengths count characters, not bytes.
+
+| Keycloak field | Comes from | Required | Length | Format | Unique |
+| --- | --- | --- | --- | --- | --- |
+| `username` | The username, else the first email, else the first phone number | Yes | 3–255 | Latin letters (accents allowed), digits, and `+` `-` `.` `_` `@`: `^[A-Za-z0-9À-ÖØ-öø-ɏ+._@-]+$` | Yes, ignoring case, and also against other users' emails |
+| `email` | The first email | No | At most 255, at most 64 before the `@`, at most 63 per domain label | ``^[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`` | Yes, ignoring case, and also against other users' usernames |
+| `firstName` | `given_name` | No | 0–255 | No forbidden character: `[]<>&"$%!#?§;*~/\\\|^=[{}()[:cntrl:]]` must not match | No |
+| `lastName` | `family_name` | No | 0–255 | Same as `firstName` | No |
+| `phoneNumber` attribute | The first phone number | No | At most 2,048 | Not checked by Keycloak | No |
+| `locale` attribute | `profile.locale` | No | At most 2,048 | Not checked by Keycloak | No |
+| `picture` attribute | `profile.picture` | No | At most 2,048 | Not checked by Keycloak | No |
+| Other attributes | Each `user_metadata` and `app_metadata` key | No | Name: at most 255. Each value: at most 2,048. | Any name except `username`, `email`, `firstName`, and `lastName` | No |
+| Password credential | The password hash | No | | PBKDF2: `^\$pbkdf2-(sha1\|sha256\|sha512)\$i=[0-9]+\$[A-Za-z0-9+/.]+=*\$[A-Za-z0-9+/.]+=*$`<br />Argon2: `^\$argon2(id\|i)\$v=(19\|16)\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+=*\$[A-Za-z0-9+/]+=*$` | No |
+| OTP credential | The TOTP secret | No | | Base32, ignoring case and spaces: `^[A-Z2-7]+=*$` after uppercasing and removing spaces | No |
+
+What happens when a rule is broken:
+
+- **Username, email, names, attribute values:** Keycloak rejects the user, and iamigrate reports them as `REQUEST_ERROR` or `USER_EXISTS`. An attribute name over 255 characters makes Keycloak fail with a `500` error. `validate` reports those names.
+- **A metadata key named `username` or `email`** is silently dropped. A key named `firstName` or `lastName` replaces the user's name if they have none, and is dropped otherwise. `validate` reports all four names, and import still sends them, so rename them in your export.
+- **Password hash:** a hash in any other format fails the user with `TRANSLATION_ERROR`. To import them anyway, drop the hash, or mark it non-portable, and have them reset their password.
+- **TOTP secret:** iamigrate rejects a secret that isn't base32 with `TRANSLATION_ERROR`. Keycloak itself would accept it, but the user could never sign in with it.
+
+A few more things to know:
+
+- **Users with no username** get their email as their username, so their email must also meet the username rules. An email such as `o'neil@example.com` is valid, but breaks the username rules because of the apostrophe. Phone-only users get their phone number as their username: `+33612345678` works, `+33 6 12 34 56 78` doesn't.
+- **Metadata values:** a string becomes one attribute value, a list of strings becomes one value per element, and anything else (numbers, booleans, objects, mixed lists) becomes a single JSON-encoded value. The 2,048 limit applies to each of those values.
+- **Names** can be empty, and can contain letters of any script, digits, spaces, and `'` `-` `.` `,` `:` `@` `_` `` ` `` `+`.
+- **The email regular expression is stricter than Keycloak** in two ways: it rejects addresses with no dot in the domain (`a@b`), and addresses with non-ASCII characters before the `@`. Keycloak accepts both, but they're rare enough that you'll want to look at them anyway. The username expression also rejects a few symbols Keycloak accepts, such as `×` and `÷`.
+
+## Check your database with SQL
+
+The queries below are written for PostgreSQL, against a `users` table with these columns. Replace the table and column names with yours, and remove the conditions for columns you don't have.
+
+| Column | Content |
+| --- | --- |
+| `id` | The user's ID in your system |
+| `email`, `username`, `phone` | The user's login identifiers. Use `NULL` or `''` when the user doesn't have one. |
+| `given_name`, `family_name` | First and last name |
+| `picture` | Profile picture URL |
+| `password_hash` | The password hash, in PHC format |
+| `totp_secret` | The TOTP secret, if the user has enrolled one |
+| `user_metadata`, `app_metadata` | Data you'll import as metadata, as `jsonb` |
+
+### Find users that break a rule
+
+```sql
+select id, problems from (
+  select id, concat_ws('; ',
+    case when coalesce(nullif(username, ''), nullif(email, ''), nullif(phone, '')) is null
+         then 'username: no username, email, or phone' end,
+    case when char_length(coalesce(nullif(username, ''), nullif(email, ''), nullif(phone, ''))) not between 3 and 255
+         then 'username: must be 3-255 characters' end,
+    case when coalesce(nullif(username, ''), nullif(email, ''), nullif(phone, '')) !~ '^[A-Za-z0-9À-ÖØ-öø-ɏ+._@-]+$'
+         then 'username: only Latin letters, digits, and + - . _ @' end,
+    case when email !~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+         then 'email: invalid format' end,
+    case when char_length(email) > 255 or char_length(split_part(email, '@', 1)) > 64
+         then 'email: over 255 characters, or over 64 before the @' end,
+    case when char_length(given_name) > 255 or given_name ~ '[]<>&"$%!#?§;*~/\\|^=[{}()[:cntrl:]]'
+         then 'given_name: over 255 characters, or a forbidden character' end,
+    case when char_length(family_name) > 255 or family_name ~ '[]<>&"$%!#?§;*~/\\|^=[{}()[:cntrl:]]'
+         then 'family_name: over 255 characters, or a forbidden character' end,
+    case when char_length(phone) > 2048 or char_length(picture) > 2048
+         then 'phone or picture: over 2048 characters' end,
+    case when exists (
+           select 1 from jsonb_each(coalesce(user_metadata, '{}') || coalesce(app_metadata, '{}')) m
+            where char_length(m.key) > 255
+               or m.key in ('username', 'email', 'firstName', 'lastName')
+               or (jsonb_typeof(m.value) = 'string' and char_length(m.value #>> '{}') > 2048)
+               or (jsonb_typeof(m.value) = 'array'
+                   and exists (select 1 from jsonb_array_elements(m.value) e where jsonb_typeof(e) <> 'string')
+                   and char_length(m.value::text) > 2048)
+               or (jsonb_typeof(m.value) = 'array'
+                   and exists (select 1 from jsonb_array_elements_text(m.value) e where char_length(e) > 2048))
+               or (jsonb_typeof(m.value) not in ('string', 'array') and char_length(m.value::text) > 2048))
+         then 'metadata: key over 255 characters, reserved key, or value over 2048 characters' end,
+    case when password_hash !~ '^\$pbkdf2-(sha1|sha256|sha512)\$i=[0-9]+\$[A-Za-z0-9+/.]+=*\$[A-Za-z0-9+/.]+=*$'
+          and password_hash !~ '^\$argon2(id|i)\$v=(19|16)\$m=[0-9]+,t=[0-9]+,p=[0-9]+\$[A-Za-z0-9+/]+=*\$[A-Za-z0-9+/]+=*$'
+         then 'password_hash: not pbkdf2 or argon2, user must reset their password' end,
+    case when upper(replace(totp_secret, ' ', '')) !~ '^[A-Z2-7]+=*$'
+         then 'totp_secret: not base32' end
+  ) as problems
+  from users
+) checked
+where problems <> ''
+order by id;
+```
+
+It returns one row per user that breaks at least one rule, with every rule they break:
+
+```
+ id  |                                       problems
+-----+-------------------------------------------------------------------------------------
+ kv1 | metadata: key over 255 characters, reserved key, or value over 2048 characters
+ ok2 | username: only Latin letters, digits, and + - . _ @
+ u1  | username: must be 3-255 characters
+```
+
+Here `kv1` has a 2,049-character metadata value, and `ok2` has no username, so their email `o'brien@example.com` becomes their username.
+
+### Find duplicates
+
+Keycloak treats usernames and emails as one set of login names, ignoring case. This lists every login name used by more than one user:
+
+```sql
+with logins as (
+  select id, lower(coalesce(nullif(username, ''), nullif(email, ''), nullif(phone, ''))) as login from users
+  union
+  select id, lower(email) from users where email <> ''
+)
+select login, array_agg(id order by id) as users
+  from logins
+ group by login
+having count(distinct id) > 1
+ order by login;
+```
+
+```
+        login         |  users
+----------------------+----------
+ dup@example.com      | {d1,d2}
+ jane.doe@example.com | {d3,ok1}
+```
+
+Here `d1` and `d2` have the same email in different cases, and `d3`'s username is `ok1`'s email. Keycloak would reject the second user of each pair.
+
+## Other databases
+
+These variants haven't been tested.
+
+- **MySQL 8:** Replace `x ~ 'pattern'` with `regexp_like(x, 'pattern', 'c')`, and `x !~ 'pattern'` with `not regexp_like(x, 'pattern', 'c')`. The `'c'` flag makes the match case-sensitive, which the rules need, since MySQL's default collations ignore case. Double every backslash in the patterns (`\$` becomes `\\$`). Replace `split_part(email, '@', 1)` with `substring_index(email, '@', 1)`, and `array_agg(id order by id)` with `group_concat(id order by id)`. The metadata check has no simple MySQL equivalent: check metadata with a script.
+- **SQL Server** has no regular expressions before SQL Server 2025. Export the columns and check them with a script.
+
+## See also
+
+- [Import users into Keycloak](../../import/keycloak/)
+- [`validate` reference](../../../reference/cli/validate/)
