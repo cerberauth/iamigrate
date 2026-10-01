@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
+	"sort"
+	"unicode/utf8"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -58,10 +61,48 @@ func (*Connector) Capabilities() connector.Capabilities {
 	}
 }
 
-// ValidateUser has no Keycloak-specific field rules yet, beyond the hash
-// algorithm/MFA type checks Capabilities already covers; it always
-// returns no problems.
-func (*Connector) ValidateUser(u cmf.User) []connector.Problem { return nil }
+// maxAttributeNameLen is the longest user attribute name Keycloak
+// accepts; a longer one makes it fail the request with an HTTP 500.
+const maxAttributeNameLen = 255
+
+// profileAttributes are the user fields Keycloak keeps in its own
+// columns: an attribute with one of these names is dropped silently
+// instead of being stored.
+var profileAttributes = []string{"username", "email", "firstName", "lastName"}
+
+// ValidateUser applies Keycloak's user attribute rules to u, offline,
+// beyond the hash algorithm/MFA type checks Capabilities already covers:
+// every user_metadata and app_metadata key becomes an attribute, so its
+// name must fit maxAttributeNameLen and mustn't shadow a profile field.
+func (*Connector) ValidateUser(u cmf.User) []connector.Problem {
+	var problems []connector.Problem
+	for _, md := range []struct {
+		field string
+		m     map[string]any
+	}{{"user_metadata", u.UserMetadata}, {"app_metadata", u.AppMetadata}} {
+		keys := make([]string, 0, len(md.m))
+		for k := range md.m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if utf8.RuneCountInString(k) > maxAttributeNameLen {
+				problems = append(problems, connector.Problem{
+					SourceID: u.SourceID, Field: md.field,
+					Rule:  fmt.Sprintf("attribute name must be at most %d characters", maxAttributeNameLen),
+					Value: fmt.Sprintf("%d characters", utf8.RuneCountInString(k)),
+				})
+			}
+			if slices.Contains(profileAttributes, k) {
+				problems = append(problems, connector.Problem{
+					SourceID: u.SourceID, Field: md.field,
+					Rule: "attribute name is reserved by Keycloak and would be dropped silently", Value: k,
+				})
+			}
+		}
+	}
+	return problems
+}
 
 // Export streams every user of a `kc.sh export` realm export into w as
 // CMF users. Service account users are skipped.

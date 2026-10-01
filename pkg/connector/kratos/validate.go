@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -19,6 +20,10 @@ const identitySchemaURL = "iamigrate://kratos-identity-schema"
 
 // fieldTraits is the Problem.Field value for trait-related rules.
 const fieldTraits = "traits"
+
+// maxUsernameLen is the longest username Kratos accepts; a longer one
+// makes it fail the request with an HTTP 500.
+const maxUsernameLen = 255
 
 // IdentitySchema wraps a compiled Kratos identity schema (--schema-file)
 // plus the trait names it marks as a credentials identifier, so
@@ -108,18 +113,19 @@ func digMap(m map[string]any, keys ...string) (map[string]any, bool) {
 	return cur, true
 }
 
-// ValidateUser checks u's traits against c.IdentitySchema (--schema-file),
-// offline: required fields, formats, and additionalProperties come from
-// the schema itself; ValidateUser also flags a user with no value set for
-// any trait the schema marks as a credentials identifier, since Kratos
-// can't create a usable identity without one. Without a --schema-file,
-// ValidateUser has nothing to check and returns no problems.
+// ValidateUser checks u offline. The username rules apply on their own;
+// the rest checks u's traits against c.IdentitySchema (--schema-file):
+// required fields, formats, and additionalProperties come from the schema
+// itself, and ValidateUser also flags a user with no value set for any
+// trait the schema marks as a credentials identifier, since Kratos can't
+// create a usable identity without one. Without a --schema-file, only the
+// username rules are checked.
 func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
+	problems := usernameProblems(u)
 	if c.IdentitySchema == nil {
-		return nil
+		return problems
 	}
 
-	var problems []connector.Problem
 	traits := buildTraits(u)
 
 	doc := map[string]any{fieldTraits: traits}
@@ -143,6 +149,29 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		})
 	}
 
+	return problems
+}
+
+// usernameProblems reports a username Kratos fails on with an HTTP 500
+// instead of a validation error: one over maxUsernameLen characters, or
+// made only of whitespace.
+func usernameProblems(u cmf.User) []connector.Problem {
+	if u.Username == "" {
+		return nil
+	}
+	var problems []connector.Problem
+	if n := utf8.RuneCountInString(u.Username); n > maxUsernameLen {
+		problems = append(problems, connector.Problem{
+			SourceID: u.SourceID, Field: "username",
+			Rule: fmt.Sprintf("must be at most %d characters", maxUsernameLen), Value: fmt.Sprintf("%d characters", n),
+		})
+	}
+	if strings.TrimSpace(u.Username) == "" {
+		problems = append(problems, connector.Problem{
+			SourceID: u.SourceID, Field: "username",
+			Rule: "must not be only whitespace", Value: u.Username,
+		})
+	}
 	return problems
 }
 
