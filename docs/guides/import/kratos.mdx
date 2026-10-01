@@ -145,6 +145,10 @@ With the fixture above, expect problems for the `sms` and `email` users. They're
   `validate` currently lets `totp` and `recovery_codes` through, but Kratos v1.3.1 rejects them at import. Treat any user with those factors as a failure until you've tested them against your Kratos version.
 </Aside>
 
+### Check your source database
+
+To find users that break Ory Kratos' rules before you export them, without iamigrate, see [Ory Kratos data rules](../../data-rules/kratos/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
+
 ## 5. Understand how hashes and factors are translated
 
 You don't configure anything in this step. It explains what ends up in Kratos, which helps when you read the import report.
@@ -300,5 +304,6 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 - [Export users from Ory Kratos](../../export/kratos/)
 - [`import kratos` reference](../../../reference/cli/import-kratos/)
 - [`validate` reference](../../../reference/cli/validate/)
+- [Ory Kratos data rules](../../data-rules/kratos/)
 - [`diff kratos` reference](../../../reference/cli/diff-kratos/)
 - [Generate test fixtures](../../generate-test-fixtures/)

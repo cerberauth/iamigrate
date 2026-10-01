@@ -1,0 +1,232 @@
+---
+title: Auth0 data rules
+description: The rules user, organization, and role records must meet to be imported into Auth0, with the length limits, regular expressions, and SQL to check your own user database, without iamigrate or Auth0.
+---
+
+import { Aside } from '@/components/docs';
+
+This page lists every rule a user, organization, or role must meet for Auth0 to accept it, as iamigrate imports it: which fields are required, their minimum and maximum lengths, their format, and which must be unique. Each rule comes with a regular expression or a SQL condition, so you can check your current user database **before** you migrate, without iamigrate and without an Auth0 tenant.
+
+The rules come from Auth0's documentation: the [bulk import schema](https://auth0.com/docs/manage-users/user-migration/bulk-user-import-schema), the [user profile structure](https://auth0.com/docs/manage-users/user-accounts/user-profiles/user-profile-structure), the [username](https://auth0.com/docs/authenticate/database-connections/require-username) and [metadata](https://auth0.com/docs/manage-users/user-accounts/metadata/metadata-fields-data) pages, and the Management API reference for [users](https://auth0.com/docs/api/management/v2/users/post-users), [organizations](https://auth0.com/docs/api/management/v2/organizations/post-organizations), and [roles](https://auth0.com/docs/api/management/v2/roles/post-roles). Where two of them disagree, this page uses the stricter limit.
+
+<Aside type="caution">
+  The username length can be changed per database connection, up to 128 characters. If your connection allows other lengths, change `{1,15}` in the username rule to your connection's limits, found under `options.validation.username` in `GET /api/v2/connections/{id}`.
+</Aside>
+
+## User rules
+
+Every field iamigrate sends for a user. Lengths count characters, not bytes.
+
+| Auth0 field | Comes from | Required | Length | Format | Unique |
+| --- | --- | --- | --- | --- | --- |
+| `user_id` | Your user ID (the CMF `source_id`). Auth0 adds the `auth0\|` prefix. | Yes | 1–128 | No whitespace: `^\S+$` | Yes |
+| `email` | The first email | Yes | At most 254, at most 64 before the `@`, at most 63 per domain label | ``^[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`` | Yes, ignoring case |
+| `username` | The username | Only if the connection requires usernames | 1–15 by default, configurable up to 128 | ``^[A-Za-z0-9_+.!#$'^`~@-]{1,15}$``, and not an email address: `^[^@]+@[^@]+\.[^@]+$` must not match | Yes, ignoring case |
+| `phone_number` | The first phone number | No | 2–16: `+`, then 1 to 15 digits | `^\+[0-9]{1,15}$` | Yes |
+| `given_name` | `profile.given_name` | No | 1–150 | Any UTF-8 | No |
+| `family_name` | `profile.family_name` | No | 1–150 | Any UTF-8 | No |
+| `name` | `profile.name` | No | 1–150 | Any UTF-8 | No |
+| `nickname` | `profile.nickname` | No | 1–300 | Any UTF-8 | No |
+| `picture` | `profile.picture` | No | | A URL: `^https?://\S+$` | No |
+| `user_metadata` | `user_metadata` | No | With `app_metadata`, the whole profile should stay under 10 KB | No key, at any depth, containing `.` or `$` | No |
+| `app_metadata` | `app_metadata` | No | Same as `user_metadata` | Same as `user_metadata`, and none of the reserved keys listed below | No |
+| `password_hash` or `custom_password_hash` | The password hash | No | | bcrypt: `^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$`. Not LDAP `{CRYPT}`: `^\{CRYPT\}` must not match. | No |
+| `mfa_factors` | MFA factors | No | At most 10 factors | TOTP secret: `^[A-Z2-7]+$` (uppercase, unpadded base32)<br />SMS phone number: `^\+[0-9]{1,15}$`<br />Email: same as `email` | No |
+
+The reserved `app_metadata` keys are `__tenant`, `_id`, `blocked`, `clientID`, `created_at`, `email_verified`, `email`, `globalClientID`, `global_client_id`, `identities`, `lastIP`, `lastLogin`, `loginsCount`, `metadata`, `multifactor_last_modified`, `multifactor`, `updated_at`, and `user_id`.
+
+A few things to know:
+
+- **Minimum lengths:** iamigrate leaves out empty names, nickname, picture, and username, so an empty value never breaks a minimum length. A value made only of spaces does count as a value.
+- **Disagreeing limits:** the Management API allows `name` up to 300 characters, but the user profile page says 150. It allows `nickname` up to 300, but the profile page says 350. It allows `user_id` up to 255, but iamigrate's `validate` stops at 128. This page uses the stricter limit in each case.
+- **Upper and lower case:** Auth0 stores emails and usernames lowercased, so `Jane@example.com` and `jane@example.com` are the same email.
+- **Existing users:** without `--upsert`, Auth0 also rejects a user whose email, user ID, username, or phone number matches a user already in the connection.
+- **The 10 KB profile limit is soft:** Auth0 accepts larger profiles for now, but warns that writes to them may start to fail.
+- **The email regular expression is stricter than Auth0's email check:** it rejects addresses with no dot in the domain (`a@b`), and addresses with non-ASCII characters before the `@`. They're rare enough that you'll want to look at them anyway.
+- **Only the first email and phone number are sent.** Additional ones are dropped, so they don't need to meet these rules.
+
+## Organization rules
+
+These apply if you import `organizations.cmf.jsonl`.
+
+| Auth0 field | Required | Length | Format | Unique |
+| --- | --- | --- | --- | --- |
+| `name` | Yes | 1–50 | Lowercase letters, digits, `_`, and `-`: `^[a-z0-9_-]{1,50}$` | Yes |
+| `display_name` | No. iamigrate leaves it out when it's empty, since Auth0 rejects an empty one. | 1–255 | Any | No |
+| `metadata` | No | At most 25 keys. Keys and values: at most 255 each. | Values must be strings | No |
+
+An organization that breaks a rule stops the organizations phase at that organization: iamigrate doesn't create any organization after it, or any membership or role assignment.
+
+## Role rules
+
+These apply if you import `roles.cmf.jsonl`.
+
+| Auth0 field | Required | Length | Format | Unique |
+| --- | --- | --- | --- | --- |
+| `name` | Yes | No documented limit | Any | Yes. iamigrate reuses an existing role with the same name. |
+| `description` | No | No documented limit | Any | No |
+
+## Check your database with SQL
+
+The queries below are written for PostgreSQL, against `users`, `organizations`, and `roles` tables with these columns. Replace the table and column names with yours, and remove the conditions for columns you don't have.
+
+| Column | Content |
+| --- | --- |
+| `users.id` | The user's ID in your system, which becomes the Auth0 `user_id` |
+| `users.email`, `users.username`, `users.phone` | The user's login identifiers. Use `NULL` or `''` when the user doesn't have one. |
+| `users.given_name`, `users.family_name`, `users.name`, `users.nickname`, `users.picture` | Profile fields |
+| `users.password_hash` | The password hash |
+| `users.totp_secret` | The TOTP secret, if the user has enrolled one |
+| `users.user_metadata`, `users.app_metadata` | Data you'll import as metadata, as `jsonb` |
+| `organizations.id`, `organizations.name`, `organizations.display_name` | The organization's ID, name, and display name |
+| `organizations.metadata` | The organization's metadata, as `jsonb` |
+| `roles.id`, `roles.name` | The role's ID and name |
+
+### Find users that break a rule
+
+```sql
+select id, problems from (
+  select id, concat_ws('; ',
+    case when coalesce(email, '') = ''
+         then 'email: missing, bulk import requires one' end,
+    case when email !~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+         then 'email: invalid format' end,
+    case when char_length(email) > 254 or char_length(split_part(email, '@', 1)) > 64
+         then 'email: over 254 characters, or over 64 before the @' end,
+    case when username !~ '^[A-Za-z0-9_+.!#$''^`~@-]{1,15}$'
+         then 'username: 1-15 characters from A-Z a-z 0-9 _ + - . ! # $ '' ^ ` ~ @' end,
+    case when username ~ '^[^@]+@[^@]+\.[^@]+$'
+         then 'username: email addresses are not allowed' end,
+    case when phone !~ '^\+[0-9]{1,15}$'
+         then 'phone: must be + and 1-15 digits' end,
+    case when char_length(id) > 128 or id ~ '\s'
+         then 'id: over 128 characters, or contains whitespace' end,
+    case when char_length(given_name) > 150
+         then 'given_name: over 150 characters' end,
+    case when char_length(family_name) > 150
+         then 'family_name: over 150 characters' end,
+    case when char_length(name) > 150
+         then 'name: over 150 characters' end,
+    case when char_length(nickname) > 300
+         then 'nickname: over 300 characters' end,
+    case when picture !~ '^https?://\S+$'
+         then 'picture: not an http or https URL' end,
+    case when password_hash ~ '^\$2' and password_hash !~ '^\$2[aby]\$[0-9]{2}\$[./A-Za-z0-9]{53}$'
+         then 'password_hash: malformed bcrypt hash' end,
+    case when password_hash ~ '^\{CRYPT\}'
+         then 'password_hash: LDAP {CRYPT} is not supported' end,
+    case when totp_secret !~ '^[A-Z2-7]+$'
+         then 'totp_secret: not uppercase, unpadded base32' end,
+    case when jsonb_path_exists(user_metadata, 'strict $.** ? (@.type() == "object").keyvalue() ? (@.key like_regex "[.$]")')
+           or jsonb_path_exists(app_metadata, 'strict $.** ? (@.type() == "object").keyvalue() ? (@.key like_regex "[.$]")')
+         then 'metadata: a key contains . or $' end,
+    case when app_metadata ?| array['__tenant', '_id', 'blocked', 'clientID', 'created_at', 'email_verified',
+                                    'email', 'globalClientID', 'global_client_id', 'identities', 'lastIP',
+                                    'lastLogin', 'loginsCount', 'metadata', 'multifactor_last_modified',
+                                    'multifactor', 'updated_at', 'user_id']
+         then 'app_metadata: reserved key' end,
+    case when octet_length(coalesce(user_metadata::text, '')) + octet_length(coalesce(app_metadata::text, '')) > 10240
+         then 'metadata: over 10 KB, Auth0''s user profile limit' end
+  ) as problems
+  from users
+) checked
+where problems <> ''
+order by id;
+```
+
+It returns one row per user that breaks at least one rule, with every rule they break:
+
+```
+ id  |                                            problems
+-----+-------------------------------------------------------------------------------------------------
+ nm1 | given_name: over 150 characters; family_name: over 150 characters; name: over 150 characters; ...
+ t1  | totp_secret: not uppercase, unpadded base32
+ u5  | username: email addresses are not allowed
+```
+
+### Find duplicate users
+
+```sql
+select 'email' as field, lower(email) as value, array_agg(id order by id) as users
+  from users where email <> '' group by 2 having count(*) > 1
+union all
+select 'username', lower(username), array_agg(id order by id)
+  from users where username <> '' group by 2 having count(*) > 1
+union all
+select 'phone', phone, array_agg(id order by id)
+  from users where phone <> '' group by 2 having count(*) > 1
+order by 1, 2;
+```
+
+```
+  field   |      value      |  users
+----------+-----------------+----------
+ email    | dup@example.com | {d1,d2}
+ username | dupuser         | {d1,d2}
+```
+
+### Find organizations that break a rule
+
+```sql
+select id, name, problems from (
+  select id, name, concat_ws('; ',
+    case when name !~ '^[a-z0-9_-]{1,50}$'
+         then 'name: 1-50 characters from a-z 0-9 _ -' end,
+    case when count(*) over (partition by name) > 1
+         then 'name: used by another organization' end,
+    case when coalesce(display_name, '') = '' or char_length(display_name) > 255
+         then 'display_name: must be 1-255 characters' end,
+    case when (select count(*) from jsonb_object_keys(metadata)) > 25
+         then 'metadata: over 25 keys' end,
+    case when exists (select 1 from jsonb_each(metadata) m
+                       where jsonb_typeof(m.value) not in ('string', 'null')
+                          or char_length(m.key) > 255 or char_length(m.value #>> '{}') > 255)
+         then 'metadata: values must be strings, keys and values at most 255 characters' end
+  ) as problems
+  from organizations
+) checked
+where problems <> ''
+order by id;
+```
+
+```
+ id |    name     |                 problems
+----+-------------+-------------------------------------------
+ o2 | Globex Corp | name: 1-50 characters from a-z 0-9 _ -
+ o7 | no-display  | display_name: must be 1-255 characters
+```
+
+### Find roles that break a rule
+
+```sql
+select id, name, problems from (
+  select id, name, concat_ws('; ',
+    case when coalesce(name, '') = ''
+         then 'name: missing' end,
+    case when count(*) over (partition by name) > 1
+         then 'name: used by another role' end
+  ) as problems
+  from roles
+) checked
+where problems <> ''
+order by id;
+```
+
+```
+ id | name  |          problems
+----+-------+----------------------------
+ r1 | admin | name: used by another role
+ r2 |       | name: missing
+```
+
+## Other databases
+
+These variants haven't been tested.
+
+- **MySQL 8:** Replace `x ~ 'pattern'` with `regexp_like(x, 'pattern', 'c')`, and `x !~ 'pattern'` with `not regexp_like(x, 'pattern', 'c')`. The `'c'` flag makes the match case-sensitive, which the rules need, since MySQL's default collations ignore case. Double every backslash in the patterns (`\$` becomes `\\$`). Replace `split_part(email, '@', 1)` with `substring_index(email, '@', 1)`, `app_metadata ?| array[...]` with `json_contains_path(app_metadata, 'one', '$.email', ...)`, and `array_agg(id order by id)` with `group_concat(id order by id)`. The metadata key checks have no simple MySQL equivalent: check metadata with a script.
+- **SQL Server** has no regular expressions before SQL Server 2025. Export the columns and check them with a script.
+
+## See also
+
+- [Import users into Auth0](../../import/auth0/)
+- [`validate` reference](../../../reference/cli/validate/)

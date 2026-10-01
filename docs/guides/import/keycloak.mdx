@@ -113,6 +113,10 @@ iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target keycloak
 
 With the fixture above, expect problems for the `sms` and `webauthn` users. They're expected here, since you'll handle those users in Step 7.
 
+### Check your source database
+
+To find users that break Keycloak's rules before you export them, without iamigrate, see [Keycloak data rules](../../data-rules/keycloak/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
+
 ## 5. Understand how hashes and factors are translated
 
 You don't configure anything in this step. It explains what ends up in Keycloak, which helps when you read the import report.
@@ -272,5 +276,6 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 - [Export users from Keycloak](../../export/keycloak/)
 - [`import keycloak` reference](../../../reference/cli/import-keycloak/)
 - [`validate` reference](../../../reference/cli/validate/)
+- [Keycloak data rules](../../data-rules/keycloak/)
 - [`diff keycloak` reference](../../../reference/cli/diff-keycloak/)
 - [Generate test fixtures](../../generate-test-fixtures/)
