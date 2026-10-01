@@ -171,14 +171,23 @@ func createOrg(ctx context.Context, client *Client, org cmf.Organization) (strin
 	var out struct {
 		ID string `json:"id"`
 	}
-	body := map[string]any{"name": org.Name, "display_name": org.DisplayName}
-	if len(org.Metadata) > 0 {
-		body["metadata"] = org.Metadata
-	}
-	if _, err := client.doJSON(ctx, http.MethodPost, "/organizations", body, &out); err != nil {
+	if _, err := client.doJSON(ctx, http.MethodPost, "/organizations", orgBody(org), &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
+}
+
+// orgBody builds the organization creation payload. Auth0 requires a
+// display_name to have at least 1 character, so it's left out when empty.
+func orgBody(org cmf.Organization) map[string]any {
+	body := map[string]any{"name": org.Name}
+	if org.DisplayName != "" {
+		body["display_name"] = org.DisplayName
+	}
+	if len(org.Metadata) > 0 {
+		body["metadata"] = org.Metadata
+	}
+	return body
 }
 
 func addOrgMember(ctx context.Context, client *Client, orgID, userID string) (RateLimit, error) {

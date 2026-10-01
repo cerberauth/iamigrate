@@ -132,3 +132,33 @@ func TestIdentifierTraits(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(testIdentitySchema), &schema))
 	require.Equal(t, []string{"email"}, identifierTraits(schema))
 }
+
+func TestValidateUserUsernameRulesWithoutSchema(t *testing.T) {
+	c := &Connector{}
+	tests := []struct {
+		name     string
+		username string
+		wantRule string
+	}{
+		{"empty username is not checked", "", ""},
+		{"regular username", "alice", ""},
+		{"255 multibyte characters", strings.Repeat("é", 255), ""},
+		{"over 255 characters", strings.Repeat("a", 256), "must be at most 255 characters"},
+		{"only spaces", "   ", "must not be only whitespace"},
+		{"only tabs and newlines", "\t\n", "must not be only whitespace"},
+		{"spaces around a value", " alice ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			problems := c.ValidateUser(cmf.User{SourceID: "u1", Username: tt.username})
+			if tt.wantRule == "" {
+				require.Empty(t, problems)
+				return
+			}
+			require.Len(t, problems, 1)
+			require.Equal(t, "u1", problems[0].SourceID)
+			require.Equal(t, "username", problems[0].Field)
+			require.Equal(t, tt.wantRule, problems[0].Rule)
+		})
+	}
+}
