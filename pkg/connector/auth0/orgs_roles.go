@@ -13,7 +13,7 @@ import (
 // RunOrgsRolesPhase implements DESIGN.md's post-import organizations/
 // roles/memberships steps 1-5. It assumes every source_id in roleInfos
 // that also appears in userIDs was successfully imported and that
-// userIDs[source_id] is that user's Auth0 user_id.
+// userIDs[source_id] is that user's Auth0 user_id, prefix included.
 //
 // Auth0 has no bulk endpoint for any of this, so each step is its own
 // Management API call, run through a bounded, rate-limit-aware worker

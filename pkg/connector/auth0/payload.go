@@ -2,6 +2,7 @@ package auth0
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
@@ -20,13 +21,31 @@ type userFlags struct {
 // path and must be created another way.
 var errEmailRequired = errors.New("auth0: bulk import requires an email; user has only a username and/or phone")
 
+// userIDPrefix is what Auth0 puts in front of the user_id of every user
+// imported into a database connection.
+const userIDPrefix = "auth0|"
+
+// importUserID is the user_id sent in the bulk import payload for a source
+// ID. Auth0 adds userIDPrefix itself, so a source ID that already carries it
+// (an Auth0 export's) has it stripped, or the user would end up as
+// auth0|auth0|<id>.
+func importUserID(sourceID string) string {
+	return strings.TrimPrefix(sourceID, userIDPrefix)
+}
+
+// targetUserID is the user_id Auth0 gives a user imported from sourceID,
+// which the orgs/roles phase needs to address them.
+func targetUserID(sourceID string) string {
+	return userIDPrefix + importUserID(sourceID)
+}
+
 // buildImportUser translates one CMF user into an Auth0 bulk-import user
 // record. allowUpsert controls whether custom_password_hash (updatable) is
 // preferred over the simpler, write-once password_hash field.
 func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, error) {
 	var flags userFlags
 	rec := map[string]any{
-		"user_id": u.SourceID,
+		"user_id": importUserID(u.SourceID),
 	}
 	if len(u.Emails) == 0 {
 		return nil, flags, errEmailRequired

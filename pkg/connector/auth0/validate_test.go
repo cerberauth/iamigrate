@@ -83,6 +83,20 @@ func TestConnectorValidateUser(t *testing.T) {
 			wantRule: "exceeds 16384 bytes",
 		},
 		{
+			name: "auth0| prefix doesn't count toward the user_id limit",
+			user: cmf.User{SourceID: "auth0|" + strings.Repeat("a", maxUserIDLen), Emails: []cmf.Contact{{Value: "a@example.com"}}},
+		},
+		{
+			name:     "user_id over the limit without its auth0| prefix",
+			user:     cmf.User{SourceID: "auth0|" + strings.Repeat("a", maxUserIDLen+1), Emails: []cmf.Contact{{Value: "a@example.com"}}},
+			wantRule: "user_id must be 1-128 characters",
+		},
+		{
+			name:     "source_id that is only the auth0| prefix",
+			user:     cmf.User{SourceID: "auth0|", Emails: []cmf.Contact{{Value: "a@example.com"}}},
+			wantRule: "user_id must be 1-128 characters",
+		},
+		{
 			name:     "empty source_id",
 			user:     cmf.User{Emails: []cmf.Contact{{Value: "a@example.com"}}},
 			wantRule: "user_id must be 1-128 characters",

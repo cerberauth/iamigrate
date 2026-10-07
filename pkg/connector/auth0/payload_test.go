@@ -91,3 +91,18 @@ func TestBuildImportUserWithoutEmailIsRejected(t *testing.T) {
 		})
 	}
 }
+
+func TestImportUserIDStripsAuth0Prefix(t *testing.T) {
+	require.Equal(t, "abc123", importUserID("auth0|abc123"))
+	require.Equal(t, "abc123", importUserID("abc123"))
+	require.Equal(t, "google-oauth2|1", importUserID("google-oauth2|1"))
+	require.Equal(t, "auth0|abc123", targetUserID("auth0|abc123"))
+	require.Equal(t, "auth0|abc123", targetUserID("abc123"))
+
+	rec, _, err := buildImportUser(cmf.User{
+		SourceID: "auth0|abc123",
+		Emails:   []cmf.Contact{{Value: "a@example.com"}},
+	}, false)
+	require.NoError(t, err)
+	require.Equal(t, "abc123", rec["user_id"])
+}

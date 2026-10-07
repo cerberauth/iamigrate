@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -41,35 +44,56 @@ type userRoleInfo struct {
 	Memberships []cmf.Membership
 }
 
+// maxConcurrentJobs is how many bulk import jobs iamigrate runs at once.
+// Auth0 allows two per tenant, and a third submission is rejected with a
+// 429, so this takes the whole allowance: don't run another import job
+// against the same tenant meanwhile.
+const maxConcurrentJobs = 2
+
 // RunBulkImport streams users from r, chunks them to Auth0's 500KB job
-// limit, submits and polls each chunk, and merges the per-user results
-// into one ImportReport. allowUpsert controls whether Import intends to
+// limit, submits and polls the chunks (up to maxConcurrentJobs jobs at a
+// time), and merges the per-user results into one ImportReport, in chunk
+// order. allowUpsert controls whether Import intends to
 // call this again later for the same users (opts.Upsert); when true, the
 // hash translator always prefers custom_password_hash so a future run can
 // correct a bad translation (see DESIGN.md, "Idempotent re-runs").
 //
 // It also returns per-user global_roles/memberships for every user with
 // either set, for the caller to feed into the organizations/roles phase.
+//
+// If a job can't be run to completion, no further chunk is submitted, jobs
+// already running are waited for, and the report covers every chunk that
+// finished.
 func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectionID string, allowUpsert bool) (connector.ImportReport, []userRoleInfo, error) {
 	var report connector.ImportReport
+	runner := newJobRunner(ctx, client, connectionID, allowUpsert)
+	roleInfos, readErr := streamChunks(ctx, r, allowUpsert, &report, runner.submit)
+	jobsReport, jobErr := runner.wait()
+	mergeReport(&report, jobsReport)
+	progress.FromContext(ctx).Status("")
+	if jobErr != nil {
+		return report, roleInfos, jobErr
+	}
+	return report, roleInfos, readErr
+}
+
+// streamChunks translates the users from r into import records and hands
+// each full chunk, with the source ID of every record, to submit. Users that
+// can't be translated, and the follow-ups they need, go straight into report.
+func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *connector.ImportReport, submit func(chunk []map[string]any, sourceIDs []string) error) ([]userRoleInfo, error) {
 	var roleInfos []userRoleInfo
 	var chunk []map[string]any
-	chunkBytes := 2 // "[]"
-	chunkNum := 0
-	bar := progress.FromContext(ctx)
+	var chunkSources []string // source ID of each chunk record
+	chunkBytes := 2           // "[]"
 
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		chunkNum++
-		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk, chunkNum)
-		if err != nil {
+		if err := submit(chunk, chunkSources); err != nil {
 			return err
 		}
-		mergeReport(&report, partial)
-		bar.Add(len(chunk))
-		chunk = nil
+		chunk, chunkSources = nil, nil
 		chunkBytes = 2
 		return nil
 	}
@@ -77,7 +101,7 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	for {
 		select {
 		case <-ctx.Done():
-			return report, roleInfos, ctx.Err()
+			return roleInfos, ctx.Err()
 		default:
 		}
 
@@ -86,7 +110,7 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 			break
 		}
 		if err != nil {
-			return report, roleInfos, err
+			return roleInfos, err
 		}
 
 		if len(u.GlobalRoles) > 0 || len(u.Memberships) > 0 {
@@ -116,23 +140,114 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 
 		b, err := json.Marshal(rec)
 		if err != nil {
-			return report, roleInfos, fmt.Errorf("auth0: encoding user %s: %w", u.SourceID, err)
+			return roleInfos, fmt.Errorf("auth0: encoding user %s: %w", u.SourceID, err)
 		}
 		recBytes := len(b) + 1 // trailing comma/bracket
 
 		if len(chunk) > 0 && (chunkBytes+recBytes > chunkMaxBytes || len(chunk) >= chunkMaxUsers) {
 			if err := flush(); err != nil {
-				return report, roleInfos, err
+				return roleInfos, err
 			}
 		}
 		chunk = append(chunk, rec)
+		chunkSources = append(chunkSources, u.SourceID)
 		chunkBytes += recBytes
 	}
 
 	if err := flush(); err != nil {
-		return report, roleInfos, err
+		return roleInfos, err
 	}
-	return report, roleInfos, nil
+	return roleInfos, nil
+}
+
+// chunkResult is what one import job produced. Each is written by the one
+// goroutine running its job, and read only after jobRunner.wait.
+type chunkResult struct {
+	report connector.ImportReport
+	err    error
+}
+
+// jobRunner runs chunks as Auth0 import jobs, at most maxConcurrentJobs at
+// once.
+type jobRunner struct {
+	ctx          context.Context
+	client       *Client
+	connectionID string
+	upsert       bool
+
+	slots   chan struct{}
+	wg      sync.WaitGroup
+	results []*chunkResult // in chunk order; only appended to by submit
+
+	failOnce sync.Once
+	failed   chan struct{} // closed when a job fails
+	err      error         // the first job error, set before failed is closed
+}
+
+func newJobRunner(ctx context.Context, client *Client, connectionID string, upsert bool) *jobRunner {
+	return &jobRunner{
+		ctx: ctx, client: client, connectionID: connectionID, upsert: upsert,
+		slots:  make(chan struct{}, maxConcurrentJobs),
+		failed: make(chan struct{}),
+	}
+}
+
+// submit starts a job for chunk, first waiting for a free slot. It returns
+// an error instead once a job has failed or ctx is done, so the caller stops
+// reading input. It must not be called concurrently with itself or wait.
+func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
+	select {
+	case j.slots <- struct{}{}:
+	case <-j.failed:
+		return j.err
+	case <-j.ctx.Done():
+		return j.ctx.Err()
+	}
+	// A slot and a failure can both be ready, and select picks at random.
+	select {
+	case <-j.failed:
+		<-j.slots
+		return j.err
+	default:
+	}
+
+	res := &chunkResult{}
+	j.results = append(j.results, res)
+	chunkNum := len(j.results)
+
+	j.wg.Add(1)
+	go func() {
+		defer j.wg.Done()
+		defer func() { <-j.slots }()
+		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, chunk, sourceIDs, chunkNum)
+		if res.err != nil {
+			j.failOnce.Do(func() {
+				j.err = res.err
+				close(j.failed)
+			})
+			return
+		}
+		progress.FromContext(j.ctx).Add(len(chunk))
+	}()
+	return nil
+}
+
+// wait blocks until every submitted job is done, then returns the merged
+// report of those that finished and the first error of those that didn't.
+func (j *jobRunner) wait() (connector.ImportReport, error) {
+	j.wg.Wait()
+	var report connector.ImportReport
+	for _, res := range j.results {
+		if res.err == nil {
+			mergeReport(&report, res.report)
+		}
+	}
+	select {
+	case <-j.failed:
+		return report, j.err
+	default:
+		return report, nil
+	}
 }
 
 // DuplicatedUserCode is the job error code Auth0 reports for a user that
@@ -151,21 +266,38 @@ func duplicatedUserMessage(upsert bool) string {
 		"delete via the Connection Users endpoint and re-import (see DESIGN.md)"
 }
 
+// JobFailedCode is the code iamigrate reports for a user whose bulk import
+// job ended as failed on Auth0's side without a per-user error.
+const JobFailedCode = "JOB_FAILED"
+
+// jobFailedMessage explains a JOB_FAILED user. The job may have imported
+// some users before it failed, so re-running without upsert reports those
+// as DUPLICATED_USER.
+func jobFailedMessage(jobID string, upsert bool) string {
+	msg := fmt.Sprintf("Auth0 import job %s failed before this user was confirmed imported: re-run the import", jobID)
+	if !upsert {
+		msg += " (with --upsert if the job may have imported it)"
+	}
+	return msg
+}
+
 func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Succeeded = append(dst.Succeeded, src.Succeeded...)
 	dst.Failed = append(dst.Failed, src.Failed...)
 }
 
-func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, chunkNum int) (connector.ImportReport, error) {
+// submitAndPoll imports one chunk and reports on it by source ID.
+// sourceIDs[i] is the source ID of chunk[i], whose user_id in the payload
+// is importUserID(sourceIDs[i]).
+func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, sourceIDs []string, chunkNum int) (connector.ImportReport, error) {
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
-	defer bar.Status("")
 
-	sourceIDs := make(map[string]bool, len(chunk))
-	for _, rec := range chunk {
-		if id, ok := rec["user_id"].(string); ok {
-			sourceIDs[id] = true
-		}
+	// Job errors name a user by its payload user_id, which has lost any
+	// auth0| prefix the source ID carried.
+	bySourceID := make(map[string]string, len(sourceIDs))
+	for _, id := range sourceIDs {
+		bySourceID[importUserID(id)] = id
 	}
 
 	body, err := json.Marshal(chunk)
@@ -193,20 +325,32 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 
 	failedIDs := map[string]bool{}
 	for _, je := range jobErrors {
+		// Auth0 may echo the user_id with or without its prefix.
+		if id, ok := bySourceID[importUserID(je.SourceID)]; ok {
+			je.SourceID = id
+		}
 		failedIDs[je.SourceID] = true
 		if je.Code == DuplicatedUserCode {
 			je.Message = duplicatedUserMessage(upsert)
 		}
 		report.Failed = append(report.Failed, je)
 	}
-	for id := range sourceIDs {
-		if !failedIDs[id] {
-			report.Succeeded = append(report.Succeeded, id)
+	for _, id := range sourceIDs {
+		if failedIDs[id] {
+			continue
 		}
-	}
-
-	if status == "failed" {
-		return report, fmt.Errorf("auth0: import job %s failed", jobID)
+		if status == "failed" {
+			// A failed job (for example a timeout) says nothing about
+			// users it had no per-user error for, so they can't be
+			// counted as imported. Report them instead of aborting, so
+			// the remaining chunks still run and the report lists
+			// everything to re-run.
+			report.Failed = append(report.Failed, connector.ImportError{
+				SourceID: id, Code: JobFailedCode, Message: jobFailedMessage(jobID, upsert),
+			})
+			continue
+		}
+		report.Succeeded = append(report.Succeeded, id)
 	}
 	return report, nil
 }
@@ -228,18 +372,38 @@ func submitImportJob(ctx context.Context, client *Client, connectionID string, u
 	if err := mw.WriteField("upsert", boolStr(upsert)); err != nil {
 		return "", err
 	}
+	// One chunk is one job: without this, Auth0 emails every tenant
+	// administrator once per chunk.
+	if err := mw.WriteField("send_completion_email", "false"); err != nil {
+		return "", err
+	}
 	if err := mw.Close(); err != nil {
 		return "", err
 	}
+	payload := buf.Bytes()
+	contentType := mw.FormDataContentType()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+"/jobs/users-imports", &buf)
+	// Only a 429 is retried: the job was definitely not created. After a
+	// 5xx or a dropped connection it may have been, and resubmitting would
+	// report every user as DUPLICATED_USER.
+	var jobID string
+	err = retryTransient(ctx, isRateLimited, func() error {
+		var err error
+		jobID, err = postImportJob(ctx, client, contentType, payload)
+		return err
+	})
+	return jobID, err
+}
+
+func postImportJob(ctx context.Context, client *Client, contentType string, payload []byte) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+"/jobs/users-imports", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
 	if err := client.authorize(req); err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := client.HTTP.Do(req)
 	if err != nil {
@@ -264,13 +428,55 @@ func submitImportJob(ctx context.Context, client *Client, connectionID string, u
 	return out.ID, nil
 }
 
+// maxTransientRetries bounds retryTransient, so a job's status or errors
+// are given up on after about a minute of failures rather than forever.
+const maxTransientRetries = 5
+
+// retryTransient runs fn, retrying with the poll backoff while retryable
+// reports its error as temporary, so one dropped connection or rate-limit
+// response doesn't abandon an import job that is still running on Auth0.
+func retryTransient(ctx context.Context, retryable func(error) bool, fn func() error) error {
+	delay := pollInterval
+	for attempt := 0; ; attempt++ {
+		err := fn()
+		if err == nil || attempt >= maxTransientRetries || ctx.Err() != nil || !retryable(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, pollMaxInterval)
+	}
+}
+
+func isRateLimited(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+// isTransient reports whether err is worth retrying on an idempotent
+// request: a 429, a 5xx, or a network failure.
+func isTransient(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func pollJob(ctx context.Context, client *Client, jobID string) (string, error) {
 	interval := pollInterval
 	for {
 		var out struct {
 			Status string `json:"status"`
 		}
-		_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID, nil, &out)
+		err := retryTransient(ctx, isTransient, func() error {
+			_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID, nil, &out)
+			return err
+		})
 		if err != nil {
 			return "", fmt.Errorf("auth0: polling job %s: %w", jobID, err)
 		}
@@ -300,7 +506,10 @@ func fetchJobErrors(ctx context.Context, client *Client, jobID string) ([]connec
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID+"/errors", nil, &raw)
+	err := retryTransient(ctx, isTransient, func() error {
+		_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID+"/errors", nil, &raw)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("auth0: fetching job errors for %s: %w", jobID, err)
 	}

@@ -57,11 +57,9 @@ func (*Connector) Capabilities() connector.Capabilities {
 // call, per the CLI reference's note that `import auth0` sequences both
 // phases automatically.
 //
-// The orgs/roles phase resolves each user's Auth0 user_id from
-// report.Succeeded, assuming Auth0 preserved the source_id passed as
-// user_id in the bulk import payload (true for custom database
-// connections; the gated live-tenant test in DESIGN.md's testing
-// strategy is what actually proves this for a given tenant).
+// The orgs/roles phase addresses each user in report.Succeeded by the
+// user_id Auth0 gave them: the source_id, without any auth0| prefix it
+// carried, behind the auth0| prefix Auth0 adds (see targetUserID).
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
 	report, roleInfos, err := RunBulkImport(ctx, c.Client, r, opts.ConnectionID, opts.Upsert)
 	if err != nil {
@@ -74,7 +72,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 
 	userIDs := make(map[string]string, len(report.Succeeded))
 	for _, id := range report.Succeeded {
-		userIDs[id] = id
+		userIDs[id] = targetUserID(id)
 	}
 
 	phaseReport, err := RunOrgsRolesPhase(ctx, c.Client, opts.Roles, opts.Organizations, roleInfos, userIDs, c.Concurrency)

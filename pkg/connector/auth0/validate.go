@@ -29,7 +29,8 @@ var usernameCharPattern = regexp.MustCompile("^[a-zA-Z0-9_+\\-.!#$'^`~@]+$")
 var phonePattern = regexp.MustCompile(`^\+[1-9]\d{1,14}$`)
 
 // maxUserIDLen is Auth0's limit on the user_id field, which bulk import
-// sets directly from a CMF user's source_id (see buildImportUser).
+// sets from a CMF user's source_id without its auth0| prefix (see
+// importUserID).
 const maxUserIDLen = 128
 
 // fieldUsername is the Problem.Field value for username-related rules.
@@ -138,7 +139,7 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		}
 	}
 
-	if l := len(u.SourceID); l == 0 || l > maxUserIDLen {
+	if l := len(importUserID(u.SourceID)); l == 0 || l > maxUserIDLen {
 		problems = append(problems, connector.Problem{
 			SourceID: u.SourceID, Field: "source_id",
 			Rule: fmt.Sprintf("user_id must be 1-%d characters", maxUserIDLen), Value: u.SourceID,
