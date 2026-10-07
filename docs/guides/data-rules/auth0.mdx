@@ -19,7 +19,7 @@ Every field iamigrate sends for a user. Lengths count characters, not bytes.
 
 | Auth0 field | Comes from | Required | Length | Format | Unique |
 | --- | --- | --- | --- | --- | --- |
-| `user_id` | Your user ID (the CMF `source_id`). Auth0 adds the `auth0\|` prefix. | Yes | 1–128 | No whitespace: `^\S+$` | Yes |
+| `user_id` | Your user ID (the CMF `source_id`), without a leading `auth0\|`. Auth0 adds that prefix, so iamigrate removes it if present, and the length excludes it. | Yes | 1–128 | No whitespace: `^\S+$` | Yes |
 | `email` | The first email | Yes | At most 254, at most 64 before the `@`, at most 63 per domain label | ``^[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+(\.[A-Za-z0-9!#$%&'*+/=?^_`{\|}~-]+)*@([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$`` | Yes, ignoring case |
 | `username` | The username | Only if the connection requires usernames | 1–15 by default, configurable up to 128 | ``^[A-Za-z0-9_+.!#$'^`~@-]{1,15}$``, and not an email address: `^[^@]+@[^@]+\.[^@]+$` must not match | Yes, ignoring case |
 | `phone_number` | The first phone number | No | 2–16: `+`, then 1 to 15 digits | `^\+[0-9]{1,15}$` | Yes |

@@ -56,7 +56,8 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	var report connector.ImportReport
 	var roleInfos []userRoleInfo
 	var chunk []map[string]any
-	chunkBytes := 2 // "[]"
+	var chunkSources []string // source ID of each chunk record
+	chunkBytes := 2           // "[]"
 	chunkNum := 0
 	bar := progress.FromContext(ctx)
 
@@ -65,13 +66,13 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 			return nil
 		}
 		chunkNum++
-		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk, chunkNum)
+		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk, chunkSources, chunkNum)
 		if err != nil {
 			return err
 		}
 		mergeReport(&report, partial)
 		bar.Add(len(chunk))
-		chunk = nil
+		chunk, chunkSources = nil, nil
 		chunkBytes = 2
 		return nil
 	}
@@ -128,6 +129,7 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 			}
 		}
 		chunk = append(chunk, rec)
+		chunkSources = append(chunkSources, u.SourceID)
 		chunkBytes += recBytes
 	}
 
@@ -173,16 +175,19 @@ func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Failed = append(dst.Failed, src.Failed...)
 }
 
-func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, chunkNum int) (connector.ImportReport, error) {
+// submitAndPoll imports one chunk and reports on it by source ID.
+// sourceIDs[i] is the source ID of chunk[i], whose user_id in the payload
+// is importUserID(sourceIDs[i]).
+func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, sourceIDs []string, chunkNum int) (connector.ImportReport, error) {
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
 	defer bar.Status("")
 
-	sourceIDs := make(map[string]bool, len(chunk))
-	for _, rec := range chunk {
-		if id, ok := rec["user_id"].(string); ok {
-			sourceIDs[id] = true
-		}
+	// Job errors name a user by its payload user_id, which has lost any
+	// auth0| prefix the source ID carried.
+	bySourceID := make(map[string]string, len(sourceIDs))
+	for _, id := range sourceIDs {
+		bySourceID[importUserID(id)] = id
 	}
 
 	body, err := json.Marshal(chunk)
@@ -210,13 +215,17 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 
 	failedIDs := map[string]bool{}
 	for _, je := range jobErrors {
+		// Auth0 may echo the user_id with or without its prefix.
+		if id, ok := bySourceID[importUserID(je.SourceID)]; ok {
+			je.SourceID = id
+		}
 		failedIDs[je.SourceID] = true
 		if je.Code == DuplicatedUserCode {
 			je.Message = duplicatedUserMessage(upsert)
 		}
 		report.Failed = append(report.Failed, je)
 	}
-	for id := range sourceIDs {
+	for _, id := range sourceIDs {
 		if failedIDs[id] {
 			continue
 		}

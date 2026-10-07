@@ -13,7 +13,9 @@ import (
 	"testing"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
+	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,6 +31,7 @@ type jobServer struct {
 	statuses       map[int]string
 	failSubmits    int32 // leading submits answered 429
 	failPolls      int32 // leading polls answered 503
+	jobErrors      []map[string]any
 }
 
 func newJobServer(t *testing.T, statuses map[int]string) *jobServer {
@@ -66,7 +69,11 @@ func newJobServer(t *testing.T, statuses map[int]string) *jobServer {
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/errors") {
-			_, _ = w.Write([]byte("[]"))
+			if s.jobErrors == nil {
+				_, _ = w.Write([]byte("[]"))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(s.jobErrors)
 			return
 		}
 		n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/jobs/job_"))
@@ -155,4 +162,75 @@ func TestRunBulkImportDoesNotRetryServerErrorOnSubmit(t *testing.T) {
 	// The job may have been created before the 502, so resubmitting would
 	// report every user as a duplicate.
 	require.EqualValues(t, 1, atomic.LoadInt32(&submits))
+}
+
+func TestRunBulkImportStripsAuth0PrefixFromUserID(t *testing.T) {
+	defer setFastPolling(t)()
+	srv := newJobServer(t, nil)
+	srv.jobErrors = []map[string]any{{
+		"user":   map[string]string{"user_id": "u2"},
+		"errors": []map[string]string{{"code": auth0.DuplicatedUserCode, "message": "already exists"}},
+	}}
+
+	client := auth0.NewClient(srv.URL, "test-token")
+	users := []cmf.User{bcryptUser("auth0|u1"), bcryptUser("auth0|u2"), bcryptUser("u3")}
+	report, _, err := auth0.RunBulkImport(context.Background(), client, writeUsers(t, users), "conn_123", false)
+	require.NoError(t, err)
+
+	// Auth0 adds the prefix back, so it must not be sent.
+	require.Equal(t, [][]string{{"u1", "u2", "u3"}}, srv.submitted)
+	// The report refers to users by the source IDs they came with.
+	require.Equal(t, []string{"auth0|u1", "u3"}, report.Succeeded)
+	require.Len(t, report.Failed, 1)
+	require.Equal(t, "auth0|u2", report.Failed[0].SourceID)
+}
+
+func TestImportAddressesOrgsAndRolesByFinalAuth0UserID(t *testing.T) {
+	defer setFastPolling(t)()
+	srv := newJobServer(t, nil)
+
+	var mu sync.Mutex
+	var paths []string
+	orig := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && (r.URL.Path == "/roles" || r.URL.Path == "/organizations"):
+			_, _ = w.Write([]byte("[]"))
+		case r.Method == http.MethodPost && (r.URL.Path == "/roles" || r.URL.Path == "/organizations"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"id": "id_" + strings.TrimPrefix(r.URL.Path, "/")})
+		case strings.HasPrefix(r.URL.Path, "/users/") || strings.HasPrefix(r.URL.Path, "/organizations/"):
+			mu.Lock()
+			paths = append(paths, r.URL.EscapedPath())
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			orig.ServeHTTP(w, r)
+		}
+	})
+
+	withRoles := func(id string) cmf.User {
+		u := bcryptUser(id)
+		u.GlobalRoles = []string{"admin"}
+		u.Memberships = []cmf.Membership{{Organization: "acme", Roles: []string{"admin"}}}
+		return u
+	}
+	client := auth0.NewClient(srv.URL, "test-token")
+	_, err := auth0.New(client).Import(context.Background(),
+		writeUsers(t, []cmf.User{withRoles("auth0|u1"), withRoles("u2")}),
+		mapping.Mapping{ConnectionID: "conn_123"},
+		connector.ImportOptions{
+			ConnectionID:  "conn_123",
+			Roles:         []cmf.Role{{SourceID: "admin", Name: "admin"}},
+			Organizations: []cmf.Organization{{SourceID: "acme", Name: "acme"}},
+		})
+	require.NoError(t, err)
+
+	require.ElementsMatch(t, []string{
+		"/users/auth0%7Cu1/roles",
+		"/users/auth0%7Cu2/roles",
+		"/organizations/id_organizations/members",
+		"/organizations/id_organizations/members",
+		"/organizations/id_organizations/members/auth0%7Cu1/roles",
+		"/organizations/id_organizations/members/auth0%7Cu2/roles",
+	}, paths)
 }
