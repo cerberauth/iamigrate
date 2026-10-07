@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"time"
 
@@ -151,6 +153,21 @@ func duplicatedUserMessage(upsert bool) string {
 		"delete via the Connection Users endpoint and re-import (see DESIGN.md)"
 }
 
+// JobFailedCode is the code iamigrate reports for a user whose bulk import
+// job ended as failed on Auth0's side without a per-user error.
+const JobFailedCode = "JOB_FAILED"
+
+// jobFailedMessage explains a JOB_FAILED user. The job may have imported
+// some users before it failed, so re-running without upsert reports those
+// as DUPLICATED_USER.
+func jobFailedMessage(jobID string, upsert bool) string {
+	msg := fmt.Sprintf("Auth0 import job %s failed before this user was confirmed imported: re-run the import", jobID)
+	if !upsert {
+		msg += " (with --upsert if the job may have imported it)"
+	}
+	return msg
+}
+
 func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Succeeded = append(dst.Succeeded, src.Succeeded...)
 	dst.Failed = append(dst.Failed, src.Failed...)
@@ -200,13 +217,21 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 		report.Failed = append(report.Failed, je)
 	}
 	for id := range sourceIDs {
-		if !failedIDs[id] {
-			report.Succeeded = append(report.Succeeded, id)
+		if failedIDs[id] {
+			continue
 		}
-	}
-
-	if status == "failed" {
-		return report, fmt.Errorf("auth0: import job %s failed", jobID)
+		if status == "failed" {
+			// A failed job (for example a timeout) says nothing about
+			// users it had no per-user error for, so they can't be
+			// counted as imported. Report them instead of aborting, so
+			// the remaining chunks still run and the report lists
+			// everything to re-run.
+			report.Failed = append(report.Failed, connector.ImportError{
+				SourceID: id, Code: JobFailedCode, Message: jobFailedMessage(jobID, upsert),
+			})
+			continue
+		}
+		report.Succeeded = append(report.Succeeded, id)
 	}
 	return report, nil
 }
@@ -228,18 +253,38 @@ func submitImportJob(ctx context.Context, client *Client, connectionID string, u
 	if err := mw.WriteField("upsert", boolStr(upsert)); err != nil {
 		return "", err
 	}
+	// One chunk is one job: without this, Auth0 emails every tenant
+	// administrator once per chunk.
+	if err := mw.WriteField("send_completion_email", "false"); err != nil {
+		return "", err
+	}
 	if err := mw.Close(); err != nil {
 		return "", err
 	}
+	payload := buf.Bytes()
+	contentType := mw.FormDataContentType()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+"/jobs/users-imports", &buf)
+	// Only a 429 is retried: the job was definitely not created. After a
+	// 5xx or a dropped connection it may have been, and resubmitting would
+	// report every user as DUPLICATED_USER.
+	var jobID string
+	err = retryTransient(ctx, isRateLimited, func() error {
+		var err error
+		jobID, err = postImportJob(ctx, client, contentType, payload)
+		return err
+	})
+	return jobID, err
+}
+
+func postImportJob(ctx context.Context, client *Client, contentType string, payload []byte) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, client.BaseURL+"/jobs/users-imports", bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
 	if err := client.authorize(req); err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 
 	resp, err := client.HTTP.Do(req)
 	if err != nil {
@@ -264,13 +309,55 @@ func submitImportJob(ctx context.Context, client *Client, connectionID string, u
 	return out.ID, nil
 }
 
+// maxTransientRetries bounds retryTransient, so a job's status or errors
+// are given up on after about a minute of failures rather than forever.
+const maxTransientRetries = 5
+
+// retryTransient runs fn, retrying with the poll backoff while retryable
+// reports its error as temporary, so one dropped connection or rate-limit
+// response doesn't abandon an import job that is still running on Auth0.
+func retryTransient(ctx context.Context, retryable func(error) bool, fn func() error) error {
+	delay := pollInterval
+	for attempt := 0; ; attempt++ {
+		err := fn()
+		if err == nil || attempt >= maxTransientRetries || ctx.Err() != nil || !retryable(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, pollMaxInterval)
+	}
+}
+
+func isRateLimited(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusTooManyRequests
+}
+
+// isTransient reports whether err is worth retrying on an idempotent
+// request: a 429, a 5xx, or a network failure.
+func isTransient(err error) bool {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusTooManyRequests || apiErr.StatusCode >= 500
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func pollJob(ctx context.Context, client *Client, jobID string) (string, error) {
 	interval := pollInterval
 	for {
 		var out struct {
 			Status string `json:"status"`
 		}
-		_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID, nil, &out)
+		err := retryTransient(ctx, isTransient, func() error {
+			_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID, nil, &out)
+			return err
+		})
 		if err != nil {
 			return "", fmt.Errorf("auth0: polling job %s: %w", jobID, err)
 		}
@@ -300,7 +387,10 @@ func fetchJobErrors(ctx context.Context, client *Client, jobID string) ([]connec
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID+"/errors", nil, &raw)
+	err := retryTransient(ctx, isTransient, func() error {
+		_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID+"/errors", nil, &raw)
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("auth0: fetching job errors for %s: %w", jobID, err)
 	}
