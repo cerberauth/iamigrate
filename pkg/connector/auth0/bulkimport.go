@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -43,35 +44,55 @@ type userRoleInfo struct {
 	Memberships []cmf.Membership
 }
 
+// maxConcurrentJobs is how many bulk import jobs iamigrate runs at once.
+// Auth0 allows two per tenant, and a third submission is rejected with a
+// 429, so this takes the whole allowance: don't run another import job
+// against the same tenant meanwhile.
+const maxConcurrentJobs = 2
+
 // RunBulkImport streams users from r, chunks them to Auth0's 500KB job
-// limit, submits and polls each chunk, and merges the per-user results
-// into one ImportReport. allowUpsert controls whether Import intends to
+// limit, submits and polls the chunks (up to maxConcurrentJobs jobs at a
+// time), and merges the per-user results into one ImportReport, in chunk
+// order. allowUpsert controls whether Import intends to
 // call this again later for the same users (opts.Upsert); when true, the
 // hash translator always prefers custom_password_hash so a future run can
 // correct a bad translation (see DESIGN.md, "Idempotent re-runs").
 //
 // It also returns per-user global_roles/memberships for every user with
 // either set, for the caller to feed into the organizations/roles phase.
+//
+// If a job can't be run to completion, no further chunk is submitted, jobs
+// already running are waited for, and the report covers every chunk that
+// finished.
 func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectionID string, allowUpsert bool) (connector.ImportReport, []userRoleInfo, error) {
 	var report connector.ImportReport
+	runner := newJobRunner(ctx, client, connectionID, allowUpsert)
+	roleInfos, readErr := streamChunks(ctx, r, allowUpsert, &report, runner.submit)
+	jobsReport, jobErr := runner.wait()
+	mergeReport(&report, jobsReport)
+	progress.FromContext(ctx).Status("")
+	if jobErr != nil {
+		return report, roleInfos, jobErr
+	}
+	return report, roleInfos, readErr
+}
+
+// streamChunks translates the users from r into import records and hands
+// each full chunk, with the source ID of every record, to submit. Users that
+// can't be translated, and the follow-ups they need, go straight into report.
+func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *connector.ImportReport, submit func(chunk []map[string]any, sourceIDs []string) error) ([]userRoleInfo, error) {
 	var roleInfos []userRoleInfo
 	var chunk []map[string]any
 	var chunkSources []string // source ID of each chunk record
 	chunkBytes := 2           // "[]"
-	chunkNum := 0
-	bar := progress.FromContext(ctx)
 
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		chunkNum++
-		partial, err := submitAndPoll(ctx, client, connectionID, allowUpsert, chunk, chunkSources, chunkNum)
-		if err != nil {
+		if err := submit(chunk, chunkSources); err != nil {
 			return err
 		}
-		mergeReport(&report, partial)
-		bar.Add(len(chunk))
 		chunk, chunkSources = nil, nil
 		chunkBytes = 2
 		return nil
@@ -80,7 +101,7 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	for {
 		select {
 		case <-ctx.Done():
-			return report, roleInfos, ctx.Err()
+			return roleInfos, ctx.Err()
 		default:
 		}
 
@@ -89,7 +110,7 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 			break
 		}
 		if err != nil {
-			return report, roleInfos, err
+			return roleInfos, err
 		}
 
 		if len(u.GlobalRoles) > 0 || len(u.Memberships) > 0 {
@@ -119,13 +140,13 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 
 		b, err := json.Marshal(rec)
 		if err != nil {
-			return report, roleInfos, fmt.Errorf("auth0: encoding user %s: %w", u.SourceID, err)
+			return roleInfos, fmt.Errorf("auth0: encoding user %s: %w", u.SourceID, err)
 		}
 		recBytes := len(b) + 1 // trailing comma/bracket
 
 		if len(chunk) > 0 && (chunkBytes+recBytes > chunkMaxBytes || len(chunk) >= chunkMaxUsers) {
 			if err := flush(); err != nil {
-				return report, roleInfos, err
+				return roleInfos, err
 			}
 		}
 		chunk = append(chunk, rec)
@@ -134,9 +155,99 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 	}
 
 	if err := flush(); err != nil {
-		return report, roleInfos, err
+		return roleInfos, err
 	}
-	return report, roleInfos, nil
+	return roleInfos, nil
+}
+
+// chunkResult is what one import job produced. Each is written by the one
+// goroutine running its job, and read only after jobRunner.wait.
+type chunkResult struct {
+	report connector.ImportReport
+	err    error
+}
+
+// jobRunner runs chunks as Auth0 import jobs, at most maxConcurrentJobs at
+// once.
+type jobRunner struct {
+	ctx          context.Context
+	client       *Client
+	connectionID string
+	upsert       bool
+
+	slots   chan struct{}
+	wg      sync.WaitGroup
+	results []*chunkResult // in chunk order; only appended to by submit
+
+	failOnce sync.Once
+	failed   chan struct{} // closed when a job fails
+	err      error         // the first job error, set before failed is closed
+}
+
+func newJobRunner(ctx context.Context, client *Client, connectionID string, upsert bool) *jobRunner {
+	return &jobRunner{
+		ctx: ctx, client: client, connectionID: connectionID, upsert: upsert,
+		slots:  make(chan struct{}, maxConcurrentJobs),
+		failed: make(chan struct{}),
+	}
+}
+
+// submit starts a job for chunk, first waiting for a free slot. It returns
+// an error instead once a job has failed or ctx is done, so the caller stops
+// reading input. It must not be called concurrently with itself or wait.
+func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
+	select {
+	case j.slots <- struct{}{}:
+	case <-j.failed:
+		return j.err
+	case <-j.ctx.Done():
+		return j.ctx.Err()
+	}
+	// A slot and a failure can both be ready, and select picks at random.
+	select {
+	case <-j.failed:
+		<-j.slots
+		return j.err
+	default:
+	}
+
+	res := &chunkResult{}
+	j.results = append(j.results, res)
+	chunkNum := len(j.results)
+
+	j.wg.Add(1)
+	go func() {
+		defer j.wg.Done()
+		defer func() { <-j.slots }()
+		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, chunk, sourceIDs, chunkNum)
+		if res.err != nil {
+			j.failOnce.Do(func() {
+				j.err = res.err
+				close(j.failed)
+			})
+			return
+		}
+		progress.FromContext(j.ctx).Add(len(chunk))
+	}()
+	return nil
+}
+
+// wait blocks until every submitted job is done, then returns the merged
+// report of those that finished and the first error of those that didn't.
+func (j *jobRunner) wait() (connector.ImportReport, error) {
+	j.wg.Wait()
+	var report connector.ImportReport
+	for _, res := range j.results {
+		if res.err == nil {
+			mergeReport(&report, res.report)
+		}
+	}
+	select {
+	case <-j.failed:
+		return report, j.err
+	default:
+		return report, nil
+	}
 }
 
 // DuplicatedUserCode is the job error code Auth0 reports for a user that
@@ -181,7 +292,6 @@ func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, sourceIDs []string, chunkNum int) (connector.ImportReport, error) {
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
-	defer bar.Status("")
 
 	// Job errors name a user by its payload user_id, which has lost any
 	// auth0| prefix the source ID carried.

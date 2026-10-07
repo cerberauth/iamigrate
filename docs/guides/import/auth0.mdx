@@ -231,7 +231,7 @@ Users that already exist in the connection aren't counted as failures. They're l
 
 The test data generator currently writes SMS phone numbers without the `+<country code>` prefix Auth0 requires, so expect the 27 users with an `sms` factor to fail with `MFA_FACTORS_FAILED`. This is a useful dry run of the format issue described in [Step 4](#4-validate-against-auth0-no-network-calls). To get a clean run, leave out `--mfa sms:rate=0.1` when you generate the fixture.
 
-Chunks are submitted one at a time and each job is polled until it finishes, so Auth0's limit of two concurrent import jobs per tenant isn't a concern. Don't start a second import against the same tenant while one is running.
+iamigrate runs up to two chunks at a time, which is Auth0's limit of concurrent import jobs per tenant, and polls each job until it finishes. That uses the tenant's whole allowance, so don't run another import job against the same tenant (a second iamigrate import, or an import or export from the Auth0 dashboard) while one is running: Auth0 rejects the extra job with a rate limit error, and iamigrate waits and retries a few times before giving up.
 
 iamigrate retries job status and error requests that fail with a rate limit, a server error, or a dropped connection, and retries a job submission only after a rate limit, because a job may already exist after any other failure. A chunk whose job fails doesn't stop the import: its users are listed under `JOB_FAILED` in the report and the remaining chunks still run. Auth0 keeps job data for 24 hours, so iamigrate reads each job's errors as soon as it finishes. iamigrate also turns off Auth0's completion email, which would otherwise notify tenant administrators once per chunk.
 

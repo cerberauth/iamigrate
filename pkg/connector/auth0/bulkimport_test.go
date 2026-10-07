@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -28,13 +29,18 @@ type jobServer struct {
 	mu             sync.Mutex
 	submitted      [][]string // user_ids per submitted job
 	completedEmail []string
-	statuses       map[int]string
-	failSubmits    int32 // leading submits answered 429
-	failPolls      int32 // leading polls answered 503
+	statuses       map[string]string // final status of the job whose first user_id this is
+	failSubmits    int32             // leading submits answered 429
+	failPolls      int32             // leading polls answered 503
 	jobErrors      []map[string]any
+
+	gate        chan struct{}   // if set, jobs stay "processing" until it's closed
+	badJobs     map[string]bool // jobs, by first user_id, whose status request is answered 400 once two jobs are submitted
+	inflight    int             // jobs submitted and not yet finished
+	maxInflight int
 }
 
-func newJobServer(t *testing.T, statuses map[int]string) *jobServer {
+func newJobServer(t *testing.T, statuses map[string]string) *jobServer {
 	t.Helper()
 	s := &jobServer{statuses: statuses}
 
@@ -59,6 +65,8 @@ func newJobServer(t *testing.T, statuses map[int]string) *jobServer {
 		s.submitted = append(s.submitted, ids)
 		s.completedEmail = append(s.completedEmail, r.FormValue("send_completion_email"))
 		n := len(s.submitted)
+		s.inflight++
+		s.maxInflight = max(s.maxInflight, s.inflight)
 		s.mu.Unlock()
 
 		_ = json.NewEncoder(w).Encode(map[string]string{"id": fmt.Sprintf("job_%d", n), "status": "pending"})
@@ -78,9 +86,32 @@ func newJobServer(t *testing.T, statuses map[int]string) *jobServer {
 		}
 		n, err := strconv.Atoi(strings.TrimPrefix(r.URL.Path, "/jobs/job_"))
 		require.NoError(t, err)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		// Jobs run concurrently, so they reach the server in any order:
+		// identify one by its content, not its number.
+		first := s.submitted[n-1][0]
 		status := "completed"
-		if st, ok := s.statuses[n]; ok {
+		if st, ok := s.statuses[first]; ok {
 			status = st
+		}
+		if s.badJobs[first] && len(s.submitted) >= 2 {
+			s.inflight--
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if s.badJobs[first] {
+			status = "processing"
+		}
+		if s.gate != nil {
+			select {
+			case <-s.gate:
+			default:
+				status = "processing"
+			}
+		}
+		if status != "processing" {
+			s.inflight--
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": status})
 	})
@@ -111,7 +142,7 @@ func TestRunBulkImportFailedJobDoesNotAbortRemainingChunks(t *testing.T) {
 	defer setFastPolling(t)()
 	// 1001 users: the 1000-user cap splits them into two jobs, the first of
 	// which fails.
-	srv := newJobServer(t, map[int]string{1: "failed"})
+	srv := newJobServer(t, map[string]string{"u0000": "failed"})
 
 	client := auth0.NewClient(srv.URL, "test-token")
 	report, _, err := auth0.RunBulkImport(context.Background(), client, writeUsers(t, manyUsers(1001)), "conn_123", false)
@@ -233,4 +264,71 @@ func TestImportAddressesOrgsAndRolesByFinalAuth0UserID(t *testing.T) {
 		"/organizations/id_organizations/members/auth0%7Cu1/roles",
 		"/organizations/id_organizations/members/auth0%7Cu2/roles",
 	}, paths)
+}
+
+// submittedJobs is how many import jobs the server has been sent so far.
+func (s *jobServer) submittedJobs() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.submitted)
+}
+
+func TestRunBulkImportRunsTwoJobsAtOnce(t *testing.T) {
+	defer setFastPolling(t)()
+	srv := newJobServer(t, nil)
+	srv.gate = make(chan struct{})
+
+	type result struct {
+		report connector.ImportReport
+		err    error
+	}
+	done := make(chan result, 1)
+	users := manyUsers(3000) // three 1000-user chunks
+	go func() {
+		client := auth0.NewClient(srv.URL, "test-token")
+		report, _, err := auth0.RunBulkImport(context.Background(), client, writeUsers(t, users), "conn_123", false)
+		done <- result{report, err}
+	}()
+
+	// Both slots fill while the jobs are held, and the third chunk waits.
+	require.Eventually(t, func() bool { return srv.submittedJobs() == 2 }, 5*time.Second, 5*time.Millisecond)
+	require.Never(t, func() bool { return srv.submittedJobs() > 2 }, 200*time.Millisecond, 10*time.Millisecond)
+
+	close(srv.gate)
+	res := <-done
+	require.NoError(t, res.err)
+	require.Len(t, srv.submitted, 3)
+	require.Equal(t, 2, srv.maxInflight)
+
+	// Results are merged in chunk order however the jobs finished.
+	want := make([]string, len(users))
+	for i, u := range users {
+		want[i] = u.SourceID
+	}
+	require.Equal(t, want, res.report.Succeeded)
+}
+
+func TestRunBulkImportStopsSubmittingAfterAJobErrorButKeepsRunningJobs(t *testing.T) {
+	defer setFastPolling(t)()
+	srv := newJobServer(t, nil)
+	// The first chunk's job can't be read once a second job is running; that
+	// second job is held until after the failure has been noticed, so no
+	// third job can start before then.
+	srv.badJobs = map[string]bool{"u0000": true}
+	srv.gate = make(chan struct{})
+	time.AfterFunc(300*time.Millisecond, func() { close(srv.gate) })
+
+	client := auth0.NewClient(srv.URL, "test-token")
+	users := manyUsers(4000)
+	report, _, err := auth0.RunBulkImport(context.Background(), client, writeUsers(t, users), "conn_123", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "polling job")
+
+	require.Equal(t, 2, srv.submittedJobs(), "no job may start once one has failed")
+	// Job 2 was running and finished, so its users are in the report.
+	want := make([]string, 0, 1000)
+	for _, u := range users[1000:2000] {
+		want = append(want, u.SourceID)
+	}
+	require.Equal(t, want, report.Succeeded)
 }
