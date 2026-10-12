@@ -23,6 +23,7 @@ func newExportCmd() *cobra.Command {
 		format   string
 		outDir   string
 		adminURL string
+		noGzip   bool
 	)
 
 	cmd := &cobra.Command{
@@ -40,14 +41,14 @@ func newExportCmd() *cobra.Command {
 				return err
 			}
 
-			usersPath := filepath.Join(outDir, "users.cmf.jsonl.gz")
+			usersPath, newWriter := usersOutput(outDir, noGzip)
 			f, err := os.Create(usersPath)
 			if err != nil {
 				return err
 			}
 			defer f.Close()
 
-			w := cmf.NewWriter(f)
+			w := newWriter(f)
 			var manifest connector.Manifest
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
@@ -106,6 +107,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
+	cmd.Flags().BoolVar(&noGzip, "no-gzip", false, "write users.cmf.jsonl uncompressed instead of users.cmf.jsonl.gz")
 	return cmd
 }
 

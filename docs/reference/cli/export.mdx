@@ -28,11 +28,12 @@ iamigrate export --source keycloak --in ./realm-export/ --out ./export/
 | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
 | `--out` | Output directory (default `./export/`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
+| `--no-gzip` | Write `users.cmf.jsonl` uncompressed instead of `users.cmf.jsonl.gz`. Every command that reads `--in` accepts either. |
 
 ## Output
 
 | File | Contents |
 | --- | --- |
-| `users.cmf.jsonl.gz` | The CMF records |
+| `users.cmf.jsonl.gz` | The CMF records (`users.cmf.jsonl` with `--no-gzip`) |
 | `manifest.json` | Record counts, per-algorithm hash counts, skipped records |
 | `mapping.yaml` | Scaffolded field mapping; empty for the recognized-column simple case, with `manual_steps` flagged for any custom `app_metadata` |

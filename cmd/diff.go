@@ -54,7 +54,7 @@ func newDiffAuth0Cmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	auth.register(cmd)
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
@@ -97,7 +97,7 @@ func newDiffKratosCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
@@ -137,7 +137,7 @@ func newDiffKeycloakCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	auth.register(cmd)
 	_ = cmd.MarkFlagRequired("in")
 	return cmd

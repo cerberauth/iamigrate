@@ -8,17 +8,24 @@ import (
 	"io"
 )
 
-// Writer streams CMF user records out as gzip-compressed JSONL.
+// Writer streams CMF user records out as JSONL, gzip-compressed unless
+// created with NewPlainWriter.
 type Writer struct {
-	gz  *gzip.Writer
+	gz  *gzip.Writer // nil when writing uncompressed
 	enc *json.Encoder
 }
 
-// NewWriter wraps w as a streaming CMF writer. Callers must call Close to
-// flush the gzip stream.
+// NewWriter wraps w as a streaming CMF writer that gzip-compresses its
+// output. Callers must call Close to flush the gzip stream.
 func NewWriter(w io.Writer) *Writer {
 	gz := gzip.NewWriter(w)
 	return &Writer{gz: gz, enc: json.NewEncoder(gz)}
+}
+
+// NewPlainWriter wraps w as a streaming CMF writer that emits uncompressed
+// JSONL. Readers detect the format, so the result imports like a gzipped one.
+func NewPlainWriter(w io.Writer) *Writer {
+	return &Writer{enc: json.NewEncoder(w)}
 }
 
 // WriteUser validates and writes one CMF user record as a JSONL line.
@@ -35,26 +42,50 @@ func (w *Writer) WriteUser(u User) error {
 	return nil
 }
 
-// Close flushes and closes the underlying gzip stream.
+// Close flushes and closes the gzip stream, if any. It never closes the
+// underlying writer.
 func (w *Writer) Close() error {
+	if w.gz == nil {
+		return nil
+	}
 	return w.gz.Close()
 }
 
-// Reader streams CMF user records in from gzip-compressed JSONL.
+// Reader streams CMF user records in from JSONL, either gzip-compressed or
+// plain; the format is detected from the stream's leading bytes.
 type Reader struct {
-	gz *gzip.Reader
+	gz *gzip.Reader // nil when reading uncompressed
 	sc *bufio.Scanner
 }
 
 // NewReader wraps r as a streaming CMF reader.
 func NewReader(r io.Reader) (*Reader, error) {
-	gz, err := gzip.NewReader(r)
+	src, gz, err := openStream(r)
 	if err != nil {
-		return nil, fmt.Errorf("cmf: opening gzip stream: %w", err)
+		return nil, err
 	}
-	sc := bufio.NewScanner(gz)
+	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	return &Reader{gz: gz, sc: sc}, nil
+}
+
+// openStream returns the decoded view of r, which is gzip-compressed when
+// it starts with the gzip magic number and plain JSONL otherwise. The
+// returned *gzip.Reader is nil for plain input.
+func openStream(r io.Reader) (io.Reader, *gzip.Reader, error) {
+	br := bufio.NewReader(r)
+	magic, err := br.Peek(2)
+	if err != nil && err != io.EOF {
+		return nil, nil, fmt.Errorf("cmf: reading stream header: %w", err)
+	}
+	if len(magic) < 2 || magic[0] != 0x1f || magic[1] != 0x8b {
+		return br, nil, nil
+	}
+	gz, err := gzip.NewReader(br)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cmf: opening gzip stream: %w", err)
+	}
+	return gz, gz, nil
 }
 
 // ReadUser reads and validates the next CMF user record. It returns io.EOF
@@ -76,20 +107,27 @@ func (r *Reader) ReadUser() (User, error) {
 	return u, nil
 }
 
-// Close closes the underlying gzip stream.
+// Close closes the gzip stream, if any. It never closes the underlying
+// reader.
 func (r *Reader) Close() error {
+	if r.gz == nil {
+		return nil
+	}
 	return r.gz.Close()
 }
 
-// CountUsers counts the user records in a gzip-compressed CMF stream
-// without decoding them, e.g. to size a progress bar before importing.
+// CountUsers counts the user records in a CMF stream (gzip-compressed or
+// plain) without decoding them, e.g. to size a progress bar before
+// importing.
 func CountUsers(r io.Reader) (int, error) {
-	gz, err := gzip.NewReader(r)
+	src, gz, err := openStream(r)
 	if err != nil {
-		return 0, fmt.Errorf("cmf: opening gzip stream: %w", err)
+		return 0, err
 	}
-	defer gz.Close()
-	sc := bufio.NewScanner(gz)
+	if gz != nil {
+		defer gz.Close()
+	}
+	sc := bufio.NewScanner(src)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	n := 0
 	for sc.Scan() {

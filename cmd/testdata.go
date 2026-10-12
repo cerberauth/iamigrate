@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -28,6 +29,7 @@ func newTestdataGenerateCmd() *cobra.Command {
 		seed        int64
 		outDir      string
 		noAnswerKey bool
+		noGzip      bool
 	)
 
 	cmd := &cobra.Command{
@@ -81,14 +83,14 @@ func newTestdataGenerateCmd() *cobra.Command {
 				AnswerKeyPath: answerKeyPath,
 			}
 
-			usersPath := filepath.Join(outDir, "users.cmf.jsonl.gz")
+			usersPath, newWriter := usersOutput(outDir, noGzip)
 			f, err := os.Create(usersPath)
 			if err != nil {
 				return err
 			}
 			defer f.Close()
 
-			w := cmf.NewWriter(f)
+			w := newWriter(f)
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("generating users", count)
@@ -124,8 +126,19 @@ func newTestdataGenerateCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&seed, "seed", 1, "seed for deterministic output")
 	cmd.Flags().StringVar(&outDir, "out", "./fixtures/", "output directory")
 	cmd.Flags().BoolVar(&noAnswerKey, "no-answer-key", false, "skip writing answer-key.json")
+	cmd.Flags().BoolVar(&noGzip, "no-gzip", false, "write users.cmf.jsonl uncompressed instead of users.cmf.jsonl.gz")
 
 	return cmd
+}
+
+// usersOutput returns the users file path inside outDir and the matching
+// CMF writer constructor: gzip-compressed by default, plain JSONL with
+// noGzip. Importers detect either format.
+func usersOutput(outDir string, noGzip bool) (string, func(io.Writer) *cmf.Writer) {
+	if noGzip {
+		return filepath.Join(outDir, "users.cmf.jsonl"), cmf.NewPlainWriter
+	}
+	return filepath.Join(outDir, "users.cmf.jsonl.gz"), cmf.NewWriter
 }
 
 func writeManifest(outDir string, m connector.Manifest) error {

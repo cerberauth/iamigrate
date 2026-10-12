@@ -28,7 +28,7 @@ Authenticate with either a Management API token (`--token`) or a Machine-to-Mach
 
 | Flag | Description |
 | --- | --- |
-| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--mapping` | `mapping.yaml` path (optional; can supply `--connection-id` instead) |
 | `--connection-id` | Auth0 database connection ID |
 | `--connection` | Auth0 database connection name, resolved to its ID (needs `read:connections`). Can't be combined with `--connection-id`. If both are omitted and `--mapping` has no `connection_id`, the tenant's only database connection is used. |

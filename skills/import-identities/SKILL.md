@@ -139,7 +139,7 @@ and the three follow-up lists (these users need an email campaign or forced rese
 | report `REJECTED ... unknown field "totp"` / `"lookup_secret"` | `prepare --drop-mfa totp,recovery_codes` (Kratos) |
 | every record `dial tcp ...: connection refused`, `retryable N` | target down; fix, then `prepare --retry <report>` |
 | `conflict_already_exists` = batch size | batch already imported; build the next one with `--exclude-report` |
-| `cmf: opening gzip stream: EOF` / `not a complete gzip file` | the export that produced the bundle failed halfway (e.g. CSV `wrong number of fields` from an unquoted argon2 hash — quote fields containing commas) and left an empty file; re-export |
+| `cmf: opening gzip stream: ...` / `not a complete gzip file` / 0 users read from an empty file | the export that produced the bundle failed halfway (e.g. CSV `wrong number of fields` from an unquoted argon2 hash — quote fields containing commas) and left a truncated or empty file; re-export |
 | `--admin-url (or $KRATOS_ADMIN_URL) is required` | export `KRATOS_ADMIN_URL` (Admin API, port 4434 by default) |
 | `TRANSLATION_ERROR ... not one of Keycloak's built-in hash providers` | `prepare --drop-password-alg <alg>` (Keycloak only imports pbkdf2/argon2) |
 | `USER_EXISTS` (Keycloak) | batch already imported; build the next one with `--exclude-report`, same as a Kratos conflict |

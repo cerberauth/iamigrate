@@ -25,7 +25,7 @@ iamigrate validate --in users.cmf.jsonl.gz --target keycloak
 
 | Flag | Description |
 | --- | --- |
-| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--mapping` | `mapping.yaml` path (optional) |
 | `--target` | Target connector name: `auth0` \| `kratos` \| `keycloak` (required) |
 | `--schema-file` | Kratos identity schema JSON path, to check traits against (only with `--target kratos`) |
