@@ -116,7 +116,7 @@ func newImportAuth0Cmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
 	cmd.Flags().StringVar(&connectionID, "connection-id", "", "Auth0 database connection ID")
 	cmd.Flags().StringVar(&connection, "connection", "", "Auth0 database connection name (needs read:connections; default: the tenant's only database connection)")
@@ -186,7 +186,7 @@ func newImportKratosCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().StringVar(&schemaID, "schema-id", "default", "Kratos identity schema ID to create identities against")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
@@ -246,7 +246,7 @@ func newImportKeycloakCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")

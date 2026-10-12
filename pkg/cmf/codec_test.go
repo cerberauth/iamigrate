@@ -100,3 +100,53 @@ func TestOrganizationsRolesRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, roles, gotRoles)
 }
+
+func TestPlainWriterReaderRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	w := cmf.NewPlainWriter(&buf)
+	require.NoError(t, w.WriteUser(sampleUser("u1")))
+	require.NoError(t, w.WriteUser(sampleUser("u2")))
+	require.NoError(t, w.Close())
+	require.Equal(t, byte('{'), buf.Bytes()[0], "plain output must not be gzipped")
+
+	n, err := cmf.CountUsers(bytes.NewReader(buf.Bytes()))
+	require.NoError(t, err)
+	require.Equal(t, 2, n)
+
+	r, err := cmf.NewReader(&buf)
+	require.NoError(t, err)
+	defer r.Close()
+
+	u, err := r.ReadUser()
+	require.NoError(t, err)
+	require.Equal(t, "u1", u.SourceID)
+	u, err = r.ReadUser()
+	require.NoError(t, err)
+	require.Equal(t, "u2", u.SourceID)
+	_, err = r.ReadUser()
+	require.Equal(t, io.EOF, err)
+}
+
+func TestCountUsersGzip(t *testing.T) {
+	var buf bytes.Buffer
+	w := cmf.NewWriter(&buf)
+	require.NoError(t, w.WriteUser(sampleUser("u1")))
+	require.NoError(t, w.Close())
+
+	n, err := cmf.CountUsers(&buf)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+}
+
+func TestReaderEmptyPlainStream(t *testing.T) {
+	r, err := cmf.NewReader(bytes.NewReader(nil))
+	require.NoError(t, err)
+	defer r.Close()
+	_, err = r.ReadUser()
+	require.Equal(t, io.EOF, err)
+}
+
+func TestReaderTruncatedGzipStream(t *testing.T) {
+	_, err := cmf.NewReader(bytes.NewReader([]byte{0x1f, 0x8b}))
+	require.Error(t, err)
+}

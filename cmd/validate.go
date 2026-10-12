@@ -119,7 +119,7 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl.gz path")
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
 	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak")
 	cmd.Flags().StringVar(&schemaFile, "schema-file", "", "Kratos identity schema JSON path, to check traits against (only with --target kratos)")

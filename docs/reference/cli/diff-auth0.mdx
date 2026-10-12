@@ -19,7 +19,7 @@ Authenticate with either a Management API token (`--token`) or a Machine-to-Mach
 
 | Flag | Description |
 | --- | --- |
-| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
 | `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
 | `--client-id` | Machine-to-Machine application client ID (or `$AUTH0_CLIENT_ID`). With `--client-secret`, iamigrate gets the Management API token itself through the `client_credentials` grant and renews it before it expires. Can't be combined with `--token`. |

@@ -34,11 +34,12 @@ iamigrate testdata generate \
 | `--seed` | Seed for deterministic output (default `1`) |
 | `--out` | Output directory (default `./fixtures/`) |
 | `--no-answer-key` | Skip writing `answer-key.json` |
+| `--no-gzip` | Write `users.cmf.jsonl` uncompressed instead of `users.cmf.jsonl.gz`. Fine for small fixtures; every command that reads `--in` accepts either. |
 
 ## Output
 
 | File | Contents |
 | --- | --- |
-| `users.cmf.jsonl.gz` | The generated CMF records |
+| `users.cmf.jsonl.gz` | The generated CMF records (`users.cmf.jsonl` with `--no-gzip`) |
 | `manifest.json` | Record counts, per-algorithm hash counts, non-portable MFA counts |
 | `answer-key.json` | Login identifiers, cleartext password, and TOTP secret per `source_id` (gitignored) |

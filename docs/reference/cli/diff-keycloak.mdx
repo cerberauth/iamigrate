@@ -17,7 +17,7 @@ iamigrate diff keycloak --in users.cmf.jsonl.gz \
 
 | Flag | Description |
 | --- | --- |
-| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--url` | Keycloak server URL (or `$KEYCLOAK_URL`) |
 | `--realm` | Realm to check users in (or `$KEYCLOAK_REALM`) |
 | `--auth-realm` | Realm the admin user or client authenticates in (or `$KEYCLOAK_AUTH_REALM`; default: `--realm`) |

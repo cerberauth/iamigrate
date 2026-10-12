@@ -21,7 +21,7 @@ iamigrate import kratos --in users.cmf.jsonl.gz --schema-id default
 
 | Flag | Description |
 | --- | --- |
-| `--in` | CMF `users.cmf.jsonl.gz` path (required) |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--schema-id` | Kratos identity schema ID to create identities against (default `default`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
