@@ -6,21 +6,23 @@ description: All iamigrate commands and flags.
 | Command | Does |
 | --- | --- |
 | [`testdata generate`](./testdata/) | Generate a synthetic CMF fixture and `answer-key.json` |
-| [`export`](./export/) | Export identities from a source (`flatfile`, `kratos`, `keycloak`) into CMF |
+| [`export`](./export/) | Export identities from a source (`flatfile`, `kratos`, `keycloak`, `firebase`) into CMF |
 | [`map`](./map/) | Scaffold or update the CMF → target field mapping |
 | [`validate`](./validate/) | Dry-run a CMF file against a target's capabilities (no network calls) |
 | [`import auth0`](./import-auth0/) | Chunk, submit, poll, and import a CMF file into an Auth0 tenant |
 | [`import kratos`](./import-kratos/) | Create Ory Kratos identities from a CMF file via the Admin API |
 | [`import keycloak`](./import-keycloak/) | Create Keycloak users from a CMF file via the Admin API |
+| [`import firebase`](./import-firebase/) | Create Firebase Authentication users from a CMF file via the Identity Toolkit API |
 | [`diff auth0`](./diff-auth0/) | Reconcile a CMF file against a live Auth0 tenant |
 | [`diff kratos`](./diff-kratos/) | Reconcile a CMF file against a live Ory Kratos instance |
 | [`diff keycloak`](./diff-keycloak/) | Reconcile a CMF file against a live Keycloak realm |
+| [`diff firebase`](./diff-firebase/) | Reconcile a CMF file against a live Firebase project |
 
 ## End-to-end flow
 
 ```
 testdata generate ─┐
-                    ├─▶ validate ─▶ import auth0/kratos/keycloak ─▶ diff auth0/kratos/keycloak
+                    ├─▶ validate ─▶ import auth0/kratos/keycloak/firebase ─▶ diff auth0/kratos/keycloak/firebase
 export ─▶ map ──────┘
 ```
 

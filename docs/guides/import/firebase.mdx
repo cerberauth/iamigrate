@@ -1,0 +1,237 @@
+---
+title: Import users into Firebase Authentication
+description: Step-by-step guide to importing users and password hashes into a Firebase Authentication project with iamigrate, including what doesn't carry over.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through a complete import into Firebase Authentication: preparing the project, rehearsing with synthetic users, validating, importing, verifying logins, and handling the users Firebase can't take as-is.
+
+The rehearsal uses `iamigrate testdata generate`, so you can run the whole flow against a disposable Firebase project before touching real data. Once it works end to end, swap the fixture for your own CMF export (see [Step 9](#9-run-the-real-migration)).
+
+## How iamigrate imports into Firebase
+
+`iamigrate import firebase` uses the Identity Toolkit bulk endpoint, `accounts:batchCreate`, which takes up to 1000 accounts per request. For each CMF user it:
+
+1. Builds the account's email, phone number, display name, photo, disabled state and custom claims from the CMF record, and keeps the CMF `source_id` as the Firebase uid.
+2. Translates the password hash into a Firebase `passwordHash` and `salt`, so users keep their existing password.
+3. Drops MFA factors Firebase can't import and flags the user for follow-up.
+4. Records the result in `import-report.json`. A user that fails is recorded and the run continues.
+
+A request can declare only one hash algorithm and parameter set, so iamigrate groups users by theirs and sends each group in its own batches. Firebase throttles account imports; a throttled (`429`) or unavailable (`503`) request is retried up to five times, with a doubling delay, before its users are reported as failed.
+
+Firebase has no organizations or roles, so `organizations.cmf.jsonl` and `roles.cmf.jsonl` are ignored.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A Firebase project with **Authentication** enabled. **Use a disposable project for the rehearsal.** Imported users stay until you delete them.
+- A Google service account key for the project, with a role that can create users, such as **Firebase Authentication Admin** (**Project settings → Service accounts → Generate new private key**). Alternatively, an OAuth2 access token, for example from `gcloud auth print-access-token`.
+- For the login check in [Step 8](#8-verify-the-import), the project's **Web API key** (**Project settings → General**) and the **Email/Password** sign-in method enabled.
+
+## 1. Point iamigrate at the project
+
+```sh
+export FIREBASE_PROJECT_ID=acme-rehearsal
+export GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+```
+
+`import firebase`, `diff firebase`, and `export --source firebase` all read these (you can pass `--project`, `--service-account` or `--access-token` instead). Without a project ID, the service account's own project is used.
+
+If `FIREBASE_AUTH_EMULATOR_HOST` is set, as Firebase's own tooling does, iamigrate talks to the local Auth emulator instead and needs no credentials, only a project ID.
+
+## 2. Generate a representative test export
+
+Firebase imports bcrypt and scrypt hashes, and SMS second factors:
+
+```sh
+iamigrate testdata generate \
+  --count 100 \
+  --hash bcrypt:cost=10 \
+  --hash scrypt:cost=16384 \
+  --identifier email \
+  --identifier phone \
+  --mfa sms:rate=0.1 \
+  --mfa totp:rate=0.2 \
+  --seed 42 \
+  --out ./fixtures/
+```
+
+| Case | Why it matters for Firebase |
+| --- | --- |
+| `bcrypt`, `scrypt` | The hashes iamigrate can import. Users keep their password. |
+| `--identifier email` / `phone` | Firebase signs users in with an email or a phone number. A user with neither can't be imported. |
+| `sms` | The only second factor Firebase can import. |
+| `totp` | MFA Firebase can't import. Affected users need follow-up. |
+
+To see how other algorithms behave, add for example `--hash argon2` or `--hash md5`. Those users fail validation. For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
+
+## 3. Review the manifest
+
+```sh
+cat fixtures/manifest.json
+```
+
+With a real export, this is where you find out which algorithms you're dealing with. Any algorithm other than `bcrypt` or `scrypt` in `hash_algorithm_counts` means users that won't be imported unless you deal with them first (see [Step 7](#7-handle-users-that-need-follow-up)).
+
+## 4. Validate against Firebase (no network calls)
+
+```sh
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target firebase
+```
+
+`validate` checks every user against what Firebase can import:
+
+- **Password algorithms:** only `bcrypt` and `scrypt` are supported, and the hash must be translatable. A scrypt hash needs its salt and cost parameters; a Firebase-variant scrypt hash needs the project's signer key, salt separator, rounds and memory cost. Other algorithms are reported, for example `unsupported password algorithm "md5"`.
+- **MFA:** a portable factor other than `sms` is reported. Those users are still imported, without the factor.
+- **Sign-in identifier:** a user needs an email or a phone number. Emails must be valid addresses, and phone numbers, including `sms` factors, must be E.164 (`+14155550123`).
+- **Uid:** `source_id` becomes the Firebase uid, which is limited to 128 characters.
+- **Custom claims:** `app_metadata` becomes the user's custom claims. Its serialized form must stay under 1000 characters, and no key may be one of the reserved names (`sub`, `iss`, `aud`, `exp`, `iat`, `firebase`, and the other OIDC claim names).
+- **Duplicates:** the same email or phone number on two users in the file.
+
+With the fixture above, expect problems for the `totp` users, which you'll handle in Step 7.
+
+## 5. Understand how hashes and factors are translated
+
+You don't configure anything in this step. It explains what ends up in Firebase, which helps when you read the import report.
+
+### Password hashes
+
+| CMF algorithm | Firebase result |
+| --- | --- |
+| `bcrypt` | `BCRYPT` hashes |
+| `scrypt` with `params.variant` `firebase` (from a Firebase export) | `SCRYPT` hashes, with the signer key, salt separator, rounds and memory cost declared once per request |
+| any other `scrypt` | `STANDARD_SCRYPT` hashes, with the cost (`N`), block size and parallelization from `params`, and the key length taken from the hash |
+| `pbkdf2`, `argon2`, `md4`, `md5`, `sha1`, `sha256`, `sha512`, `hmac`, `ldap` | Not translated. The user **is not created** and is reported as `TRANSLATION_ERROR` in `failed`. Firebase can import some of these, but iamigrate doesn't map them yet. |
+| Any hash marked `portable: false` | The user is created without a password and listed under `requires_password_reset` |
+
+### MFA factors
+
+| CMF factor | Firebase result |
+| --- | --- |
+| `sms` | Imported as a phone second factor, with its enrollment date when known |
+| `totp`, `email`, `push`, `webauthn`, `recovery_codes` | Not imported. The user is created and listed under `requires_reenrollment`. |
+
+### Profile
+
+| CMF field | Firebase field |
+| --- | --- |
+| `source_id` | `uid` |
+| First email | `email` / `emailVerified` |
+| First phone number | `phoneNumber` |
+| `profile.name`, else `given_name` and `family_name` | `displayName` |
+| `profile.picture` | `photoURL` |
+| `blocked: true` | `disabled: true` |
+| `app_metadata` | Custom claims |
+
+These are **not** imported: `username` (Firebase has no username sign-in), `user_metadata` (Firebase stores no free-form profile data), additional emails and phone numbers, and `profile.locale`/`nickname`. A user with neither an email nor a phone number is not created, and is reported as `TRANSLATION_ERROR`.
+
+## 6. Run the import
+
+```sh
+iamigrate import firebase --in ./fixtures/users.cmf.jsonl.gz
+```
+
+```
+imported: 100 succeeded, 0 failed -> report fixtures/import-report.json
+```
+
+The report goes next to `--in` unless you pass `--report`.
+
+<Aside type="caution">
+  The command exits with status `0` even when users fail. Always check the report, for example with `jq '.failed | length' fixtures/import-report.json`, especially in scripts.
+</Aside>
+
+Firebase rejects a user whose uid or email already exists, and the report records Firebase's own message for it. To re-run an import over users that already exist, pass `--upsert`, which overwrites the accounts with the same uid.
+
+## 7. Handle users that need follow-up
+
+Open the report:
+
+```sh
+cat fixtures/import-report.json
+```
+
+The report lists users by their CMF `source_id`, which is also their Firebase uid.
+
+| Field | What to do |
+| --- | --- |
+| `failed` | Each entry has a `source_id`, a `code` (`TRANSLATION_ERROR`, `REQUEST_ERROR`, or `IMPORT_ERROR` for a user Firebase rejected, or Firebase's own code when its message starts with one), and a `message`. See [Troubleshooting](#troubleshooting). |
+| `requires_password_reset` | The user was created without a password. Send them a password reset email, for example with the Admin SDK's `generatePasswordResetLink`. |
+| `requires_reenrollment` | A second factor was dropped. Ask the user to set one up again after signing in. |
+
+To get a list you can feed into an email campaign or a script:
+
+```sh
+jq -r '.requires_password_reset[]?' fixtures/import-report.json > reset.txt
+```
+
+Users whose hash algorithm Firebase can't import land in `failed`, not `requires_password_reset`. To import them anyway, have them reset their password, then either drop the `password` from their CMF records before importing, or mark it `"portable": false`.
+
+## 8. Verify the import
+
+### Reconcile with the project
+
+```sh
+iamigrate diff firebase --in ./fixtures/users.cmf.jsonl.gz
+```
+
+```
+missing in target: 0, attribute drift: 0, no identifier: 0
+```
+
+This looks up every user by email, or by phone number for users without one, and reports any that are missing, plus any mismatch between CMF `blocked` and the account's `disabled` flag, or between the email's verified state. Users in `failed` show up here as missing.
+
+### Prove that passwords work
+
+A user existing in Firebase doesn't prove its hash was imported correctly. Pick at least one user per algorithm from `answer-key.json`, then sign in as each one with the project's Web API key:
+
+```sh
+ENTRY=$(jq -c 'first(.entries[] | select(.email))' fixtures/answer-key.json)
+EMAIL=$(jq -r .email <<<"$ENTRY")
+PASSWORD=$(jq -r .password <<<"$ENTRY")
+
+curl -s "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$FIREBASE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -n --arg e "$EMAIL" --arg p "$PASSWORD" '{email:$e,password:$p,returnSecureToken:true}')" \
+  | jq '{signed_in: (.idToken != null), error: .error.message}'
+```
+
+`"signed_in": true` shows the hash was translated correctly. The query picks a user with an email, since phone-only users can't sign in with a password.
+
+### Clean up the rehearsal
+
+Delete the rehearsal project in the Firebase console, or delete its users from **Authentication → Users**, or with the Admin SDK's `deleteUsers`.
+
+## 9. Run the real migration
+
+Once the rehearsal passes, repeat steps 3–8 with your real data:
+
+1. Export your source into CMF with [`iamigrate export`](../../../reference/cli/export/).
+2. Check `hash_algorithm_counts` in `manifest.json`. Plan password resets for every user whose algorithm isn't `bcrypt` or `scrypt`.
+3. Move what you need into `app_metadata` if it should become a custom claim; `user_metadata` is not imported.
+4. Run `validate` and review every reported problem.
+5. Import a small canary batch first, and verify logins for it.
+6. Import the rest, then run `diff firebase` and handle the follow-up lists.
+
+## Troubleshooting
+
+| Error code / symptom | Cause | Fix |
+| --- | --- | --- |
+| `TRANSLATION_ERROR` … `not one of the Firebase import hashes` | The hash algorithm isn't `bcrypt` or `scrypt` | Reset those users' passwords (see [Step 7](#7-handle-users-that-need-follow-up)) |
+| `TRANSLATION_ERROR` … `scrypt requires a salt` / `params.blockSize` | The scrypt hash is missing its salt or cost parameters in the CMF record | Fix the export so scrypt hashes carry a salt and their parameters |
+| `TRANSLATION_ERROR` … `neither an email nor a phone number` | The user has nothing to sign in with in Firebase | Add an email or phone number to the CMF record |
+| `IMPORT_ERROR` mentioning an existing account or a duplicate email | A user with this uid or email already exists, often from an earlier run | Re-run with `--upsert`, or delete the existing users |
+| `IMPORT_ERROR` mentioning an email or phone number | It isn't in a format Firebase accepts | Run `validate` and fix what it reports |
+| `REQUEST_ERROR` … `status 403` | The credentials lack permission on the project | Use a service account with **Firebase Authentication Admin**, and check `--project` |
+| `REQUEST_ERROR` … `status 429` | Firebase kept throttling the import after five attempts | Re-run for the failed users in smaller files |
+| `--service-account (or GOOGLE_APPLICATION_CREDENTIALS), or --access-token ... is required` | Missing credentials | Set the environment variable, or pass the flag |
+| Sign-in fails with the right password | The hash parameters differ from the ones the CMF record carries, or the Email/Password sign-in method is disabled | Check the project's sign-in methods, then re-export with the right `--hash-*` values |
+
+## See also
+
+- [Export users from Firebase](../../export/firebase/)
+- [`import firebase` reference](../../../reference/cli/import-firebase/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [`diff firebase` reference](../../../reference/cli/diff-firebase/)
+- [Generate test fixtures](../../generate-test-fixtures/)

@@ -9,9 +9,11 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
 )
@@ -24,17 +26,36 @@ func newExportCmd() *cobra.Command {
 		outDir   string
 		adminURL string
 		noGzip   bool
+		fbAuth   firebaseFlags
+		fbHash   firebaseHashFlags
 	)
 
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export identities from a source into CMF",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name {
-				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", and \"keycloak\"; use `iamigrate testdata generate` for the fixture source)", source)
+			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name {
+				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", \"keycloak\", and \"firebase\"; use `iamigrate testdata generate` for the fixture source)", source)
 			}
 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
 				return fmt.Errorf("--in is required for --source %s", source)
+			}
+
+			// Everything a Firebase export needs is checked before the output
+			// file is created, so a mistake doesn't leave an empty export.
+			var fbClient *firebase.Client
+			var fbScrypt *iamhash.FirebaseScryptConfig
+			if source == firebase.Name {
+				var err error
+				if fbClient, err = fbAuth.client(); err != nil {
+					return err
+				}
+				if fbScrypt, err = fbHash.config(); err != nil {
+					return err
+				}
+				if fbScrypt == nil {
+					fmt.Fprintln(cmd.ErrOrStderr(), "iamigrate: no --hash-signer-key given: password hashes are exported as non-portable, so users will have to reset their passwords")
+				}
 			}
 
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -66,6 +87,9 @@ func newExportCmd() *cobra.Command {
 			case keycloak.Name:
 				bar.Stage("exporting users", 0)
 				manifest, err = keycloak.New(nil).Export(ctx, w, keycloak.ExportOptions{Path: in})
+			case firebase.Name:
+				bar.Stage("exporting users", 0)
+				manifest, err = firebase.New(fbClient).Export(ctx, w, firebase.ExportOptions{Scrypt: fbScrypt})
 			default:
 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
 				bar.Stage("exporting users", 0)
@@ -101,12 +125,14 @@ func newExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak")
+	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase")
 	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
+	fbAuth.register(cmd)
+	fbHash.register(cmd)
 	cmd.Flags().BoolVar(&noGzip, "no-gzip", false, "write users.cmf.jsonl uncompressed instead of users.cmf.jsonl.gz")
 	return cmd
 }

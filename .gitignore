@@ -24,3 +24,5 @@ answer-key.json
 /fixtures/
 /export/
 import-report.json
+
+.env

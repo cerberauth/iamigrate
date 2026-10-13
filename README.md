@@ -92,6 +92,36 @@ hashes (its two built-in hash providers) and totp MFA factors -- see
 an import. A disposable Keycloak instance for trying this locally is in
 [`.docker/keycloak`](.docker/keycloak).
 
+## Migrating with Firebase Authentication
+
+Firebase Authentication can also be either side of a migration: import a CMF
+file into a project with the Identity Toolkit bulk endpoint, or export a
+project's users, with their password hashes, from the same API.
+
+```sh
+# Import a CMF file as new users into a project
+iamigrate import firebase --in ./fixtures/users.cmf.jsonl.gz \
+  --project acme-prod --service-account ./service-account.json
+
+# ...or export a project into CMF, with the password hash parameters from
+# the Firebase console (Authentication > Users > Password hash parameters)
+iamigrate export --source firebase --project acme-prod --service-account ./service-account.json \
+  --hash-signer-key "$SIGNER_KEY" --hash-salt-separator "$SALT_SEPARATOR" --out ./export/
+
+# Reconcile a CMF file against the live project after import
+iamigrate diff firebase --in ./fixtures/users.cmf.jsonl.gz \
+  --project acme-prod --service-account ./service-account.json
+```
+
+Firebase only supports importing bcrypt and scrypt password hashes (plus
+SMS second factors) -- see `iamigrate validate --target firebase` to catch
+anything else before running an import. Firebase hashes passwords with a
+modified scrypt keyed by per-project secrets that no API returns, so an
+export without `--hash-signer-key` marks every password non-portable. A
+disposable Firebase Auth emulator for trying this locally is in
+[`.docker/firebase`](.docker/firebase); it stores imported password hashes
+but doesn't verify them, so checking that logins work needs a real project.
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)

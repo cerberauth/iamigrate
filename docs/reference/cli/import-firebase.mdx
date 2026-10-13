@@ -1,0 +1,36 @@
+---
+title: import firebase
+description: Create Firebase Authentication users from a CMF file via the Identity Toolkit API.
+---
+
+import { Aside } from '@/components/docs';
+
+Streams a CMF file and creates users with the bulk `accounts:batchCreate` endpoint, up to 1000 per request. A request can only declare one hash algorithm and parameter set, so users are grouped by theirs. A failed user is recorded in `import-report.json` without stopping the run, and a throttled (`429`) or unavailable (`503`) request is retried up to five times.
+
+For a step-by-step walkthrough, including verifying logins, see [Import users into Firebase](../../../guides/import/firebase/).
+
+## Usage
+
+```sh
+iamigrate import firebase --in users.cmf.jsonl.gz \
+  --project acme-prod --service-account ./service-account.json
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project) |
+| `--service-account` | Service account key JSON path (or `$GOOGLE_APPLICATION_CREDENTIALS`) |
+| `--access-token` | OAuth2 access token, e.g. from `gcloud auth print-access-token` (or `$FIREBASE_ACCESS_TOKEN`); exclusive with `--service-account` |
+| `--upsert` | Overwrite existing users with the same uid instead of failing them |
+| `--report` | `import-report.json` output path (default: alongside `--in`) |
+
+Either a service account or an access token is required. When `$FIREBASE_AUTH_EMULATOR_HOST` is set, the command talks to the Auth emulator at that address and needs only a project ID.
+
+Each CMF user's `source_id` becomes the Firebase uid; the first email becomes `email`/`emailVerified`; the first phone number becomes `phoneNumber`; `profile.name` (else the given and family names) becomes `displayName`; `profile.picture` becomes `photoUrl`; `blocked: true` maps to `disabled`; and `app_metadata` becomes the custom claims. `username`, `user_metadata`, extra emails and phone numbers, and organizations/roles are not imported.
+
+<Aside type="caution">
+  Only `bcrypt` and `scrypt` password hashes are translated (including the modified scrypt of a Firebase export). A user with any other algorithm is not created and is reported under `failed` with `TRANSLATION_ERROR`, as is a user with neither an email nor a phone number. Only `sms` MFA factors are imported; any other factor is dropped and the user is listed under `requires_reenrollment`. Run `iamigrate validate --target firebase` first to catch these before importing.
+</Aside>

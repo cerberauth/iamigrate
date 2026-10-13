@@ -7,6 +7,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/spf13/cobra"
@@ -17,6 +18,7 @@ func newDiffCmd() *cobra.Command {
 	cmd.AddCommand(newDiffAuth0Cmd())
 	cmd.AddCommand(newDiffKratosCmd())
 	cmd.AddCommand(newDiffKeycloakCmd())
+	cmd.AddCommand(newDiffFirebaseCmd())
 	return cmd
 }
 
@@ -128,6 +130,46 @@ func newDiffKeycloakCmd() *cobra.Command {
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
 			report, err := keycloak.New(client).Verify(ctx, r)
+			bar.Done()
+			if err != nil {
+				return err
+			}
+			printDiffReport(cmd, report)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
+	auth.register(cmd)
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newDiffFirebaseCmd() *cobra.Command {
+	var (
+		in   string
+		auth firebaseFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   firebase.Name,
+		Short: "Reconcile a CMF file against a live Firebase project",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			r, closeFn, err := openReader(in)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+			report, err := firebase.New(client).Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err

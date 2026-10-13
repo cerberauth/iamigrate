@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
@@ -22,6 +23,7 @@ func newImportCmd() *cobra.Command {
 	cmd.AddCommand(newImportAuth0Cmd())
 	cmd.AddCommand(newImportKratosCmd())
 	cmd.AddCommand(newImportKeycloakCmd())
+	cmd.AddCommand(newImportFirebaseCmd())
 	return cmd
 }
 
@@ -247,6 +249,67 @@ func newImportKeycloakCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
+	auth.register(cmd)
+	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newImportFirebaseCmd() *cobra.Command {
+	var (
+		in         string
+		upsert     bool
+		reportPath string
+		auth       firebaseFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   firebase.Name,
+		Short: "Create Firebase Authentication users from a CMF file via the Identity Toolkit API",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			f, err := os.Open(in)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r, err := cmf.NewReader(f)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("importing users", countUsers(bar, in))
+			report, err := firebase.New(client).Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{Upsert: upsert})
+			bar.Done()
+			if err != nil {
+				return err
+			}
+
+			b, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if reportPath == "" {
+				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
+			}
+			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+				return err
+			}
+
+			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
+	cmd.Flags().BoolVar(&upsert, "upsert", false, "overwrite existing users with the same uid instead of failing them")
 	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	_ = cmd.MarkFlagRequired("in")

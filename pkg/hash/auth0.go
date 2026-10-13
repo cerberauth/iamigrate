@@ -106,6 +106,9 @@ func intParam(params map[string]any, key string) (int, bool) {
 }
 
 func translateScrypt(p cmf.Password) (Auth0Hash, error) {
+	if p.Params["variant"] == firebaseVariant {
+		return Auth0Hash{}, fmt.Errorf("hash: Firebase's modified scrypt is not one of Auth0's custom_password_hash algorithms")
+	}
 	keylen, _ := intParam(p.Params, "keylen")
 	if keylen == 0 {
 		return Auth0Hash{}, fmt.Errorf("hash: scrypt requires params.keylen for Auth0")
