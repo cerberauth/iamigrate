@@ -5,8 +5,8 @@ description: Dry-run a CMF file against a target's Capabilities and field rules,
 
 Checks every user in a CMF file against the target before any API call is made:
 
-- the target's `Capabilities()` — which password algorithms and MFA types it accepts (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported; for Keycloak: only `pbkdf2`/`argon2` password hashes and `totp` MFA are supported)
-- the target's `ValidateUser()` field rules — for Auth0: a required email, username length/characters and `requires_username`, phone E.164 format, `user_id` and metadata size limits; for Keycloak: `user_metadata`/`app_metadata` key names over 255 characters, or named `username`, `email`, `firstName` or `lastName` (Keycloak fails on the first and drops the others silently); for Kratos: a username over 255 characters or made only of whitespace (Kratos fails with an HTTP 500), and traits checked against an identity schema (required fields, formats, `additionalProperties`) and every user having a value for a trait the schema marks as an identifier, when `--schema-file`/`--connection-config` is given
+- the target's `Capabilities()` — which password algorithms and MFA types it accepts (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported; for Keycloak: only `pbkdf2`/`argon2` password hashes and `totp` MFA are supported; for Firebase: only `bcrypt`/`scrypt` password hashes and `sms` MFA are supported)
+- the target's `ValidateUser()` field rules — for Auth0: a required email, username length/characters and `requires_username`, phone E.164 format, `user_id` and metadata size limits; for Keycloak: `user_metadata`/`app_metadata` key names over 255 characters, or named `username`, `email`, `firstName` or `lastName` (Keycloak fails on the first and drops the others silently); for Firebase: a `source_id` over 128 characters (the uid limit), a missing email and phone number, an invalid email or non-E.164 phone number, `app_metadata` keys that are reserved claim names or exceed 1000 serialized characters, and a password hash that can't be translated; for Kratos: a username over 255 characters or made only of whitespace (Kratos fails with an HTTP 500), and traits checked against an identity schema (required fields, formats, `additionalProperties`) and every user having a value for a trait the schema marks as an identifier, when `--schema-file`/`--connection-config` is given
 - duplicate emails, usernames, or phones within the file, which break uniqueness in any target
 
 Each problem printed shows the user's `source_id`, the field, the rule that failed, and the offending value. Catching these early avoids failing mid-import, often inside an async Auth0 job.
@@ -19,6 +19,8 @@ iamigrate validate --in users.cmf.jsonl.gz --mapping mapping.yaml --target auth0
 iamigrate validate --in users.cmf.jsonl.gz --target kratos --schema-file identity.schema.json
 # or
 iamigrate validate --in users.cmf.jsonl.gz --target keycloak
+# or
+iamigrate validate --in users.cmf.jsonl.gz --target firebase
 ```
 
 ## Flags
@@ -27,7 +29,7 @@ iamigrate validate --in users.cmf.jsonl.gz --target keycloak
 | --- | --- |
 | `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
 | `--mapping` | `mapping.yaml` path (optional) |
-| `--target` | Target connector name: `auth0` \| `kratos` \| `keycloak` (required) |
+| `--target` | Target connector name: `auth0` \| `kratos` \| `keycloak` \| `firebase` (required) |
 | `--schema-file` | Kratos identity schema JSON path, to check traits against (only with `--target kratos`) |
 | `--connection-config` | Auth0 connection JSON path (a `GET /connections/{id}` response, or just its `options` object), to tighten username/identifier rules (only with `--target auth0`) |
 

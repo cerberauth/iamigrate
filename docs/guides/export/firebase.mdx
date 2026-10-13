@@ -1,0 +1,169 @@
+---
+title: Export users from Firebase Authentication
+description: Export users and password hashes from a Firebase project into CMF with iamigrate, including the project hash parameters, and what gets left behind.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through exporting a Firebase Authentication project's users into the Canonical Migration Format (CMF), checking what came out, and preparing the result for import into another provider.
+
+## How iamigrate exports from Firebase
+
+`iamigrate export --source firebase` pages through the project's accounts with the Identity Toolkit API (`accounts:batchGet`, 1000 users per page). Each account becomes one CMF record.
+
+Firebase hashes passwords with a **modified scrypt** that depends on two secrets shared by the whole project: a signer key and a salt separator. The API returns each user's hash and salt, but never those project parameters, and a hash can't be verified anywhere else without them. You copy them from the Firebase console and pass them to the export (see [Step 2](#2-get-the-password-hash-parameters)).
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A Google service account key for the project, with a role that can list users, such as **Firebase Authentication Admin**. Create one under **Project settings → Service accounts → Generate new private key**. Alternatively, an OAuth2 access token, for example from `gcloud auth print-access-token`.
+- Access to the Firebase console, to read the project's password hash parameters.
+
+<Aside type="caution">
+  The export contains password hashes and personal data, and the signer key is a secret. Write the export somewhere access-controlled, keep the signer key out of shell history (use the `FIREBASE_HASH_SIGNER_KEY` environment variable), and delete both once the migration is done.
+</Aside>
+
+## 1. Point iamigrate at the project
+
+```sh
+export FIREBASE_PROJECT_ID=acme-prod
+export GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+```
+
+`--project` and `--service-account` do the same. Without a project ID, the service account's own project is used. With `FIREBASE_ACCESS_TOKEN` or `--access-token`, the project ID is required.
+
+## 2. Get the password hash parameters
+
+In the Firebase console, open **Authentication → Users**, choose the menu at the top right of the user list, and select **Password hash parameters**. It shows four values:
+
+| Console value | Flag | Environment variable |
+| --- | --- | --- |
+| `base64_signer_key` | `--hash-signer-key` | `FIREBASE_HASH_SIGNER_KEY` |
+| `base64_salt_separator` | `--hash-salt-separator` | `FIREBASE_HASH_SALT_SEPARATOR` |
+| `rounds` | `--hash-rounds` (default `8`) | |
+| `mem_cost` | `--hash-mem-cost` (default `14`) | |
+
+```sh
+export FIREBASE_HASH_SIGNER_KEY='jxspr8Ki0RYycVU8zykbdLGjFQ3McFUH0uiiTvC8pVMXAn210wjLNmdZJzxUECKbm0QsEmYUSDzZvpjeJ9WmXA=='
+export FIREBASE_HASH_SALT_SEPARATOR='Bw=='
+```
+
+## 3. Run the export
+
+```sh
+iamigrate export --source firebase --out ./export/
+```
+
+```
+exported 1250 users -> export/users.cmf.jsonl.gz (4 skipped)
+```
+
+The command writes:
+
+```
+export/
+├── users.cmf.jsonl.gz   # one CMF user per exported account
+├── manifest.json        # counts per hash algorithm, plus skipped accounts
+└── mapping.yaml         # scaffolded mapping, with no target set yet
+```
+
+The export is a snapshot. Accounts created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover.
+
+<Aside type="caution">
+  Without `--hash-signer-key`, the export still succeeds, and prints a notice, but every password hash is written with `"portable": false`. Targets then create those users without a password and list them under `requires_password_reset`.
+</Aside>
+
+iamigrate treats every returned hash as Firebase's own modified scrypt. The API doesn't say which algorithm produced a given hash, so check a few users by signing in on the target before you rely on the whole export.
+
+## 4. Review the manifest
+
+```sh
+cat export/manifest.json
+```
+
+```json
+{
+  "record_count": 1250,
+  "hash_algorithm_counts": {
+    "scrypt": 1100
+  },
+  "non_portable_mfa_counts": {
+    "totp": 12
+  },
+  "skipped_records": [
+    {
+      "source_id": "k3TqYb0eXmP4aN1cZs9uV2wRlHf2",
+      "reason": "no email, phone number, or sign-in provider (anonymous or custom-token user)"
+    }
+  ]
+}
+```
+
+- **`hash_algorithm_counts`** shows `scrypt` for every user with a password. Users who only sign in with Google, Apple or a phone number have none.
+- **`non_portable_mfa_counts`** counts second factors that can't move: TOTP enrollments, whose secrets Firebase never returns, and SMS factors whose phone number came back masked.
+- **`skipped_records`** lists accounts that aren't in `users.cmf.jsonl.gz`, by Firebase uid.
+
+<Aside type="caution">
+  The command exits with status `0` even when accounts are skipped. Always check `skipped_records`.
+</Aside>
+
+| Skip reason | Cause |
+| --- | --- |
+| `no email, phone number, or sign-in provider (anonymous or custom-token user)` | The account is an anonymous or custom-token user with nothing to migrate |
+| `unrecognized password hash format: ...` | The hash or salt isn't valid base64, or the hash parameters you passed are out of range |
+| `invalid customAttributes: ...` | The account's custom claims aren't valid JSON |
+
+## 5. Understand what's exported
+
+### Exported
+
+| Firebase field | CMF field |
+| --- | --- |
+| `localId` (uid) | `source_id` |
+| `email` / `emailVerified` | `emails[0]`, marked primary |
+| `phoneNumber` | `phones[0]`, marked primary and verified, since Firebase only stores verified numbers |
+| `displayName` | `profile.name` |
+| `photoUrl` | `profile.picture` |
+| `disabled` | `blocked` |
+| `passwordHash` / `salt` plus the project parameters | `password`: `scrypt`, with `params.variant` set to `firebase`, the signer key in `key`, and `params.salt_separator`, `params.rounds` and `params.mem_cost` |
+| `customAttributes` (custom claims) | `app_metadata` |
+| `mfaInfo` with a phone number | an `sms` MFA factor, `portable: true` when the number isn't masked |
+| `mfaInfo` TOTP enrollment | a `totp` MFA factor, `portable: false` |
+
+The Firebase uid becomes `source_id`, and is what import reports refer to.
+
+### Not exported
+
+- **Linked sign-in providers** (`providerUserInfo`, e.g. a linked Google account). Only the email and phone they carry are kept.
+- **Timestamps**, such as creation and last sign-in date, and the password's last update.
+- **Tenants.** Identity Platform multi-tenancy isn't supported; only the project's default tenant is read.
+- **Anonymous and custom-token users**, skipped as above.
+
+## 6. Prepare for import
+
+`mapping.yaml` is scaffolded with `target: ""`. Set the target before you validate with it:
+
+```sh
+iamigrate map --target <target> --mapping ./export/mapping.yaml
+```
+
+Then check the export against the target's capabilities. No network calls are made:
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target <target>
+```
+
+Firebase's modified scrypt is only understood by Firebase itself. A target that doesn't list `scrypt` fails validation for those users, and one that does, such as Auth0, rejects them at import with `TRANSLATION_ERROR`. To bring such users over anyway, have them reset their password: drop the `password` from their CMF records before importing, or mark it `"portable": false`, and they're created without one and listed under `requires_password_reset`.
+
+From there, follow the import guide for your target:
+
+- [Import users into Auth0](../../import/auth0/)
+- [Import users into Ory Kratos](../../import/kratos/)
+- [Import users into Keycloak](../../import/keycloak/)
+- [Import users into Firebase](../../import/firebase/), for example to move between Firebase projects
+
+## See also
+
+- [`export` reference](../../../reference/cli/export/)
+- [`map` reference](../../../reference/cli/map/)
+- [`validate` reference](../../../reference/cli/validate/)

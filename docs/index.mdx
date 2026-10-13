@@ -20,7 +20,7 @@ import { Card, CardGrid, LinkCard } from '@/components/docs';
 
 <CardGrid stagger>
   <Card title="Export" icon="magnifier">
-    Export identities from a synthetic fixture, a flat CSV/JSON file, a running Ory Kratos instance, or a Keycloak realm export into the Canonical Migration Format (CMF).
+    Export identities from a synthetic fixture, a flat CSV/JSON file, a running Ory Kratos instance, a Keycloak realm export, or a Firebase project into the Canonical Migration Format (CMF).
   </Card>
   <Card title="Map" icon="pencil">
     Scaffold a mapping.yaml from source fields to CMF, with custom metadata flagged for review rather than guessed at.
@@ -68,6 +68,8 @@ iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
   <LinkCard title="Export users from Ory Kratos" description="Export identities and password hashes, and what gets left behind." href="./guides/export/kratos/" />
   <LinkCard title="Import users into Keycloak" description="Step-by-step guide: realm setup, hashes, validation, import, and verification." href="./guides/import/keycloak/" />
   <LinkCard title="Export users from Keycloak" description="Export identities and password hashes from a realm export, and what gets left behind." href="./guides/export/keycloak/" />
+  <LinkCard title="Import users into Firebase" description="Step-by-step guide: hashes, MFA, validation, import, and verification." href="./guides/import/firebase/" />
+  <LinkCard title="Export users from Firebase" description="Export identities and password hashes with the project's hash parameters, and what gets left behind." href="./guides/export/firebase/" />
   <LinkCard title="Generate test fixtures" description="Synthetic users with every hash algorithm and MFA factor type, plus an answer key." href="./guides/generate-test-fixtures/" />
   <LinkCard title="CLI reference" description="All commands and flags." href="./reference/cli/" />
 </CardGrid>

@@ -1,0 +1,28 @@
+# Spins up a disposable Firebase Auth emulator for the gated e2e tests in
+# pkg/connector/firebase/live_test.go. The "demo-" project ID prefix makes
+# firebase-tools refuse to talk to anything but the emulator.
+#
+# The emulator stores and returns imported password hashes but doesn't verify
+# them (it logs users in with its own fake hash), so it proves the wire
+# contract -- batching, pagination, lookup, round trips -- and not that a hash
+# translates correctly. The login test needs a real project; see the live test.
+#
+# Usage:
+#   docker compose -f .docker/firebase/docker-compose.yml up --build --wait
+#   FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
+#     go test ./pkg/connector/firebase/... -run TestLiveFirebase
+#   docker compose -f .docker/firebase/docker-compose.yml down
+services:
+  firebase:
+    build: .
+    container_name: iamigrate-firebase
+    ports:
+      - "127.0.0.1:9099:9099"
+    environment:
+      - CI=true
+      - FIREBASE_TOOLS_DISABLE_UPDATE_CHECK=true
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:9099/').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))\""]
+      interval: 2s
+      timeout: 3s
+      retries: 60

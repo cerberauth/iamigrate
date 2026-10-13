@@ -1,0 +1,22 @@
+---
+title: diff firebase
+description: Reconcile a CMF file against a live Firebase project.
+---
+
+Looks up every CMF user in the project with `accounts:lookup`, by their first email, else their first phone number, and reports anyone missing, plus any drift between CMF `blocked` and the account's `disabled` flag, or between the email's `verified` state and `emailVerified`. A user with neither an email nor a phone number can't be looked up and is listed as `no identifier`.
+
+## Usage
+
+```sh
+iamigrate diff firebase --in users.cmf.jsonl.gz \
+  --project acme-prod --service-account ./service-account.json
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project) |
+| `--service-account` | Service account key JSON path (or `$GOOGLE_APPLICATION_CREDENTIALS`) |
+| `--access-token` | OAuth2 access token (or `$FIREBASE_ACCESS_TOKEN`); exclusive with `--service-account` |
