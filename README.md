@@ -35,6 +35,15 @@ export AUTH0_TOKEN=...
 iamigrate import auth0 --in ./fixtures/users.cmf.jsonl.gz --connection-id con_xxx
 ```
 
+## Importing users without their passwords
+
+If you don't have the password hashes (yet) but the target needs a credential, give each user a unique random password in a copy of the CMF file:
+
+```sh
+iamigrate set-passwords --in ./export/users.cmf.jsonl.gz --out ./export/users-with-passwords.cmf.jsonl.gz \
+  --hash bcrypt:cost=10 --passwords-out ./passwords.csv
+```
+
 ## Migrating from a flat file
 
 ```sh

@@ -34,6 +34,13 @@ func randomSalt(n int) []byte {
 	return b
 }
 
+// HashPassword derives a CMF password object for spec from a cleartext
+// password, so `set-passwords` hashes with the same code and parameters
+// `testdata generate` does.
+func HashPassword(spec HashSpec, password string) (cmf.Password, error) {
+	return generatePassword(spec, password)
+}
+
 // generatePassword derives a CMF password object for spec from a cleartext
 // password, returning the CMF object to embed on the user record.
 func generatePassword(spec HashSpec, password string) (cmf.Password, error) {
