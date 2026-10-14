@@ -1,0 +1,200 @@
+---
+title: Export users from Auth0
+description: Export the users of an Auth0 tenant into CMF with iamigrate, choose which attributes to export, and get the password hashes through Auth0 support when users must keep their password.
+---
+
+import { Aside } from '@/components/docs';
+
+<Aside type="caution">
+  **`iamigrate export --source auth0` can't export password hashes.** Auth0 never returns them through its API, so every user is exported without a password. If you migrate with this export alone, your users will have to reset their password on the target.
+
+  If users must **keep their current password**, you have to ask Auth0 support for a password hash export, and combine it with this one. See [Keeping your users' passwords](#keeping-your-users-passwords). It needs a paid plan, an approval from Auth0, and some lead time, so ask early.
+</Aside>
+
+This guide walks through exporting the users of an Auth0 tenant into the Canonical Migration Format (CMF), choosing which data to export, checking what came out, and preparing the result for import into another provider.
+
+## How iamigrate exports from Auth0
+
+`iamigrate export --source auth0` runs a [user export job](https://auth0.com/docs/manage-users/user-migration/bulk-user-exports) on the tenant (`POST /jobs/users-exports`), waits for it to finish, downloads the result, and converts each user into one CMF record. A job is used rather than paging `GET /users`, because the Management API's user list stops at 1000 users.
+
+Every user of the tenant is exported, whatever their connection, and whether or not they have a password: database users, social users, passwordless users and users from enterprise connections. Use `--connection-id` to export just one connection.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A paid Auth0 plan. Auth0 doesn't offer user export jobs on the Free plan.
+- A Management API token, or a Machine-to-Machine application's client ID and secret, with the `read:users` scope. Create one as described in the [import guide](../../import/auth0/#create-a-management-api-token). If waiting for the job fails with a `403`, also grant `create:users`, which Auth0's reference lists for job status requests.
+
+<Aside type="caution">
+  The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 1. Point iamigrate at the tenant
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_CLIENT_ID=...       # the Machine-to-Machine application's Client ID
+export AUTH0_CLIENT_SECRET=...   # and its Client Secret
+```
+
+Or use a ready-made token with `AUTH0_TOKEN`. `--domain`, `--client-id`, `--client-secret` and `--token` do the same.
+
+## 2. Choose what to export
+
+By default every attribute iamigrate can convert is exported. To export only some of them, pass `--fields`:
+
+```sh
+iamigrate export --source auth0 --fields email,email_verified,given_name,family_name --out ./export/
+```
+
+`user_id` is always exported, because it becomes the CMF `source_id` that import reports and `diff` refer to. The other attributes you can choose from are:
+
+| Attribute | CMF field |
+| --- | --- |
+| `email`, `email_verified` | `emails[0]`, marked primary |
+| `username` | `username` |
+| `phone_number`, `phone_verified` | `phones[0]`, marked primary |
+| `given_name`, `family_name`, `name`, `nickname`, `picture` | `profile` |
+| `blocked` | `blocked` |
+| `app_metadata`, `user_metadata` | `app_metadata`, `user_metadata` |
+
+A name that isn't in this list is refused before anything is requested or written.
+
+Two more options narrow down which users are exported:
+
+| Flag | Effect |
+| --- | --- |
+| `--connection-id con_xxx` | Only the users of this connection. Find the ID in the dashboard under **Authentication → Database**, or with `GET /api/v2/connections`. |
+| `--limit 100` | At most that many users. Use it to try the export, and a trial import, on a small sample first. |
+
+<Aside>
+  `app_metadata` and `user_metadata` are exported whole, not key by key. Any key found in them is listed in the scaffolded `mapping.yaml` as a manual step, so you can decide where it goes on the target.
+</Aside>
+
+## 3. Run the export
+
+```sh
+iamigrate export --source auth0 --out ./export/
+```
+
+```
+iamigrate: Auth0 doesn't return password hashes through its API: users are exported without a password, so they will have to reset it (see the Auth0 export guide to get the hashes from Auth0 support)
+exported 1250 users -> export/users.cmf.jsonl.gz (0 skipped)
+```
+
+The command writes:
+
+```
+export/
+├── users.cmf.jsonl.gz   # one CMF user per exported account
+├── manifest.json        # record count, plus skipped accounts
+└── mapping.yaml         # scaffolded mapping, with no target set yet
+```
+
+The export job can take a while on a large tenant. iamigrate waits for it, then downloads the result right away, since Auth0's download link is only valid for 60 seconds.
+
+The export is a snapshot. Users created, or changed, after it aren't in it, so plan a freeze or a final re-export before cutover.
+
+## 4. Review the manifest
+
+```sh
+cat export/manifest.json
+```
+
+```json
+{
+  "record_count": 1250
+}
+```
+
+`skipped_records` lists any exported entry that had no `user_id`. The command exits with status `0` even then, so check it.
+
+Because there are no passwords, there is no `hash_algorithm_counts`.
+
+## 5. Understand what's exported
+
+The `password` of every CMF record is `null`, and there is no `mfa_factors`.
+
+### Not exported
+
+- **Password hashes.** Auth0 doesn't return them through its API. See [Keeping your users' passwords](#keeping-your-users-passwords).
+- **MFA enrollments.** Users will have to enroll again.
+- **Linked identities.** A social or enterprise user keeps their `user_id` (for example `google-oauth2|1234`), email and profile, but the link to the identity provider isn't carried over. Reconnect that connection on the target to let them sign in the same way.
+- **Roles, permissions, organizations and memberships.**
+- **Timestamps**, such as creation and last login.
+
+## Keeping your users' passwords
+
+Auth0 doesn't expose password hashes through the Management API or the dashboard. The only way to get them is to ask Auth0 support for a **password hash export**. It isn't available on the Free plan, Auth0 may decline the request, and it gives no delivery date, though you can state the date you need it by.
+
+The process, as [Auth0 documents it](https://auth0.com/docs/manage-users/user-migration/export-password-hashes-and-mfa-secrets):
+
+1. **Generate a PGP key pair.** It must be RSA with a 4096-bit key or larger, with an RSA 4096-bit encryption subkey. Elliptic-curve keys are rejected. Use a strong passphrase, and an expiry at least 7 days away. The key's email must be the exact email of the tenant administrator who will open the request.
+2. **Export the public key** in ASCII-armored form. It must not exceed 35,000 characters. If it does, add `--export-options export-minimal` to your `gpg --export` command to drop third-party signatures.
+3. **Open a support case** at [support.auth0.com](https://support.auth0.com) with your tenant name and the public key. The administrator who generated the key must be the one to open it.
+4. **Wait for Auth0's review.** If the request is approved, Auth0 asks for your written approval, a confirmation from another tenant administrator (not needed if you are the only one), and a signed acknowledgment form. An executive at CISO, CSO or VP level or above must sign it, and typed names aren't accepted.
+5. **Download the file** from the link Auth0 emails to the case opener, who must still be a tenant administrator. The link expires after 3 days. The file is encrypted with your public key, so only you can read it.
+6. **Decrypt it:**
+
+   ```sh
+   gpg --output auth0-hashes.json --decrypt auth0-hashes.pgp
+   ```
+
+   Keep your private key and passphrase to yourself, including from Auth0 staff, and back them up offline. If you lose them, you have to submit a new request.
+
+Auth0's page doesn't describe the layout of the decrypted file, and iamigrate doesn't read it, so look at it first. Then add each user's hash to the `password` of the matching record of `users.cmf.jsonl.gz`, matching on `user_id` (the CMF `source_id`):
+
+```json
+"password": {
+  "algorithm": "bcrypt",
+  "hash": { "value": "$2b$10$...", "encoding": "utf8" },
+  "portable": true
+}
+```
+
+Run `iamigrate validate` afterwards, as in the next step, to check the records against the target. Then test a handful of users by signing in on the target before you rely on the whole export.
+
+If Auth0 declines the request, or you'd rather not ask, migrate with this export as is. Users are created without a password and have to reset it.
+
+<Aside type="caution">
+  The decrypted file holds every user's password hash. Keep it in an access-controlled place, never commit it, and delete it as soon as the hashes are merged and imported.
+</Aside>
+
+## 6. Prepare for import
+
+`mapping.yaml` is scaffolded with `target: ""`. Set the target before you validate with it:
+
+```sh
+iamigrate map --target <target> --mapping ./export/mapping.yaml
+```
+
+Then check the export against the target's capabilities. No network calls are made:
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target <target>
+```
+
+From there, follow the import guide for your target:
+
+- [Import users into Auth0](../../import/auth0/), for example to move between tenants
+- [Import users into Ory Kratos](../../import/kratos/)
+- [Import users into Keycloak](../../import/keycloak/)
+- [Import users into Firebase](../../import/firebase/)
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `--domain (or AUTH0_DOMAIN) is required` | No tenant given | Set `AUTH0_DOMAIN` or pass `--domain` |
+| `unknown export field "..."` | A `--fields` name isn't one of the attributes above | Use the attribute names from [Step 2](#2-choose-what-to-export) |
+| `401`/`403` when creating the job | Expired token, wrong client credentials, missing scope, or a Free plan tenant | Get a new token, check `read:users`, and check the plan |
+| `403` while waiting for the job | The token can't read job status | Also grant `create:users` |
+| `429` | Management API rate limit | iamigrate retries by itself. If it keeps failing, wait and run it again |
+| `ended with status "failed"` | The export job failed on Auth0's side | Run it again, with `--connection-id` or `--limit` to make the job smaller |
+
+## See also
+
+- [`export` reference](../../../reference/cli/export/)
+- [`map` reference](../../../reference/cli/map/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [Auth0 data rules](../../data-rules/auth0/)

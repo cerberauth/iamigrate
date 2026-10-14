@@ -145,7 +145,7 @@ func createRole(ctx context.Context, client *Client, role cmf.Role) (string, err
 	var out struct {
 		ID string `json:"id"`
 	}
-	body := map[string]any{"name": role.Name, "description": role.Description}
+	body := map[string]any{keyName: role.Name, "description": role.Description}
 	if _, err := client.doJSON(ctx, http.MethodPost, "/roles", body, &out); err != nil {
 		return "", err
 	}
@@ -180,7 +180,7 @@ func createOrg(ctx context.Context, client *Client, org cmf.Organization) (strin
 // orgBody builds the organization creation payload. Auth0 requires a
 // display_name to have at least 1 character, so it's left out when empty.
 func orgBody(org cmf.Organization) map[string]any {
-	body := map[string]any{"name": org.Name}
+	body := map[string]any{keyName: org.Name}
 	if org.DisplayName != "" {
 		body["display_name"] = org.DisplayName
 	}
