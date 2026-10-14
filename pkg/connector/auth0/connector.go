@@ -87,8 +87,9 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 
 // Verify reconciles every CMF user against the live tenant, looking each
 // one up by email via the Get Users by Email endpoint, else by username or
-// phone via user search, and reports anyone missing, any drift in blocked
-// status, and anyone with no identifier to look up.
+// phone via user search, and reports anyone missing, any drift in the
+// fields Import sets (see userDrift), and anyone with no identifier to
+// look up. Everything is keyed by the CMF source_id.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	var report connector.DiffReport
 	bar := progress.FromContext(ctx)
@@ -102,16 +103,14 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
+		report.SourceCount++
 		path, identifier := lookupPath(u)
 		if path == "" {
 			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
 			continue
 		}
 
-		var found []struct {
-			UserID  string `json:"user_id"`
-			Blocked bool   `json:"blocked"`
-		}
+		var found []tenantUser
 		if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
 			return report, fmt.Errorf("auth0: looking up %s: %w", identifier, err)
 		}
@@ -120,13 +119,67 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
 			continue
 		}
-		if found[0].Blocked != u.Blocked {
-			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{
-				SourceID: u.SourceID, Fields: []string{"blocked"},
-			})
+		report.TargetCount++
+		if drift := userDrift(u, pickUser(found, u.SourceID)); len(drift) > 0 {
+			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{SourceID: u.SourceID, Fields: drift})
 		}
 	}
 	return report, nil
+}
+
+// tenantUser is the part of a Management API user record Verify compares.
+type tenantUser struct {
+	UserID        string `json:"user_id"`
+	Blocked       bool   `json:"blocked"`
+	EmailVerified bool   `json:"email_verified"`
+	Username      string `json:"username"`
+	GivenName     string `json:"given_name"`
+	FamilyName    string `json:"family_name"`
+	Name          string `json:"name"`
+	Nickname      string `json:"nickname"`
+	Picture       string `json:"picture"`
+}
+
+// pickUser returns the lookup result Import would have created for
+// sourceID, else the first one: an email can match users in several
+// connections.
+func pickUser(found []tenantUser, sourceID string) tenantUser {
+	for _, f := range found {
+		if f.UserID == targetUserID(sourceID) {
+			return f
+		}
+	}
+	return found[0]
+}
+
+// userDrift names the fields on which the tenant's user differs from u.
+// Only fields Import sets are compared, and a profile field only when u
+// has a value for it, since Auth0 fills in the others itself (name and
+// nickname default from the email, picture from Gravatar).
+func userDrift(u cmf.User, t tenantUser) []string {
+	var drift []string
+	if t.Blocked != u.Blocked {
+		drift = append(drift, "blocked")
+	}
+	if len(u.Emails) > 0 && t.EmailVerified != u.Emails[0].Verified {
+		drift = append(drift, "email_verified")
+	}
+	for _, f := range []struct {
+		name      string
+		want, got string
+	}{
+		{"username", u.Username, t.Username},
+		{"given_name", u.Profile.GivenName, t.GivenName},
+		{"family_name", u.Profile.FamilyName, t.FamilyName},
+		{"name", u.Profile.Name, t.Name},
+		{"nickname", u.Profile.Nickname, t.Nickname},
+		{"picture", u.Profile.Picture, t.Picture},
+	} {
+		if f.want != "" && f.want != f.got {
+			drift = append(drift, f.name)
+		}
+	}
+	return drift
 }
 
 // lookupPath returns the Management API path finding u in the tenant, and

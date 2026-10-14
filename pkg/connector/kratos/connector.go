@@ -257,6 +257,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
+		report.SourceCount++
 		identifier := loginIdentifier(u)
 		if identifier == "" {
 			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
@@ -273,6 +274,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
 			continue
 		}
+		report.TargetCount++
 		blocked := found[0].State == stateInactive
 		if blocked != u.Blocked {
 			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{

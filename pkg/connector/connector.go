@@ -129,12 +129,21 @@ type DriftEntry struct {
 
 // DiffReport summarizes a reconciliation between CMF and a live target.
 type DiffReport struct {
+	// SourceCount is how many users the CMF file holds, and TargetCount how
+	// many of them were found in the target. They differ by the users
+	// missing from it and by those with no identifier to look up.
+	SourceCount     int          `json:"source_count"`
+	TargetCount     int          `json:"target_count"`
 	MissingInTarget []string     `json:"missing_in_target"`
 	AttributeDrift  []DriftEntry `json:"attribute_drift,omitempty"`
 	// NoIdentifier lists users with no email, username, or phone to look
 	// them up by, so they couldn't be checked at all.
 	NoIdentifier []string `json:"no_identifier,omitempty"`
 }
+
+// CountMismatch reports whether fewer users were found in the target than
+// the CMF file holds.
+func (r DiffReport) CountMismatch() bool { return r.SourceCount != r.TargetCount }
 
 // SourceConnector exports identities from a provider into CMF.
 type SourceConnector interface {
