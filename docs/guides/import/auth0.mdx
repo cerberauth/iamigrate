@@ -279,7 +279,7 @@ jq -r '.requires_reenrollment[]?' fixtures/import-report.json > reenroll.txt
 iamigrate diff auth0 --in ./fixtures/users.cmf.jsonl.gz
 ```
 
-This looks up every user by email, or by username or phone number for users without one, and reports any that are missing from the tenant, plus any mismatch in `blocked` status. Users with none of the three are listed under `no identifier`.
+This looks up every user by email, or by username or phone number for users without one, and reports the user counts on both sides, any that are missing from the tenant, plus any field that differs from the CMF file (`blocked`, `email_verified`, `username` and the name fields), all keyed by `source_id`. Users with none of the three are listed under `no identifier`.
 
 ### Prove that passwords and TOTP work
 

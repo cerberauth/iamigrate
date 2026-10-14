@@ -3,7 +3,13 @@ title: diff auth0
 description: Reconcile a CMF file against a live Auth0 tenant.
 ---
 
-Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint), or, for users without an email, by username or phone number (via user search), and reports anyone missing, plus any drift in `blocked` status. Users with no email, username, or phone number can't be looked up and are listed as `no identifier`.
+Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint), or, for users without an email, by username or phone number (via user search). Users with no email, username, or phone number can't be looked up and are listed as `no identifier`.
+
+Every finding is keyed by the CMF `source_id`:
+
+- **Counts**: how many users the CMF file holds against how many were found in the tenant. They differ by the missing and `no identifier` users.
+- **Missing**: users not found in the tenant.
+- **Attribute drift**: for users found, each field whose value differs from the CMF file: `blocked`, `email_verified`, `username`, `given_name`, `family_name`, `name`, `nickname` and `picture`. Profile fields the CMF user has no value for are skipped, since Auth0 fills in its own defaults. When an email matches users in several connections, the one `import auth0` created is compared.
 
 ## Usage
 

@@ -236,6 +236,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
+		report.SourceCount++
 
 		query := url.Values{"exact": {jsonTrue}, "briefRepresentation": {jsonTrue}}
 		switch {
@@ -257,6 +258,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
 			continue
 		}
+		report.TargetCount++
 		if found[0].Enabled == u.Blocked {
 			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{
 				SourceID: u.SourceID, Fields: []string{"blocked"},

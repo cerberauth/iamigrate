@@ -308,6 +308,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			return report, err
 		}
 		bar.Add(1)
+		report.SourceCount++
 
 		field, value := loginIdentifier(u)
 		if value == "" {
@@ -326,6 +327,7 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
 			continue
 		}
+		report.TargetCount++
 
 		var drift []string
 		if found.Users[0].Disabled != u.Blocked {
