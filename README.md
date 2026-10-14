@@ -51,6 +51,30 @@ iamigrate export --source flatfile --in users.csv --format csv --out ./export/
 iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target auth0
 ```
 
+If the file's columns are named differently, or it is nested JSON, describe them in a `mapping.yaml` and either pass it to `export`, or rewrite the file first with `prepare`:
+
+```yaml
+# mapping.yaml
+fields:
+  - {source: UserID, cmf: source_id}
+  - {source: Mail, cmf: email, transform: "trim|lowercase"}
+  - {source: Active, cmf: blocked, transform: not}
+  - {source: profile.name.first, cmf: given_name}   # nested JSON
+  - {source: hash, cmf: password}                   # sha256 hex digest + salt column:
+  - {cmf: password_algorithm, default: sha256}
+  - {cmf: password_encoding, default: hex}
+  - {source: salt, cmf: password_salt}
+  - {cmf: password_salt_encoding, default: hex}
+```
+
+```sh
+iamigrate export --source flatfile --in users.json --format json --mapping mapping.yaml --out ./export/
+# or
+iamigrate prepare --in users.json --format json --mapping mapping.yaml --out users-prepared.csv
+```
+
+`prepare` also flags password hashes that `export` couldn't read (wrong algorithm for the digest's size, bad encoding, a salt with no encoding), and the [password hashes guide](https://www.cerberauth.com/docs/iamigrate/guides/prepare-password-hashes/) covers salts, encodings and packed formats.
+
 ## Migrating with Ory Kratos
 
 Kratos can be either side of a migration: export identities out of a running

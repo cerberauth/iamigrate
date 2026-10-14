@@ -231,9 +231,14 @@ func decodeBinary(value string, encoding cmf.Encoding) ([]byte, error) {
 		}
 		return b, nil
 	case cmf.EncodingBase64:
-		b, err := base64.RawStdEncoding.DecodeString(strings.TrimRight(value, "="))
+		trimmed := strings.TrimRight(value, "=")
+		b, err := base64.RawStdEncoding.DecodeString(trimmed)
 		if err != nil {
-			return nil, fmt.Errorf("hash: %q is not valid base64: %w", value, err)
+			// The URL-safe alphabet swaps + and / for - and _.
+			var urlErr error
+			if b, urlErr = base64.RawURLEncoding.DecodeString(trimmed); urlErr != nil {
+				return nil, fmt.Errorf("hash: %q is not valid base64: %w", value, err)
+			}
 		}
 		return b, nil
 	default:

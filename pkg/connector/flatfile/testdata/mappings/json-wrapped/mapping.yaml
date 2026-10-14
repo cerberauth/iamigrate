@@ -1,0 +1,6 @@
+records_path: data.users
+fields:
+  - {source: id, cmf: source_id}
+  - {source: mail, cmf: source_id}
+  - {source: login, cmf: username}
+  - {source: mail, cmf: email}

@@ -1,0 +1,22 @@
+[
+  {
+    "password": "d8578edf8458ce06fbc5bb76a58c5ca4",
+    "password_algorithm": "md5",
+    "source_id": "m1"
+  },
+  {
+    "password": "r4l4sXl7cqz/+VlaWio3PsPZEG0=",
+    "password_algorithm": "sha1",
+    "source_id": "m2"
+  },
+  {
+    "password": "$2b$06$fIzRDRdEG3f1wFccB8oNku7/bvEb06u7xyNJr219JZ81vG0SiHVLO",
+    "password_algorithm": "bcrypt",
+    "source_id": "m3"
+  },
+  {
+    "password": "{SSHA}kDI9SWgzBrBbTHhec0FiIJWjKS0BAgMEBQYHCA==",
+    "password_algorithm": "ldap",
+    "source_id": "m4"
+  }
+]

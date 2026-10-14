@@ -1,0 +1,9 @@
+# Unsalted base64 digests in nested JSON: standard padded base64 for one
+# user, URL-safe unpadded for another. A null credentials object is a user
+# with no password.
+fields:
+  - {source: uid, cmf: source_id}
+  - {source: mail, cmf: email}
+  - {source: credentials.digest, cmf: password}
+  - {source: credentials.scheme, cmf: password_algorithm}
+  - {cmf: password_encoding, default: base64}

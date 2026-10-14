@@ -18,6 +18,7 @@ func newRootCmd() *cobra.Command {
 	}
 	root.AddCommand(
 		newTestdataCmd(),
+		newPrepareCmd(),
 		newExportCmd(),
 		newMapCmd(),
 		newValidateCmd(),

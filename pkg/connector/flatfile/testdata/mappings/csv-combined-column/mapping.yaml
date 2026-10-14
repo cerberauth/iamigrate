@@ -1,0 +1,12 @@
+# One column packs algorithm$salt$hexdigest. Each field is cut out of it with
+# a pattern (its first capture group), and the salt, a plain string hashed
+# before the password, is described with constants.
+fields:
+  - {source: id, cmf: source_id}
+  - {source: email, cmf: email}
+  - {source: password, cmf: password_algorithm, pattern: '^([a-z0-9]+)\$'}
+  - {source: password, cmf: password_salt, pattern: '^[a-z0-9]+\$([^$]*)\$'}
+  - {source: password, cmf: password, pattern: '\$([0-9a-f]+)$'}
+  - {cmf: password_encoding, default: hex}
+  - {cmf: password_salt_encoding, default: utf8}
+  - {cmf: password_salt_position, default: prefix}

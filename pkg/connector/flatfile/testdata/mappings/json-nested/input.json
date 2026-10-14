@@ -1,0 +1,17 @@
+[
+  {
+    "uid": "n-1",
+    "profile": {"name": {"first": "Jane", "last": "Doe"}, "locale": "fr-FR"},
+    "contacts": [{"kind": "email", "value": "Jane@Example.com", "confirmed": 1}, {"kind": "phone", "value": "+33100000000"}],
+    "status": {"locked": false},
+    "credentials": {"hash": "$2a$10$jSTQjfDV/IlpY/Ix05MjZu48Y8D0QpllULBdx0U40N/VqKqjN91dW", "algo": "bcrypt"},
+    "attrs": {"tier": "gold", "tags": ["a", "b"]},
+    "prefs": {"theme": "dark"}
+  },
+  {
+    "uid": "n-2",
+    "profile": {"name": {"first": "John"}},
+    "contacts": [{"kind": "email", "value": "john@example.com", "confirmed": 0}],
+    "status": {"locked": true}
+  }
+]

@@ -1,0 +1,10 @@
+# One column, several schemes picked by a numeric code. Raw digests (1, 2)
+# need the algorithm and are told apart by their look (hex or base64), so no
+# encoding is given; bcrypt and LDAP hashes (3, 4) describe themselves, and
+# the code only has to name something valid.
+fields:
+  - {source: login, cmf: source_id}
+  - {source: pwd, cmf: password}
+  - source: pwd_type
+    cmf: password_algorithm
+    values: {"1": md5, "2": sha1, "3": bcrypt, "4": ldap}

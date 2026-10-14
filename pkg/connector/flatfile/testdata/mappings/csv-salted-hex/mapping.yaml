@@ -1,0 +1,14 @@
+# Hex digests with the salt in its own column. The algorithm is spelled
+# differently from row to row (SHA-256, sha512, SHA1); whether the salt goes
+# before or after the password is a column too, in the source's own words.
+fields:
+  - {source: id, cmf: source_id}
+  - {source: email, cmf: email}
+  - {source: hash, cmf: password}
+  - {source: hash_type, cmf: password_algorithm}
+  - {cmf: password_encoding, default: hex}
+  - {source: salt, cmf: password_salt}
+  - {cmf: password_salt_encoding, default: hex}
+  - source: salt_order
+    cmf: password_salt_position
+    values: {before: prefix, after: suffix}

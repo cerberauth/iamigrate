@@ -12,11 +12,18 @@ import (
 
 // FieldMapping pairs one source field with the CMF field it was written to
 // (or, on the import side, one CMF field with the target field it maps to),
-// plus any transform applied along the way.
+// plus any transform applied along the way. Default is the value used when
+// the source field is missing or empty; with no Source it is a constant.
+// Pattern keeps only the first capture group of a regular expression, to
+// split a value that packs several fields (e.g. "sha1$salt$hash"), and
+// Values translates source values (e.g. a scheme code to an algorithm name).
 type FieldMapping struct {
-	Source    string `yaml:"source"`
-	CMF       string `yaml:"cmf"`
-	Transform string `yaml:"transform,omitempty"`
+	Source    string            `yaml:"source,omitempty"`
+	CMF       string            `yaml:"cmf"`
+	Pattern   string            `yaml:"pattern,omitempty"`
+	Values    map[string]string `yaml:"values,omitempty"`
+	Transform string            `yaml:"transform,omitempty"`
+	Default   string            `yaml:"default,omitempty"`
 }
 
 // MetadataPlacement decides where an opaque metadata key ends up on the
@@ -33,10 +40,13 @@ type ManualStep struct {
 	Reason string `yaml:"reason"`
 }
 
-// Mapping is the parsed form of mapping.yaml.
+// Mapping is the parsed form of mapping.yaml. RecordsPath is the dotted path
+// to the array of users in a JSON source file whose root is an object, e.g.
+// "data.users".
 type Mapping struct {
 	Target       string              `yaml:"target"`
 	ConnectionID string              `yaml:"connection_id,omitempty"`
+	RecordsPath  string              `yaml:"records_path,omitempty"`
 	Fields       []FieldMapping      `yaml:"fields,omitempty"`
 	AppMetadata  []MetadataPlacement `yaml:"app_metadata,omitempty"`
 	UserMetadata []MetadataPlacement `yaml:"user_metadata,omitempty"`

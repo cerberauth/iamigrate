@@ -1,0 +1,12 @@
+fields:
+  - {source: uid, cmf: source_id}
+  - {source: profile.name.first, cmf: given_name}
+  - {source: profile.name.last, cmf: family_name}
+  - {source: profile.locale, cmf: locale}
+  - {source: contacts.0.value, cmf: email, transform: lowercase}
+  - {source: contacts.0.confirmed, cmf: email_verified}
+  - {source: status.locked, cmf: blocked}
+  - {source: credentials.hash, cmf: password}
+  - {source: credentials.algo, cmf: password_algorithm}
+  - {source: attrs.tier, cmf: app_metadata.tier}
+  - {source: prefs.theme, cmf: user_metadata.theme}

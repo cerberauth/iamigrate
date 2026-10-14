@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 )
@@ -35,6 +36,10 @@ var (
 // flat-file source, or an explicit --hash flag from the fixture generator.
 type Hint struct {
 	Algorithm cmf.Algorithm
+	// Encoding, when set, is how a raw digest is encoded (hex or base64,
+	// the latter standard or URL-safe, padded or not) instead of guessing
+	// it from the characters.
+	Encoding cmf.Encoding
 	// Salt, if the source stores it in a separate column rather than
 	// embedded in the hash string.
 	Salt []byte
@@ -151,10 +156,60 @@ func normalizeLDAP(raw string) (cmf.Password, error) {
 	}, nil
 }
 
+// digestSizes is the length in bytes of each raw digest algorithm's output,
+// to catch a hash labeled with the wrong algorithm. hmac isn't listed: its
+// size depends on the underlying digest.
+var digestSizes = map[cmf.Algorithm]int{
+	cmf.AlgMD4: 16, cmf.AlgMD5: 16, cmf.AlgSHA1: 20, cmf.AlgSHA256: 32, cmf.AlgSHA512: 64,
+}
+
+// aliases are the spellings ParseAlgorithm accepts besides the CMF names,
+// compared lowercase with "-", "_" and spaces removed.
+var aliases = map[string]cmf.Algorithm{
+	"argon2id": cmf.AlgArgon2, "argon2i": cmf.AlgArgon2,
+	"sha": cmf.AlgSHA1, "sha2256": cmf.AlgSHA256, "sha2512": cmf.AlgSHA512,
+}
+
+// ParseAlgorithm returns the CMF algorithm named by s, ignoring case and
+// the separators in spellings like "SHA-256" or "sha_256".
+func ParseAlgorithm(s string) (cmf.Algorithm, error) {
+	key := strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "").Replace(s))
+	if a, ok := aliases[key]; ok {
+		return a, nil
+	}
+	for _, a := range []cmf.Algorithm{
+		cmf.AlgBcrypt, cmf.AlgScrypt, cmf.AlgPBKDF2, cmf.AlgArgon2, cmf.AlgMD5, cmf.AlgSHA1,
+		cmf.AlgSHA256, cmf.AlgSHA512, cmf.AlgMD4, cmf.AlgHMAC, cmf.AlgLDAP,
+	} {
+		if key == string(a) {
+			return a, nil
+		}
+	}
+	return "", fmt.Errorf("hash: unknown algorithm %q", s)
+}
+
+// DecodeBytes decodes s as enc: hex, base64 (standard or URL-safe alphabet,
+// padded or not) or utf8 (the bytes of the string itself, for a salt kept
+// as plain text).
+func DecodeBytes(s string, enc cmf.Encoding) ([]byte, error) {
+	if enc == cmf.EncodingUTF8 {
+		return []byte(s), nil
+	}
+	return decodeBinary(s, enc)
+}
+
 func normalizeRawDigest(raw string, hint Hint) (cmf.Password, error) {
-	value, encoding, err := detectDigestEncoding(raw)
+	if _, ok := digestSizes[hint.Algorithm]; !ok && hint.Algorithm != cmf.AlgHMAC {
+		return cmf.Password{}, fmt.Errorf("hash: %q is not a valid %s hash (a %s hash carries its own parameters; a raw digest must be md4, md5, sha1, sha256, sha512 or hmac)", raw, hint.Algorithm, hint.Algorithm)
+	}
+	value, encoding, err := detectDigestEncoding(raw, hint.Encoding)
 	if err != nil {
 		return cmf.Password{}, err
+	}
+	if want, ok := digestSizes[hint.Algorithm]; ok {
+		if b, err := decodeBinary(value, encoding); err != nil || len(b) != want {
+			return cmf.Password{}, fmt.Errorf("hash: %q is not a %s digest (%d bytes expected, got %d): is the algorithm or the encoding wrong?", raw, hint.Algorithm, want, len(b))
+		}
 	}
 
 	p := cmf.Password{
@@ -183,7 +238,24 @@ func normalizeRawDigest(raw string, hint Hint) (cmf.Password, error) {
 	return p, nil
 }
 
-func detectDigestEncoding(raw string) (value string, encoding cmf.Encoding, err error) {
+// detectDigestEncoding returns raw in a canonical form (lowercase hex, or
+// standard padded base64) and its encoding: the one given, or else the one
+// it looks like, with hex preferred when both fit.
+func detectDigestEncoding(raw string, given cmf.Encoding) (value string, encoding cmf.Encoding, err error) {
+	switch given {
+	case "":
+	case cmf.EncodingHex, cmf.EncodingBase64:
+		b, err := decodeBinary(raw, given)
+		if err != nil {
+			return "", "", err
+		}
+		if given == cmf.EncodingHex {
+			return hex.EncodeToString(b), given, nil
+		}
+		return base64.StdEncoding.EncodeToString(b), given, nil
+	default:
+		return "", "", fmt.Errorf("hash: a digest is encoded as hex or base64, not %q", given)
+	}
 	if hexRE.MatchString(raw) {
 		if _, err := hex.DecodeString(raw); err == nil {
 			return raw, cmf.EncodingHex, nil

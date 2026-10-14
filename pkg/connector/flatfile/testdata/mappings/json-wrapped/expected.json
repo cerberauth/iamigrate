@@ -1,0 +1,15 @@
+[
+  {
+    "email": "jane@example.com",
+    "source_id": "w-1",
+    "username": "jdoe"
+  },
+  {
+    "email": "john@example.com",
+    "source_id": "john@example.com",
+    "username": "jsmith"
+  },
+  {
+    "username": "nobody"
+  }
+]
