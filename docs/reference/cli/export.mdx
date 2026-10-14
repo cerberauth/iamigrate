@@ -3,9 +3,9 @@ title: export
 description: Export identities from a source into CMF.
 ---
 
-Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Four sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); and `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable. Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
+Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Five sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable; and `auth0`, which runs a user export job on an Auth0 tenant and exports every user, with the attributes you choose, but **without passwords**, since Auth0 never returns password hashes through its API. Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
 
-For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/).
+For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/). For Auth0, including how to get the password hashes from Auth0 support, see [Export users from Auth0](../../../guides/export/auth0/).
 
 ## Usage
 
@@ -21,13 +21,17 @@ iamigrate export --source keycloak --in ./realm-export/ --out ./export/
 # or, from a Firebase project
 iamigrate export --source firebase --project acme-prod --service-account ./service-account.json \
   --hash-signer-key "$SIGNER_KEY" --hash-salt-separator "$SALT_SEPARATOR" --out ./export/
+
+# or, from an Auth0 tenant (no passwords), with only some attributes
+AUTH0_DOMAIN=acme.us.auth0.com AUTH0_TOKEN=... iamigrate export --source auth0 \
+  --fields email,email_verified,given_name,family_name --out ./export/
 ```
 
 ## Flags
 
 | Flag | Description |
 | --- | --- |
-| `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` \| `firebase` (required) |
+| `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
 | `--in` | Input file path (flatfile source), or `kc.sh export` realm file or directory (keycloak source) |
 | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
 | `--out` | Output directory (default `./export/`) |
@@ -39,6 +43,13 @@ iamigrate export --source firebase --project acme-prod --service-account ./servi
 | `--hash-salt-separator` | The Firebase project's base64 scrypt salt separator (or `$FIREBASE_HASH_SALT_SEPARATOR`) |
 | `--hash-rounds` | The Firebase project's scrypt rounds (default `8`) |
 | `--hash-mem-cost` | The Firebase project's scrypt memory cost (default `14`) |
+| `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`; auth0 source) |
+| `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`; auth0 source); exclusive with `--client-id` |
+| `--client-id` | Machine-to-Machine application client ID, to get a token via client credentials (or `$AUTH0_CLIENT_ID`; auth0 source) |
+| `--client-secret` | Machine-to-Machine application client secret (or `$AUTH0_CLIENT_SECRET`; auth0 source) |
+| `--connection-id` | Export only the users of this Auth0 connection, e.g. `con_xxx` (default: every connection; auth0 source) |
+| `--fields` | Export only these Auth0 user attributes, comma-separated: `email`, `email_verified`, `username`, `phone_number`, `phone_verified`, `given_name`, `family_name`, `name`, `nickname`, `picture`, `blocked`, `app_metadata`, `user_metadata`. `user_id` is always exported. Default: all of them (auth0 source) |
+| `--limit` | Export at most this many users, to try an export on a sample (default: no limit; auth0 source) |
 | `--no-gzip` | Write `users.cmf.jsonl` uncompressed instead of `users.cmf.jsonl.gz`. Every command that reads `--in` accepts either. |
 
 ## Output

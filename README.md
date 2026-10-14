@@ -122,6 +122,20 @@ disposable Firebase Auth emulator for trying this locally is in
 [`.docker/firebase`](.docker/firebase); it stores imported password hashes
 but doesn't verify them, so checking that logins work needs a real project.
 
+## Exporting from Auth0
+
+Auth0 can also be a source: `export --source auth0` runs a user export job and
+writes every user of the tenant into CMF, with only the attributes you pick.
+It can't export password hashes, which Auth0 never returns through its API, so
+users come out without a password; getting the hashes takes a request to Auth0
+support (see the [export guide](docs/guides/export/auth0.mdx)).
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_TOKEN=...
+iamigrate export --source auth0 --fields email,email_verified,given_name,family_name --out ./export/
+```
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)

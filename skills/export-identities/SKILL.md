@@ -33,6 +33,7 @@ Ask which IdP the user is exporting from if it isn't stated. Then:
 |---|---|
 | Ory Kratos | native: `iamigrate export --source kratos` |
 | Keycloak | native, but from a **file, not the live server**: run `kc.sh export --realm <name> --dir <out> --users realm_file` on the Keycloak host/container first (the Admin API never returns password hashes), then `iamigrate export --source keycloak --in <out>` |
+| Auth0 | native, **without passwords**: `iamigrate export --source auth0 [--fields ...] [--connection-id ...]`. The API never returns hashes; they take a PGP-encrypted export from Auth0 support (see docs/guides/export/auth0.mdx). Tell the user before they plan a cutover |
 | CSV / JSON dump (DB table, legacy app) | native: `iamigrate export --source flatfile` |
 | Any other IdP | get the provider's own user export (with password hashes if it offers them), reshape it into a flatfile CSV/JSON, then `--source flatfile` |
 

@@ -45,7 +45,7 @@ func targetUserID(sourceID string) string {
 func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, error) {
 	var flags userFlags
 	rec := map[string]any{
-		"user_id": importUserID(u.SourceID),
+		keyUserID: importUserID(u.SourceID),
 	}
 	if len(u.Emails) == 0 {
 		return nil, flags, errEmailRequired
@@ -66,7 +66,7 @@ func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, e
 		rec["family_name"] = u.Profile.FamilyName
 	}
 	if u.Profile.Name != "" {
-		rec["name"] = u.Profile.Name
+		rec[keyName] = u.Profile.Name
 	}
 	if u.Profile.Nickname != "" {
 		rec["nickname"] = u.Profile.Nickname

@@ -467,26 +467,39 @@ func isTransient(err error) bool {
 	return errors.As(err, &netErr) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
+// jobState is the part of a Management API job iamigrate reads while
+// waiting on it: its status, and for a finished export job the URL its
+// result can be downloaded from.
+type jobState struct {
+	Status   string `json:"status"`
+	Location string `json:"location"`
+}
+
 func pollJob(ctx context.Context, client *Client, jobID string) (string, error) {
+	job, err := waitJob(ctx, client, jobID)
+	return job.Status, err
+}
+
+// waitJob polls a job, backing off, until it leaves the pending and
+// processing states.
+func waitJob(ctx context.Context, client *Client, jobID string) (jobState, error) {
 	interval := pollInterval
 	for {
-		var out struct {
-			Status string `json:"status"`
-		}
+		var out jobState
 		err := retryTransient(ctx, isTransient, func() error {
 			_, err := client.doJSON(ctx, http.MethodGet, "/jobs/"+jobID, nil, &out)
 			return err
 		})
 		if err != nil {
-			return "", fmt.Errorf("auth0: polling job %s: %w", jobID, err)
+			return jobState{}, fmt.Errorf("auth0: polling job %s: %w", jobID, err)
 		}
 		if out.Status != "pending" && out.Status != "processing" {
-			return out.Status, nil
+			return out, nil
 		}
 
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return jobState{}, ctx.Err()
 		case <-time.After(interval):
 		}
 		interval *= 2

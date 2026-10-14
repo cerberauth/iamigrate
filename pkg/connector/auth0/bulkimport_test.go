@@ -34,6 +34,7 @@ type jobServer struct {
 	failPolls      int32             // leading polls answered 503
 	jobErrors      []map[string]any
 
+	releaseOnce sync.Once       // releases gate after the first badJobs failure
 	gate        chan struct{}   // if set, jobs stay "processing" until it's closed
 	badJobs     map[string]bool // jobs, by first user_id, whose status request is answered 400 once two jobs are submitted
 	inflight    int             // jobs submitted and not yet finished
@@ -98,6 +99,11 @@ func newJobServer(t *testing.T, statuses map[string]string) *jobServer {
 		if s.badJobs[first] && len(s.submitted) >= 2 {
 			s.inflight--
 			w.WriteHeader(http.StatusBadRequest)
+			if s.gate != nil {
+				// Release the held jobs only once the failure has been
+				// answered, and leave the client time to act on it.
+				s.releaseOnce.Do(func() { time.AfterFunc(200*time.Millisecond, func() { close(s.gate) }) })
+			}
 			return
 		}
 		if s.badJobs[first] {
@@ -312,11 +318,10 @@ func TestRunBulkImportStopsSubmittingAfterAJobErrorButKeepsRunningJobs(t *testin
 	defer setFastPolling(t)()
 	srv := newJobServer(t, nil)
 	// The first chunk's job can't be read once a second job is running; that
-	// second job is held until after the failure has been noticed, so no
-	// third job can start before then.
+	// second job is held until shortly after that failure is served, so no
+	// third job can start before it has been noticed.
 	srv.badJobs = map[string]bool{"u0000": true}
 	srv.gate = make(chan struct{})
-	time.AfterFunc(300*time.Millisecond, func() { close(srv.gate) })
 
 	client := auth0.NewClient(srv.URL, "test-token")
 	users := manyUsers(4000)
