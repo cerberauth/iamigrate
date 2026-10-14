@@ -21,6 +21,7 @@ func newRootCmd() *cobra.Command {
 		newExportCmd(),
 		newMapCmd(),
 		newValidateCmd(),
+		newSetPasswordsCmd(),
 		newImportCmd(),
 		newDiffCmd(),
 	)
