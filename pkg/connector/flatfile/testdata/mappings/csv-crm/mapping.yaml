@@ -1,0 +1,10 @@
+fields:
+  - {source: UserID, cmf: source_id, transform: trim}
+  - {source: Mail, cmf: email, transform: "trim|lowercase"}
+  - {source: FirstName, cmf: given_name}
+  - {source: LastName, cmf: family_name}
+  - {source: Active, cmf: blocked, transform: not}
+  - {source: Pwd, cmf: password}
+  - {cmf: password_algorithm, default: bcrypt}
+  - {source: Lang, cmf: locale}
+  - {source: Plan, cmf: app_metadata.plan}

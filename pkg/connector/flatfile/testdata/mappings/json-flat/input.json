@@ -1,0 +1,4 @@
+[
+  {"id": 1001, "email_address": "jane@example.com", "first": "Jane", "last": "Doe", "disabled": "yes", "country": "fr", "verified": true, "nickname": null},
+  {"id": 1002, "email_address": "john@example.com", "first": "John", "last": "Smith", "disabled": "no", "country": "us", "verified": false}
+]

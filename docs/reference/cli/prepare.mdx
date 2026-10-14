@@ -1,0 +1,76 @@
+---
+title: prepare
+description: Rewrite a CSV or JSON file, with any column names, password hash formats and layout, into the columns the flat-file export reads.
+---
+
+Reads a CSV or JSON file whose columns are named however its source system named them, and writes a new file in the column convention [`export --source flatfile`](../export/) reads. A `mapping.yaml` describes how one file's columns map to the convention, so the same command handles any layout: write one mapping per source.
+
+The input is never modified. If you'd rather skip the intermediate file, `export --source flatfile --mapping` applies the same mapping while exporting; a prepared file exports exactly like the original does with its mapping.
+
+## Usage
+
+```sh
+iamigrate prepare --in users.csv --mapping mapping.yaml --out users-prepared.csv
+iamigrate export --source flatfile --in users-prepared.csv --out ./export/
+
+# JSON in, CSV out
+iamigrate prepare --in users.json --format json --mapping mapping.yaml --out users-prepared.csv --out-format csv
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CSV or JSON file to read (required) |
+| `--format` | Input format: `csv` \| `json` (default `csv`) |
+| `--mapping` | `mapping.yaml` describing how the file's columns map to CMF fields (required) |
+| `--out` | File to write; must differ from `--in` (required). Created with mode `0600`, since it can hold password hashes |
+| `--out-format` | Output format: `csv` \| `json` (default: the input format) |
+
+Records that `export` would skip are written anyway, and listed in a warning: no `source_id`, or a password hash that can't be read (wrong algorithm for its size, bad encoding, a salt with no encoding...). Fix the mapping or the data and run `prepare` again; there is no need to wait for the export or the import to find out.
+
+## The mapping file
+
+```yaml
+records_path: data.users        # JSON only: where the array of users is, when the root is an object
+fields:
+  - {source: UserID, cmf: source_id, transform: trim}
+  - {source: Mail, cmf: email, transform: "trim|lowercase"}
+  - {source: Active, cmf: blocked, transform: not}
+  - {cmf: password_algorithm, default: bcrypt}
+  - {source: Plan, cmf: app_metadata.plan}
+```
+
+Each entry reads the `source` column, runs its `transform`, and writes the result to its `cmf` field.
+
+| Key | Description |
+| --- | --- |
+| `source` | Column of the input file. For JSON, nested values are addressed with dots and array positions from 0: `profile.name.first`, `contacts.0.value` |
+| `cmf` | One of `source_id`, `email`, `email_verified`, `username`, `given_name`, `family_name`, `locale`, `blocked`, or one of the [password columns](#password-columns), or `app_metadata.<key>` / `user_metadata.<key>` to place a value in a metadata object (required) |
+| `pattern` | A regular expression ([Go syntax](https://pkg.go.dev/regexp/syntax)) with a capture group. The value becomes the first group, or nothing when the expression doesn't match. Cuts a field out of a value that packs several, like `sha1$salt$hash` |
+| `values` | Translates source values, e.g. `{"1": md5, "2": sha1}` for scheme codes. Values not listed are kept |
+| `transform` | One or more of `trim`, `lowercase`, `uppercase`, `bool`, `not`, joined with `\|` and run left to right. `bool` turns `true`/`false`, `yes`/`no`, `y`/`n`, `on`/`off`, `t`/`f`, `1`/`0` (any case) into `true`/`false`; `not` does the same and inverts it, for a source's `active` or `enabled` column that is the CMF `blocked` |
+| `default` | Value to use when the source is missing or empty (after `pattern` and `values`); with no `source`, a constant. Transforms apply to it too |
+
+Entries need a `source`, a `default`, or both. A value goes through `pattern`, then `values`, then `default`, then `transform`.
+
+## Password columns
+
+A password hash is described by several columns. Only `password` is needed for a hash that describes itself (bcrypt, `$argon2id$...`, `$pbkdf2-sha256$...`, LDAP `{SSHA}...`): it is recognized from the string. A **raw digest** (md5, sha1, sha256, sha512) cannot be recognized, so say what it is:
+
+| Column | Meaning |
+| --- | --- |
+| `password` | The hash itself |
+| `password_algorithm` | `md5`, `sha1`, `sha256`, `sha512`, `md4`, `bcrypt`, `scrypt`, `pbkdf2`, `argon2`, `ldap`. Spelled any way you like, `SHA-256` or `Sha_256` included; anything else stops the run. Required for a raw digest |
+| `password_encoding` | `hex` or `base64` (standard or URL-safe alphabet, padded or not). Optional: without it, hex or padded standard base64 is detected from the characters |
+| `password_salt` | The salt, when it is stored apart from the hash |
+| `password_salt_encoding` | `hex`, `base64` or `utf8` (the salt is the text itself). Required with a salt: a salt can't be guessed |
+| `password_salt_position` | `prefix` if the salt goes before the password when hashing, `suffix` if after (default `suffix`) |
+
+The size of a raw digest is checked against its algorithm (md5 is 16 bytes, sha1 20, sha256 32, sha512 64), so a hash labeled with the wrong algorithm shows up in `prepare` rather than as logins that never work. See [Prepare password hashes from a flat file](../../../guides/prepare-password-hashes/) for worked examples.
+
+- **Fallbacks.** When several entries write the same `cmf` field, the first one that has a value wins: map `id` to `source_id`, then `mail` to `source_id`, to use the email for users without an ID.
+- **Columns you don't map.** A column that isn't the `source` of any entry is kept as it is, so a mapping only needs to cover what differs from the convention. A column the flat-file export doesn't recognize ends up in `app_metadata` and is flagged as a manual step. A column that *is* a `source` is only available under the `cmf` fields it's mapped to; to keep it under its own name too, add an entry for that.
+- **Booleans.** Whatever is written to `blocked` or `email_verified` must be a recognizable boolean: a value like `maybe` stops the command with the record number rather than becoming `false`. Without `email_verified`, emails are exported as verified.
+- **JSON.** Nested objects and arrays are flattened as described above; `null` values are left out. The root is either an array of users, or an object with `records_path` pointing at that array.
+- **CSV.** A UTF-8 byte-order mark, as written by spreadsheet exports, is ignored.

@@ -25,6 +25,7 @@ func newExportCmd() *cobra.Command {
 		source   string
 		in       string
 		format   string
+		mapPath  string
 		outDir   string
 		adminURL string
 		noGzip   bool
@@ -43,6 +44,17 @@ func newExportCmd() *cobra.Command {
 			}
 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
 				return fmt.Errorf("--in is required for --source %s", source)
+			}
+
+			var fileMapping mapping.Mapping
+			if mapPath != "" {
+				if source != flatfile.Name {
+					return fmt.Errorf("--mapping only applies to --source %s", flatfile.Name)
+				}
+				var err error
+				if fileMapping, err = mapping.Load(mapPath); err != nil {
+					return err
+				}
 			}
 
 			// Everything a Firebase export needs is checked before the output
@@ -112,7 +124,7 @@ func newExportCmd() *cobra.Command {
 				bar.Stage("exporting users", 0)
 				manifest, err = auth0.New(a0Client).Export(ctx, w, a0Export)
 			default:
-				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format)}
+				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format), Mapping: fileMapping}
 				bar.Stage("exporting users", 0)
 				manifest, err = flatfile.New().Export(ctx, w, opts)
 			}
@@ -136,6 +148,9 @@ func newExportCmd() *cobra.Command {
 				return err
 			}
 			m := mapping.Scaffold("", "", appKeys, userKeys)
+			// Keep how the file's columns were read next to the export, and
+			// don't lose it when --mapping is the file written here.
+			m.RecordsPath, m.Fields = fileMapping.RecordsPath, fileMapping.Fields
 			if err := mapping.Save(filepath.Join(outDir, "mapping.yaml"), m); err != nil {
 				return err
 			}
@@ -150,6 +165,7 @@ func newExportCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
+	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
 	fbAuth.register(cmd)

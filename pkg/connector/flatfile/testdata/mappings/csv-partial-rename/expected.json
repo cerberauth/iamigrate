@@ -1,0 +1,16 @@
+[
+  {
+    "department": "sales",
+    "email": "jane@example.com",
+    "family_name": "Doe",
+    "given_name": "Jane",
+    "source_id": "u1"
+  },
+  {
+    "department": "ops",
+    "email": "john@example.com",
+    "family_name": "Smith",
+    "given_name": "John",
+    "source_id": "u2"
+  }
+]

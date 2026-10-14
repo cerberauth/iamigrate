@@ -1,0 +1,4 @@
+UserID,Mail,FirstName,LastName,Active,Pwd,Lang,Plan
+c-100,  Jane.Doe@Example.COM ,Jane,Doe,Y,$2a$10$jSTQjfDV/IlpY/Ix05MjZu48Y8D0QpllULBdx0U40N/VqKqjN91dW,fr,gold
+c-101,john@example.com,John,Smith,N,,en,
+,orphan@example.com,No,Id,Y,,en,free

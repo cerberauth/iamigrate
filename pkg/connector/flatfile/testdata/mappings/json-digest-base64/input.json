@@ -1,0 +1,23 @@
+[
+  {
+    "uid": "b1",
+    "mail": "jane@example.com",
+    "credentials": {
+      "scheme": "MD5",
+      "digest": "DRB9CfW75Ayt495ccenptw=="
+    }
+  },
+  {
+    "uid": "b2",
+    "mail": "john@example.com",
+    "credentials": {
+      "scheme": "SHA256",
+      "digest": "y3HNP1mQlTK3gyV_X5fQUCryWCMfnRfL52J5nAu0oPY"
+    }
+  },
+  {
+    "uid": "b3",
+    "mail": "ann@example.com",
+    "credentials": null
+  }
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "blocked": "true",
+    "country": "fr",
+    "email": "jane@example.com",
+    "email_verified": "true",
+    "family_name": "Doe",
+    "given_name": "Jane",
+    "source_id": "1001"
+  },
+  {
+    "blocked": "false",
+    "country": "us",
+    "email": "john@example.com",
+    "email_verified": "false",
+    "family_name": "Smith",
+    "given_name": "John",
+    "source_id": "1002"
+  }
+]

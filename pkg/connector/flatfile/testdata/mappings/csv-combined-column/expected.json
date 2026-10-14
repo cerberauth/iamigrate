@@ -1,0 +1,39 @@
+[
+  {
+    "email": "jane@example.com",
+    "password": "6cb40f8e1040a12cdcba26d36c1679ce8af7eeaf",
+    "password_algorithm": "sha1",
+    "password_encoding": "hex",
+    "password_salt": "Xk29fa",
+    "password_salt_encoding": "utf8",
+    "password_salt_position": "prefix",
+    "source_id": "d1"
+  },
+  {
+    "email": "john@example.com",
+    "password": "d5747b5512589470f79cf6da9dbeae32",
+    "password_algorithm": "md5",
+    "password_encoding": "hex",
+    "password_salt": "q8Zr1b",
+    "password_salt_encoding": "utf8",
+    "password_salt_position": "prefix",
+    "source_id": "d2"
+  },
+  {
+    "email": "ann@example.com",
+    "password": "b92b71656f137b666ba5e21a6405f172203f04fb178b060a4a62adc6029bcec4",
+    "password_algorithm": "sha256",
+    "password_encoding": "hex",
+    "password_salt": "L0ngerSalt",
+    "password_salt_encoding": "utf8",
+    "password_salt_position": "prefix",
+    "source_id": "d3"
+  },
+  {
+    "email": "nobody@example.com",
+    "password_encoding": "hex",
+    "password_salt_encoding": "utf8",
+    "password_salt_position": "prefix",
+    "source_id": "d4"
+  }
+]

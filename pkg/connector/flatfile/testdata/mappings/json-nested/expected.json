@@ -1,0 +1,28 @@
+[
+  {
+    "app_metadata.tier": "gold",
+    "attrs.tags.0": "a",
+    "attrs.tags.1": "b",
+    "blocked": "false",
+    "contacts.0.kind": "email",
+    "contacts.1.kind": "phone",
+    "contacts.1.value": "+33100000000",
+    "email": "jane@example.com",
+    "email_verified": "true",
+    "family_name": "Doe",
+    "given_name": "Jane",
+    "locale": "fr-FR",
+    "password": "$2a$10$jSTQjfDV/IlpY/Ix05MjZu48Y8D0QpllULBdx0U40N/VqKqjN91dW",
+    "password_algorithm": "bcrypt",
+    "source_id": "n-1",
+    "user_metadata.theme": "dark"
+  },
+  {
+    "blocked": "true",
+    "contacts.0.kind": "email",
+    "email": "john@example.com",
+    "email_verified": "false",
+    "given_name": "John",
+    "source_id": "n-2"
+  }
+]

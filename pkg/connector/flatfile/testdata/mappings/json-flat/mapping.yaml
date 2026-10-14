@@ -1,0 +1,7 @@
+fields:
+  - {source: id, cmf: source_id}
+  - {source: email_address, cmf: email}
+  - {source: verified, cmf: email_verified}
+  - {source: first, cmf: given_name}
+  - {source: last, cmf: family_name}
+  - {source: disabled, cmf: blocked}

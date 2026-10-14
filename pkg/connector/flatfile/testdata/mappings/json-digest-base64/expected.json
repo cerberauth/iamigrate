@@ -1,0 +1,21 @@
+[
+  {
+    "email": "jane@example.com",
+    "password": "DRB9CfW75Ayt495ccenptw==",
+    "password_algorithm": "md5",
+    "password_encoding": "base64",
+    "source_id": "b1"
+  },
+  {
+    "email": "john@example.com",
+    "password": "y3HNP1mQlTK3gyV_X5fQUCryWCMfnRfL52J5nAu0oPY",
+    "password_algorithm": "sha256",
+    "password_encoding": "base64",
+    "source_id": "b2"
+  },
+  {
+    "email": "ann@example.com",
+    "password_encoding": "base64",
+    "source_id": "b3"
+  }
+]

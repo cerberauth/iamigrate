@@ -1,0 +1,31 @@
+[
+  {
+    "app_metadata.plan": "gold",
+    "blocked": "false",
+    "email": "jane.doe@example.com",
+    "family_name": "Doe",
+    "given_name": "Jane",
+    "locale": "fr",
+    "password": "$2a$10$jSTQjfDV/IlpY/Ix05MjZu48Y8D0QpllULBdx0U40N/VqKqjN91dW",
+    "password_algorithm": "bcrypt",
+    "source_id": "c-100"
+  },
+  {
+    "blocked": "true",
+    "email": "john@example.com",
+    "family_name": "Smith",
+    "given_name": "John",
+    "locale": "en",
+    "password_algorithm": "bcrypt",
+    "source_id": "c-101"
+  },
+  {
+    "app_metadata.plan": "free",
+    "blocked": "false",
+    "email": "orphan@example.com",
+    "family_name": "Id",
+    "given_name": "No",
+    "locale": "en",
+    "password_algorithm": "bcrypt"
+  }
+]

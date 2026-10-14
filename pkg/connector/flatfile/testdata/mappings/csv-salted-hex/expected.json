@@ -1,0 +1,32 @@
+[
+  {
+    "email": "jane@example.com",
+    "password": "EFE240D7BCE44B10807F4F903CAED452DDF3028166D397FD4E247BB6D3A46B72",
+    "password_algorithm": "sha256",
+    "password_encoding": "hex",
+    "password_salt": "00112233445566778899aabbccddeeff",
+    "password_salt_encoding": "hex",
+    "password_salt_position": "suffix",
+    "source_id": "s1"
+  },
+  {
+    "email": "john@example.com",
+    "password": "78355d36ef687c52e274ab8b135e9d91a9bd74051baace58ecd6080df022afd7d926f21a3345d007f62a4b5f627eff2de860d9677f0f71f3f7fbde9ce277dfbf",
+    "password_algorithm": "sha512",
+    "password_encoding": "hex",
+    "password_salt": "ffeeddccbbaa99887766554433221100",
+    "password_salt_encoding": "hex",
+    "password_salt_position": "prefix",
+    "source_id": "s2"
+  },
+  {
+    "email": "ann@example.com",
+    "password": "ce39af8c17a818923df0318478863e2da1a7f0aa",
+    "password_algorithm": "sha1",
+    "password_encoding": "hex",
+    "password_salt": "a1b2c3d4e5f60718",
+    "password_salt_encoding": "hex",
+    "password_salt_position": "suffix",
+    "source_id": "s3"
+  }
+]

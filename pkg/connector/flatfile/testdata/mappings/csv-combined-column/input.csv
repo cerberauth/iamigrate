@@ -1,0 +1,5 @@
+id,email,password
+d1,jane@example.com,sha1$Xk29fa$6cb40f8e1040a12cdcba26d36c1679ce8af7eeaf
+d2,john@example.com,md5$q8Zr1b$d5747b5512589470f79cf6da9dbeae32
+d3,ann@example.com,sha256$L0ngerSalt$b92b71656f137b666ba5e21a6405f172203f04fb178b060a4a62adc6029bcec4
+d4,nobody@example.com,

@@ -31,6 +31,9 @@ type ExportOptions struct {
 	// contains, for columns pkg/hash can't detect unambiguously on its
 	// own (raw digests) -- see pkg/hash.Hint.
 	HashHints map[string]cmf.Algorithm
+	// Mapping renames and transforms the file's own columns into the
+	// recognized ones; the zero value expects them already.
+	Mapping mapping.Mapping
 }
 
 // Connector is a SourceConnector and TargetConnector over flat CSV/JSON
@@ -65,8 +68,11 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		return connector.Manifest{}, fmt.Errorf("flatfile: Export requires flatfile.ExportOptions, got %T", eo)
 	}
 
-	rows, err := readRows(opts.Path, opts.Format)
+	rows, err := readRows(opts.Path, opts.Format, opts.Mapping.RecordsPath)
 	if err != nil {
+		return connector.Manifest{}, err
+	}
+	if rows, err = Normalize(rows, opts.Mapping); err != nil {
 		return connector.Manifest{}, err
 	}
 
