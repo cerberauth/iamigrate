@@ -3,6 +3,8 @@ package auth0
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -195,7 +197,34 @@ func newJobRunner(ctx context.Context, client *Client, connectionID string, upse
 // submit starts a job for chunk, first waiting for a free slot. It returns
 // an error instead once a job has failed or ctx is done, so the caller stops
 // reading input. It must not be called concurrently with itself or wait.
+//
+// If ctx carries a connector.ChunkStore, a chunk it holds as done is not
+// submitted again, and one whose job was already created is waited for
+// instead of being resubmitted.
 func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
+	chunkNum := len(j.results) + 1
+
+	body, err := json.Marshal(chunk)
+	if err != nil {
+		return fmt.Errorf("auth0: encoding chunk: %w", err)
+	}
+	sum := sha256.Sum256(body)
+	cp := connector.ChunkCheckpoint{Index: chunkNum, Fingerprint: hex.EncodeToString(sum[:])}
+	store := connector.ChunkStoreFromContext(j.ctx)
+	if store != nil {
+		if saved, ok := store.Chunk(chunkNum); ok {
+			if saved.Fingerprint != cp.Fingerprint {
+				return fmt.Errorf("auth0: chunk %d no longer matches its checkpoint: the input changed since the import started", chunkNum)
+			}
+			cp = saved
+		}
+	}
+	if cp.Done {
+		j.results = append(j.results, &chunkResult{report: cp.Report})
+		progress.FromContext(j.ctx).Add(len(chunk))
+		return nil
+	}
+
 	select {
 	case j.slots <- struct{}{}:
 	case <-j.failed:
@@ -213,13 +242,12 @@ func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
 
 	res := &chunkResult{}
 	j.results = append(j.results, res)
-	chunkNum := len(j.results)
 
 	j.wg.Add(1)
 	go func() {
 		defer j.wg.Done()
 		defer func() { <-j.slots }()
-		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, chunk, sourceIDs, chunkNum)
+		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, body, sourceIDs, cp, store)
 		if res.err != nil {
 			j.failOnce.Do(func() {
 				j.err = res.err
@@ -286,12 +314,17 @@ func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Failed = append(dst.Failed, src.Failed...)
 }
 
-// submitAndPoll imports one chunk and reports on it by source ID.
-// sourceIDs[i] is the source ID of chunk[i], whose user_id in the payload
-// is importUserID(sourceIDs[i]).
-func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, chunk []map[string]any, sourceIDs []string, chunkNum int) (connector.ImportReport, error) {
+// submitAndPoll imports one chunk, whose JSON payload is body, and reports
+// on it by source ID. sourceIDs[i] is the source ID of the chunk's i-th
+// record, whose user_id in the payload is importUserID(sourceIDs[i]).
+//
+// cp is the chunk's checkpoint: with a JobID the job already exists, so it is
+// waited for instead of being created. The checkpoint is saved to store, if
+// any, once the job is created and again once it has finished.
+func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, body []byte, sourceIDs []string, cp connector.ChunkCheckpoint, store connector.ChunkStore) (connector.ImportReport, error) {
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
+	chunkNum := cp.Index
 
 	// Job errors name a user by its payload user_id, which has lost any
 	// auth0| prefix the source ID carried.
@@ -300,15 +333,20 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 		bySourceID[importUserID(id)] = id
 	}
 
-	body, err := json.Marshal(chunk)
-	if err != nil {
-		return report, fmt.Errorf("auth0: encoding chunk: %w", err)
-	}
-
-	bar.Status("chunk %d: uploading %d users", chunkNum, len(chunk))
-	jobID, err := submitImportJob(ctx, client, connectionID, upsert, body)
-	if err != nil {
-		return report, err
+	jobID := cp.JobID
+	if jobID == "" {
+		bar.Status("chunk %d: uploading %d users", chunkNum, len(sourceIDs))
+		var err error
+		jobID, err = submitImportJob(ctx, client, connectionID, upsert, body)
+		if err != nil {
+			return report, err
+		}
+		cp.JobID = jobID
+		if store != nil {
+			if err := store.SaveChunk(cp); err != nil {
+				return report, fmt.Errorf("auth0: saving checkpoint for chunk %d: %w", chunkNum, err)
+			}
+		}
 	}
 
 	bar.Status("chunk %d: Auth0 job %s running", chunkNum, jobID)
@@ -351,6 +389,20 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 			continue
 		}
 		report.Succeeded = append(report.Succeeded, id)
+	}
+
+	if store != nil {
+		// A failed job isn't final: it is forgotten rather than marked
+		// done, so a resumed import submits the chunk again instead of
+		// replaying its failure.
+		if status == "failed" {
+			cp.JobID = ""
+		} else {
+			cp.Done, cp.Report = true, report
+		}
+		if err := store.SaveChunk(cp); err != nil {
+			return report, fmt.Errorf("auth0: saving checkpoint for chunk %d: %w", chunkNum, err)
+		}
 	}
 	return report, nil
 }

@@ -25,6 +25,7 @@ func newRootCmd() *cobra.Command {
 		newSetPasswordsCmd(),
 		newImportCmd(),
 		newDiffCmd(),
+		newJobCmd(),
 	)
 	return root
 }
