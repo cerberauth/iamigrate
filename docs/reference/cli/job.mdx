@@ -1,0 +1,79 @@
+---
+title: job
+description: Run export, validate, import, and verify as one resumable job.
+---
+
+Runs the whole migration as a single job that survives a crash or a restart. Instead of four commands you re-run by hand, a job moves through fixed states, saving its state to disk before each step:
+
+```
+queued → exporting → validating → importing → verifying → done
+                 any step that fails ↘ failed
+```
+
+| State | Step |
+| --- | --- |
+| `exporting` | `export` from `--source` into `--users`. Skipped when the job has no `--source` and starts from an existing `--users` file. |
+| `validating` | The same checks as [`validate`](../validate/). Any problem fails the job. |
+| `importing` | `import` into `--target`, with `organizations.cmf.jsonl` and `roles.cmf.jsonl` read from beside `--users` if present. |
+| `verifying` | The same lookups as `diff`. A user missing from the target, or with drifted attributes, fails the job. |
+
+If the process dies or is interrupted (Ctrl-C and `SIGTERM` stop it cleanly), the job stays in the state it was in. `job run` picks it up there and repeats only that step and the ones after it. Steps already finished are not redone.
+
+## Resuming an import
+
+For an Auth0 target the import is chunked, and every chunk is checkpointed as the job goes: the Auth0 job ID as soon as the job exists, the outcome once it finishes. After a restart a finished chunk isn't submitted again, and a chunk whose Auth0 job is still running is waited for rather than resubmitted (which would report every user in it as a duplicate). A chunk whose Auth0 job ended as `failed` is submitted again. If `--users` changed since the import started, the job fails instead of matching the old checkpoints to different users.
+
+Kratos, Keycloak and Firebase targets don't checkpoint. A job interrupted during their import runs the whole import again on resume: users created before the interruption are reported as already existing, and the rest are created.
+
+## Credentials
+
+Credentials are never stored with a job. Each step reads them from the environment, so the same variables must be set for `job run` as for the other commands (`AUTH0_DOMAIN`, `AUTH0_TOKEN` or `AUTH0_CLIENT_ID`/`AUTH0_CLIENT_SECRET`, `KRATOS_ADMIN_URL`, `KEYCLOAK_URL`/`KEYCLOAK_REALM` and a username/password or client ID/secret, `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_ACCESS_TOKEN`, and `FIREBASE_HASH_SIGNER_KEY`/`FIREBASE_HASH_SALT_SEPARATOR`). `job create` checks that they are there, so a mistake shows up before a long export rather than after.
+
+## Usage
+
+```sh
+# queue a job, printing its ID
+id=$(iamigrate job create --source flatfile --in users.csv --target kratos --users ./work/users.cmf.jsonl.gz)
+
+iamigrate job run "$id"       # run it, or resume it after an interruption
+iamigrate job status "$id"    # where it is and what each step found
+```
+
+When a step fails, fix the cause and retry:
+
+```sh
+iamigrate job retry "$id"                       # try the failed step again
+iamigrate job retry "$id" --from exporting      # go further back, e.g. a validation problem that only re-exporting fixes
+iamigrate job run "$id"
+```
+
+`retry` without `--from` keeps the earlier steps' results and the import's chunk checkpoints. `--from` discards the results, and the checkpoints, of the state it goes back to and of every step after it.
+
+A job can only be driven by one `job run` at a time; a second gets `job is being run by another process`.
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `job create` | Queue a job and print its ID |
+| `job run <id>` | Run a job to completion, or resume it. Exits non-zero if the job fails or is interrupted |
+| `job retry <id>` | Put a failed job back in a state, ready for `job run` |
+| `job status <id>` | Show the state and the result of each finished step; `--json` prints the whole record |
+
+All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job.
+
+## `job create` flags
+
+| Flag | Description |
+| --- | --- |
+| `--target` | Target connector: `auth0`, `kratos`, `keycloak` or `firebase` (required) |
+| `--users` | CMF users file, written by the export and read by the other steps; gzipped if it ends in `.gz` (required) |
+| `--source` | Source connector: `flatfile`, `kratos`, `keycloak`, `firebase` or `auth0`. Without it there's no export and `--users` must already exist |
+| `--mapping` | `mapping.yaml` path |
+| `--upsert` | Allow re-running the import against existing users |
+| `--connection-id`, `--connection` | Auth0 database connection, by ID or name (default: the tenant's only one). Mutually exclusive |
+| `--connection-config` | Auth0 connection JSON, to tighten `validate`'s username rules |
+| `--in`, `--format`, `--source-mapping` | Input of a `flatfile` (`--in`, `--format csv\|json`, `--source-mapping`) or `keycloak` (`--in`) source, as for [`export`](../export/) |
+| `--admin-url`, `--schema-id`, `--schema-file` | Kratos Admin API URL (or `$KRATOS_ADMIN_URL`), identity schema ID, and schema JSON for `validate` |
+| `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options, as for [`export`](../export/) |
+| `--hash-rounds`, `--hash-mem-cost` | Firebase project's scrypt parameters; the signer key and salt separator come from the environment |

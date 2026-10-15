@@ -169,6 +169,21 @@ export AUTH0_TOKEN=...
 iamigrate export --source auth0 --fields email,email_verified,given_name,family_name --out ./export/
 ```
 
+## Resumable jobs
+
+`iamigrate job` runs export, validate, import and verify as one job whose
+state is saved to disk, so a crash or restart carries on where it stopped
+instead of starting over. Mid-way through a chunked Auth0 import, chunks that
+already succeeded are not submitted again.
+
+```sh
+id=$(iamigrate job create --source flatfile --in users.csv --target kratos --users ./work/users.cmf.jsonl.gz)
+iamigrate job run "$id"      # run it, or resume it after an interruption
+iamigrate job status "$id"
+```
+
+See the [`job` reference](docs/reference/cli/job.mdx).
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)
