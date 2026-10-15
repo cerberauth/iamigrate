@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/cerberauth/x/fsx"
 )
 
 // readRows loads path as a slice of string-keyed rows, regardless of
@@ -30,7 +32,7 @@ func readRows(path string, format Format, recordsPath string) ([]map[string]stri
 var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
 
 func readCSV(path string) ([]map[string]string, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("flatfile: opening %s: %w", path, err)
 	}
@@ -63,7 +65,7 @@ func readCSV(path string) ([]map[string]string, error) {
 // (profile.name.first, emails.0.value), so a mapping addresses them the
 // same way it addresses a CSV column.
 func readJSON(path, recordsPath string) ([]map[string]string, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("flatfile: reading %s: %w", path, err)
 	}
@@ -216,7 +218,7 @@ func writeJSON(path string, rows []map[string]string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := fsx.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("flatfile: writing %s: %w", path, err)
 	}
 	return nil

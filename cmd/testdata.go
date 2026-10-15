@@ -10,6 +10,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/fixture"
+	"github.com/cerberauth/x/fsx"
 	"github.com/spf13/cobra"
 )
 
@@ -146,15 +147,17 @@ func writeManifest(outDir string, m connector.Manifest) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(outDir, "manifest.json"), b, 0o600)
+	return fsx.WriteFile(filepath.Join(outDir, "manifest.json"), b, 0o600)
 }
 
 // writeGitignore ensures answer-key.json is gitignored by default within
 // the output directory, per DESIGN.md.
 func writeGitignore(outDir string) error {
 	path := filepath.Join(outDir, ".gitignore")
-	if _, err := os.Stat(path); err == nil {
+	if exists, err := fsx.FileExists(path); err != nil {
+		return err
+	} else if exists {
 		return nil // don't clobber an existing one
 	}
-	return os.WriteFile(path, []byte("answer-key.json\n"), 0o600)
+	return fsx.WriteFile(path, []byte("answer-key.json\n"), 0o600)
 }

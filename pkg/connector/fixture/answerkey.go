@@ -3,7 +3,8 @@ package fixture
 import (
 	"encoding/json"
 	"fmt"
-	"os"
+
+	"github.com/cerberauth/x/fsx"
 )
 
 // AnswerKeyEntry pairs one generated user's source_id with their login
@@ -44,7 +45,7 @@ func WriteAnswerKey(path string, k AnswerKey) error {
 	if err != nil {
 		return fmt.Errorf("fixture: encoding answer-key.json: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := fsx.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("fixture: writing %s: %w", path, err)
 	}
 	return nil

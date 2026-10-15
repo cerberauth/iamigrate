@@ -15,6 +15,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/x/fsx"
 	"github.com/spf13/cobra"
 )
 
@@ -109,7 +110,7 @@ func newImportAuth0Cmd() *cobra.Command {
 			if reportPath == "" {
 				reportPath = filepath.Join(dir, "import-report.json")
 			}
-			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+			if err := fsx.WriteFile(reportPath, b, 0o600); err != nil {
 				return err
 			}
 
@@ -179,7 +180,7 @@ func newImportKratosCmd() *cobra.Command {
 			if reportPath == "" {
 				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
 			}
-			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+			if err := fsx.WriteFile(reportPath, b, 0o600); err != nil {
 				return err
 			}
 
@@ -239,7 +240,7 @@ func newImportKeycloakCmd() *cobra.Command {
 			if reportPath == "" {
 				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
 			}
-			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+			if err := fsx.WriteFile(reportPath, b, 0o600); err != nil {
 				return err
 			}
 
@@ -299,7 +300,7 @@ func newImportFirebaseCmd() *cobra.Command {
 			if reportPath == "" {
 				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
 			}
-			if err := os.WriteFile(reportPath, b, 0o600); err != nil {
+			if err := fsx.WriteFile(reportPath, b, 0o600); err != nil {
 				return err
 			}
 

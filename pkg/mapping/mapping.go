@@ -5,8 +5,8 @@ package mapping
 
 import (
 	"fmt"
-	"os"
 
+	"github.com/cerberauth/x/fsx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -55,7 +55,7 @@ type Mapping struct {
 
 // Load reads and parses a mapping.yaml file from path.
 func Load(path string) (Mapping, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return Mapping{}, fmt.Errorf("mapping: reading %s: %w", path, err)
 	}
@@ -72,7 +72,7 @@ func Save(path string, m Mapping) error {
 	if err != nil {
 		return fmt.Errorf("mapping: encoding: %w", err)
 	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := fsx.WriteFile(path, b, 0o600); err != nil {
 		return fmt.Errorf("mapping: writing %s: %w", path, err)
 	}
 	return nil
