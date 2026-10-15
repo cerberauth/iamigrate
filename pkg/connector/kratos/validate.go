@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/x/fsx"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -38,7 +38,7 @@ type IdentitySchema struct {
 // any trait with an "ory.sh/kratos".credentials.<method>.identifier ==
 // true extension.
 func LoadIdentitySchema(path string) (*IdentitySchema, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("kratos: reading identity schema %s: %w", path, err)
 	}

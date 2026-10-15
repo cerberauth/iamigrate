@@ -26,12 +26,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/httpx"
+	"github.com/cerberauth/x/fsx"
 )
 
 const (
@@ -108,7 +108,7 @@ type ServiceAccount struct {
 // LoadServiceAccount reads a service account key file, as downloaded from
 // the Firebase console (Project settings > Service accounts).
 func LoadServiceAccount(path string) (*ServiceAccount, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("firebase: reading service account %s: %w", path, err)
 	}

@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/mail"
-	"os"
 	"regexp"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/x/fsx"
 )
 
 // defaultUsernameMin and defaultUsernameMax are Auth0's documented
@@ -65,7 +65,7 @@ type ConnectionConfig struct {
 
 // LoadConnectionConfig reads and parses a --connection-config JSON file.
 func LoadConnectionConfig(path string) (*ConnectionConfig, error) {
-	b, err := os.ReadFile(path)
+	b, err := fsx.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("auth0: reading connection config %s: %w", path, err)
 	}
