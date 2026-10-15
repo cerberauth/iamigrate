@@ -3,6 +3,8 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/cerberauth/iamigrate/internal/jobs"
@@ -226,4 +228,25 @@ func TestRetryRejectsStatesAfterTheFailureOrNotWorking(t *testing.T) {
 	stored, err := r.Store.Load(j.ID)
 	require.NoError(t, err)
 	require.Equal(t, jobs.Failed, stored.State, "a rejected retry changes nothing")
+}
+
+func TestFileStoreListReturnsSavedJobsOnly(t *testing.T) {
+	dir := t.TempDir()
+	store, err := jobs.NewFileStore(dir)
+	require.NoError(t, err)
+	r := &jobs.Runner{Store: store}
+
+	a, err := r.Create(nil)
+	require.NoError(t, err)
+	b, err := r.Create(nil)
+	require.NoError(t, err)
+	// Leftovers of a lock and of an interrupted save are not jobs.
+	unlock, err := store.Lock(a.ID)
+	require.NoError(t, err)
+	unlock()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, b.ID+".json.tmp"), []byte("{"), 0o600))
+
+	ids, err := store.List()
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{a.ID, b.ID}, ids)
 }

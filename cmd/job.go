@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,22 +9,56 @@ import (
 	"os/signal"
 	"sort"
 	"syscall"
+	"time"
 
+	"github.com/cerberauth/iamigrate/internal/api"
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
 	"github.com/cerberauth/iamigrate/pkg/progress"
 	"github.com/spf13/cobra"
 )
 
+// Environment variables the job commands read when --api-url is used, and
+// `serve` reads for the token it requires.
+const (
+	envAPIURL   = "IAMIGRATE_API_URL"
+	envAPIToken = "IAMIGRATE_API_TOKEN"
+)
+
+// pollInterval is how often `job run --api-url` asks the server how the job
+// is doing.
+const pollInterval = time.Second
+
+// jobFlags say which jobs the job commands act on: the jobs kept in dir and run in process, or
+// those of the `iamigrate serve` instance at apiURL.
+type jobFlags struct {
+	dir, apiURL string
+}
+
+// client returns the client of the server --api-url names, or nil if the
+// jobs are the local ones.
+func (f *jobFlags) client() *api.Client {
+	if f.apiURL == "" {
+		return nil
+	}
+	return &api.Client{BaseURL: f.apiURL, Token: os.Getenv(envAPIToken)}
+}
+
+func (f *jobFlags) runner() (*jobs.Runner, error) {
+	return openJobRunner(f.dir)
+}
+
 func newJobCmd() *cobra.Command {
-	var dir string
+	var f jobFlags
 
 	cmd := &cobra.Command{
 		Use:   "job",
 		Short: "Run export, validate, import, and verify as one resumable job",
 	}
-	cmd.PersistentFlags().StringVar(&dir, "dir", "./jobs/", "directory the jobs' state is kept in")
-	cmd.AddCommand(newJobCreateCmd(&dir), newJobRunCmd(&dir), newJobRetryCmd(&dir), newJobStatusCmd(&dir))
+	cmd.PersistentFlags().StringVar(&f.dir, "dir", "./jobs/", "directory the jobs' state is kept in")
+	cmd.PersistentFlags().StringVar(&f.apiURL, "api-url", os.Getenv(envAPIURL),
+		"drive the jobs of a running `iamigrate serve` at this URL instead of running them in process (or $"+envAPIURL+"; its bearer token is $"+envAPIToken+")")
+	cmd.AddCommand(newJobCreateCmd(&f), newJobRunCmd(&f), newJobRetryCmd(&f), newJobStatusCmd(&f), newJobReportCmd(&f))
 	return cmd
 }
 
@@ -35,7 +70,21 @@ func openJobRunner(dir string) (*jobs.Runner, error) {
 	return &jobs.Runner{Store: store, Steps: jobs.NewSteps(jobConnectors())}, nil
 }
 
-func newJobCreateCmd(dir *string) *cobra.Command {
+// checkJobParams checks everything about a new job that can be checked
+// without running a step, so a mistake surfaces now instead of after a long
+// export.
+func checkJobParams(params map[string]string) error {
+	probe := &jobs.Job{Params: params}
+	if params[jobs.ParamSource] != "" {
+		if _, _, err := jobSource(probe); err != nil {
+			return err
+		}
+	}
+	_, err := jobTarget(probe)
+	return err
+}
+
+func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	var (
 		source, target, users, mappingPath, connectionID string
 		upsert                                           bool
@@ -69,19 +118,21 @@ func newJobCreateCmd(dir *string) *cobra.Command {
 				set(k, *v)
 			}
 
-			// Everything that can be checked without running a step is, so a
-			// mistake surfaces now instead of after a long export.
-			probe := &jobs.Job{Params: params}
-			if source != "" {
-				if _, _, err := jobSource(probe); err != nil {
+			// A server checks the params itself, against its own
+			// environment, and starts the job as soon as it's queued.
+			if c := f.client(); c != nil {
+				j, err := c.Create(cmd.Context(), params)
+				if err != nil {
 					return err
 				}
-			}
-			if _, err := jobTarget(probe); err != nil {
-				return err
+				fmt.Fprintln(cmd.OutOrStdout(), j.ID)
+				return nil
 			}
 
-			r, err := openJobRunner(*dir)
+			if err := checkJobParams(params); err != nil {
+				return err
+			}
+			r, err := f.runner()
 			if err != nil {
 				return err
 			}
@@ -94,16 +145,16 @@ func newJobCreateCmd(dir *string) *cobra.Command {
 		},
 	}
 
-	f := cmd.Flags()
-	f.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0 (default: no export, start from the existing --users file)")
-	f.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
-	f.StringVar(&users, "users", "", "CMF users file: written by the export, read by the other steps (.gz is gzipped)")
-	f.StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
-	f.BoolVar(&upsert, "upsert", false, "allow re-running the import against existing users")
-	f.StringVar(&connectionID, "connection-id", "", "Auth0 database connection ID")
+	fl := cmd.Flags()
+	fl.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0 (default: no export, start from the existing --users file)")
+	fl.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
+	fl.StringVar(&users, "users", "", "CMF users file: written by the export, read by the other steps (.gz is gzipped)")
+	fl.StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
+	fl.BoolVar(&upsert, "upsert", false, "allow re-running the import against existing users")
+	fl.StringVar(&connectionID, "connection-id", "", "Auth0 database connection ID")
 	strParam := func(key, flag, usage string) {
 		p[key] = new(string)
-		f.StringVar(p[key], flag, "", usage)
+		fl.StringVar(p[key], flag, "", usage)
 	}
 	strParam(paramInput, "in", "input file (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	strParam(paramFormat, "format", "input format: csv|json (flatfile source; default csv)")
@@ -123,16 +174,16 @@ func newJobCreateCmd(dir *string) *cobra.Command {
 	return cmd
 }
 
-func newJobRunCmd(dir *string) *cobra.Command {
+func newJobRunCmd(f *jobFlags) *cobra.Command {
 	return &cobra.Command{
 		Use:   "run <id>",
 		Short: "Run a job to completion, or resume it where an interrupted run left off",
-		Args:  cobra.ExactArgs(1),
+		Long: "Run a job to completion, or resume it where an interrupted run left off. " +
+			"With --api-url the server runs its jobs on its own as soon as they are created: " +
+			"this only waits for the job to finish, and interrupting it leaves the job running.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := openJobRunner(*dir)
-			if err != nil {
-				return err
-			}
+			id := args[0]
 			// An interrupt cancels the run instead of killing the process,
 			// leaving the job in the state it was interrupted in.
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -141,7 +192,7 @@ func newJobRunCmd(dir *string) *cobra.Command {
 			bar := progress.New(cmd.ErrOrStderr())
 			defer bar.Done()
 			ctx = progress.NewContext(ctx, bar)
-			r.OnState = func(j *jobs.Job) {
+			stage := func(j *jobs.Job) {
 				switch {
 				case j.State.Terminal():
 					bar.Done()
@@ -150,14 +201,36 @@ func newJobRunCmd(dir *string) *cobra.Command {
 				}
 			}
 
-			j, err := r.Run(ctx, args[0])
+			var (
+				j   *jobs.Job
+				err error
+			)
+			if c := f.client(); c != nil {
+				last := jobs.State("")
+				j, err = c.Wait(ctx, id, pollInterval, func(j *jobs.Job) {
+					if j.State != last {
+						last = j.State
+						stage(j)
+					}
+				})
+			} else {
+				var r *jobs.Runner
+				if r, err = f.runner(); err != nil {
+					return err
+				}
+				r.OnState = stage
+				j, err = r.Run(ctx, id)
+			}
 			bar.Done()
 			if j != nil {
 				printJob(cmd.OutOrStdout(), j)
 			}
 			if err != nil {
 				if ctx.Err() != nil {
-					return fmt.Errorf("interrupted: resume with `iamigrate job run %s`", args[0])
+					if f.client() != nil {
+						return fmt.Errorf("interrupted: the job keeps running on the server; wait for it with `iamigrate job run %s`", id)
+					}
+					return fmt.Errorf("interrupted: resume with `iamigrate job run %s`", id)
 				}
 				return err
 			}
@@ -170,7 +243,7 @@ func newJobRunCmd(dir *string) *cobra.Command {
 	}
 }
 
-func newJobRetryCmd(dir *string) *cobra.Command {
+func newJobRetryCmd(f *jobFlags) *cobra.Command {
 	var from string
 	cmd := &cobra.Command{
 		Use:   "retry <id>",
@@ -178,16 +251,24 @@ func newJobRetryCmd(dir *string) *cobra.Command {
 		Long: "Put a failed job back in the state it failed in, keeping the results of the earlier steps " +
 			"and the import's progress. With --from, go back to an earlier state instead, for a failure whose " +
 			"cause is upstream (a validation problem that only exporting again fixes); that discards the " +
-			"results of the state and of the steps after it.",
+			"results of the state and of the steps after it. Not available with --api-url.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := openJobRunner(*dir)
-			if err != nil {
-				return err
-			}
-			j, err := r.Retry(args[0], jobs.State(from))
-			if err != nil {
-				return err
+			var j *jobs.Job
+			if c := f.client(); c != nil {
+				// The server runs the job again as soon as it's put back.
+				var err error
+				if j, err = c.Retry(cmd.Context(), args[0], jobs.State(from)); err != nil {
+					return err
+				}
+			} else {
+				r, err := f.runner()
+				if err != nil {
+					return err
+				}
+				if j, err = r.Retry(args[0], jobs.State(from)); err != nil {
+					return err
+				}
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "job %s: %s\n", j.ID, j.State)
 			return nil
@@ -197,28 +278,32 @@ func newJobRetryCmd(dir *string) *cobra.Command {
 	return cmd
 }
 
-func newJobStatusCmd(dir *string) *cobra.Command {
+// loadJob reads a job from the server --api-url names, or from the jobs
+// directory.
+func (f *jobFlags) loadJob(ctx context.Context, id string) (*jobs.Job, error) {
+	if c := f.client(); c != nil {
+		return c.Get(ctx, id)
+	}
+	r, err := f.runner()
+	if err != nil {
+		return nil, err
+	}
+	return r.Store.Load(id)
+}
+
+func newJobStatusCmd(f *jobFlags) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "status <id>",
 		Short: "Show where a job is and what each finished step found",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := openJobRunner(*dir)
-			if err != nil {
-				return err
-			}
-			j, err := r.Store.Load(args[0])
+			j, err := f.loadJob(cmd.Context(), args[0])
 			if err != nil {
 				return err
 			}
 			if asJSON {
-				b, err := json.MarshalIndent(j, "", "  ")
-				if err != nil {
-					return err
-				}
-				fmt.Fprintln(cmd.OutOrStdout(), string(b))
-				return nil
+				return printJSON(cmd.OutOrStdout(), j)
 			}
 			printJob(cmd.OutOrStdout(), j)
 			return nil
@@ -226,6 +311,42 @@ func newJobStatusCmd(dir *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the whole job record as JSON")
 	return cmd
+}
+
+func newJobReportCmd(f *jobFlags) *cobra.Command {
+	return &cobra.Command{
+		Use:   "report <id>",
+		Short: "Print what a finished job's steps found, as JSON",
+		Long: "Print the manifest, validation problems, import report and verification of a job that is done " +
+			"or failed, as JSON: what `GET /jobs/{id}/report` answers. Fails for a job that is still running.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if c := f.client(); c != nil {
+				r, err := c.Report(cmd.Context(), args[0])
+				if err != nil {
+					return err
+				}
+				return printJSON(cmd.OutOrStdout(), r)
+			}
+			j, err := f.loadJob(cmd.Context(), args[0])
+			if err != nil {
+				return err
+			}
+			if !j.State.Terminal() {
+				return fmt.Errorf("job %s is still %s", j.ID, j.State)
+			}
+			return printJSON(cmd.OutOrStdout(), api.NewReport(j))
+		},
+	}
+}
+
+func printJSON(w io.Writer, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(w, string(b))
+	return nil
 }
 
 func printJob(w io.Writer, j *jobs.Job) {

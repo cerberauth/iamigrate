@@ -1,0 +1,44 @@
+---
+title: serve
+description: Serve jobs over a REST API.
+---
+
+Runs the [`job`](../job/) state machine as a long-lived HTTP service. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
+
+```sh
+iamigrate serve --listen 127.0.0.1:8080 --dir ./jobs/
+```
+
+| Flag | Description |
+| --- | --- |
+| `--listen` | Address to listen on (default `127.0.0.1:8080`) |
+| `--dir` | Directory the jobs' state is kept in (default `./jobs/`) |
+
+## Endpoints
+
+| Endpoint | Does |
+| --- | --- |
+| `POST /jobs` | Queue a job and start running it in the background. Answers `202` with the job record and its `Location` |
+| `GET /jobs/{id}` | The job record: state, params, and the result of each finished step |
+| `GET /jobs/{id}/report` | What the finished steps found: `manifest`, `problems`, `import` and `verify`. Answers `409` while the job is still running |
+| `POST /jobs/{id}/retry` | Put a failed job back in a state and run it again, as `job retry` does. The optional body `{"from": "exporting"}` goes back to an earlier state. Answers `202` with the job record, `409` for a job that hasn't failed, `400` for a state it can't go back to |
+
+`POST /jobs` takes the same params as `job create`, under `params`:
+
+```sh
+curl -X POST http://127.0.0.1:8080/jobs -d '{
+  "params": {"target": "kratos", "admin_url": "http://kratos:4434", "users": "/srv/work/users.cmf.jsonl"}
+}'
+```
+
+The keys are `target`, `users`, `source`, `mapping`, `connection_id`, `upsert`, `in`, `format`, `source_mapping`, `admin_url`, `schema_id`, `schema_file`, `connection`, `connection_config`, `export_connection_id`, `export_fields`, `export_limit`, `hash_rounds` and `hash_mem_cost`, each matching the `job create` flag of the same name. The params are checked as `job create` checks them, and a mistake is a `400`. Poll `GET /jobs/{id}` until `state` is `done` or `failed`.
+
+Errors are `{"error": "..."}` with the matching status: `400` for a bad request, `401` for a missing or wrong token, `404` for an unknown job, `409` for a request the job's state doesn't allow.
+
+## Credentials and access
+
+Credentials are never part of a request. Each step reads them from the environment of the `serve` process, as for `job run`, and the file paths in a job are paths on the machine it runs on, so treat access to the API as access to both.
+
+Set `$IAMIGRATE_API_TOKEN` to require it as a bearer token (`Authorization: Bearer <token>`). Without a token, `serve` only accepts a loopback `--listen` address and refuses to start on any other.
+
+`SIGINT` or `SIGTERM` stops the server and interrupts its running jobs, which stay in the state they were in. When `serve` starts it resumes every unfinished job in `--dir`, the ones a crash or a shutdown interrupted, exactly as `job run` would: finished steps aren't redone and an Auth0 import carries on from its chunk checkpoints. A job another process is running is left to it.
