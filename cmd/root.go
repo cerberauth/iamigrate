@@ -26,6 +26,7 @@ func newRootCmd() *cobra.Command {
 		newImportCmd(),
 		newDiffCmd(),
 		newJobCmd(),
+		newServeCmd(),
 	)
 	return root
 }

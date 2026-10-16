@@ -59,8 +59,21 @@ A job can only be driven by one `job run` at a time; a second gets `job is being
 | `job run <id>` | Run a job to completion, or resume it. Exits non-zero if the job fails or is interrupted |
 | `job retry <id>` | Put a failed job back in a state, ready for `job run` |
 | `job status <id>` | Show the state and the result of each finished step; `--json` prints the whole record |
+| `job report <id>` | Print, as JSON, what a finished (`done` or `failed`) job's steps found |
 
-All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job.
+All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job, and `--api-url`.
+
+## Driving a server
+
+With `--api-url` (or `$IAMIGRATE_API_URL`) the commands act on the jobs of a running [`iamigrate serve`](../serve/) instead of running them in process, and `--dir` is ignored:
+
+```sh
+id=$(iamigrate job --api-url http://127.0.0.1:8080 create --target kratos --admin-url http://kratos:4434 --users /srv/work/users.cmf.jsonl)
+iamigrate job --api-url http://127.0.0.1:8080 run "$id"      # waits for the job to finish
+iamigrate job --api-url http://127.0.0.1:8080 report "$id"
+```
+
+The server starts a job as soon as it is created, so `job run` only waits for it and polls its state; interrupting it leaves the job running. The server's own environment supplies the credentials, and `--users` and the other file paths are paths on the server. `$IAMIGRATE_API_TOKEN` is sent as the bearer token. `job retry` works the same way: the server runs the job again as soon as it is put back, and `job run` waits for it.
 
 ## `job create` flags
 

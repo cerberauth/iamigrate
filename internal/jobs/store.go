@@ -15,6 +15,9 @@ import (
 // ErrNotFound is returned by Store.Load for an unknown job ID.
 var ErrNotFound = errors.New("jobs: job not found")
 
+// ErrInvalidID is returned for a job ID that can't name a job.
+var ErrInvalidID = errors.New("jobs: invalid job id")
+
 // ErrNotFailed is returned by Runner.Retry for a job that hasn't failed.
 var ErrNotFailed = errors.New("jobs: only a failed job can be retried")
 
@@ -26,6 +29,8 @@ var ErrLocked = errors.New("jobs: job is being run by another process")
 type Store interface {
 	Save(j *Job) error
 	Load(id string) (*Job, error)
+	// List returns the IDs of all the jobs, in no particular order.
+	List() ([]string, error)
 	// Lock claims the job for the caller without waiting, returning
 	// ErrLocked if someone else holds it, so two runs never drive one job
 	// at once. A lock must not outlive its holder: a crashed process
@@ -50,7 +55,7 @@ var validID = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 func (s *FileStore) path(id string) (string, error) {
 	if !validID.MatchString(id) {
-		return "", fmt.Errorf("jobs: invalid job id %q", id)
+		return "", fmt.Errorf("%w %q", ErrInvalidID, id)
 	}
 	return filepath.Join(s.dir, id+".json"), nil
 }
@@ -91,6 +96,22 @@ func (s *FileStore) Load(id string) (*Job, error) {
 		return nil, fmt.Errorf("jobs: decoding job %s: %w", id, err)
 	}
 	return &j, nil
+}
+
+// List returns the IDs of the <id>.json files in the store's directory.
+func (s *FileStore) List() ([]string, error) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, e := range entries {
+		id, ok := strings.CutSuffix(e.Name(), ".json")
+		if ok && !e.IsDir() && validID.MatchString(id) {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
 }
 
 // Lock holds an exclusive file lock on <dir>/<id>.lock, a file of its own
