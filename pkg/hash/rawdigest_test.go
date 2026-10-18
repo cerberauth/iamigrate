@@ -108,3 +108,39 @@ func TestNormalizeRawDigestWithSalt(t *testing.T) {
 	require.Equal(t, base64.StdEncoding.EncodeToString(salt), p.Salt.Value)
 	require.Equal(t, cmf.EncodingBase64, p.Salt.Encoding)
 }
+
+func TestValidate(t *testing.T) {
+	md5hex := "5f4dcc3b5aa765d61d8327deb882cf99"
+	bcrypt := "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
+	for name, p := range map[string]cmf.Password{
+		"hex digest":     {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}},
+		"salted digest":  {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}, Salt: &cmf.SaltValue{Value: "pepper", Encoding: cmf.EncodingUTF8, Position: cmf.SaltPrefix}},
+		"bcrypt":         {Algorithm: cmf.AlgBcrypt, Hash: cmf.HashValue{Value: bcrypt, Encoding: cmf.EncodingUTF8}},
+		"hmac":           {Algorithm: cmf.AlgHMAC, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex, Digest: "sha256"}, Key: &cmf.KeyValue{Value: "a2V5", Encoding: cmf.EncodingBase64}},
+		"phc string":     {Algorithm: cmf.AlgPBKDF2, PHCString: "$pbkdf2-sha256$i=1000$c2FsdA$aGFzaA", Hash: cmf.HashValue{Value: "aGFzaA", Encoding: cmf.EncodingBase64}},
+		"base64 digest":  {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: "X03MO1qnZdYdgyfeuILPmQ==", Encoding: cmf.EncodingBase64}},
+		"unpadded b64":   {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: "X03MO1qnZdYdgyfeuILPmQ", Encoding: cmf.EncodingBase64}},
+		"suffixed (def)": {Algorithm: cmf.AlgSHA1, Hash: cmf.HashValue{Value: "5baa61e4c9b93f3f0682250b6cf8331b7ee68fd8", Encoding: cmf.EncodingHex}, Salt: &cmf.SaltValue{Value: "73616c74", Encoding: cmf.EncodingHex}},
+	} {
+		require.NoError(t, iamhash.Validate(p), name)
+	}
+
+	for want, p := range map[string]cmf.Password{
+		"unknown algorithm":     {Algorithm: "rot13", Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}},
+		`algorithm "SHA-256"`:   {Algorithm: "SHA-256", Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}},
+		"no hash value":         {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Encoding: cmf.EncodingHex}},
+		"is not valid hex":      {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: "zz", Encoding: cmf.EncodingHex}},
+		"hash encoding must be": {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex}},
+		"not a sha256 digest":   {Algorithm: cmf.AlgSHA256, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}},
+		"hex or base64, not":    {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingUTF8}},
+		"not a bcrypt hash":     {Algorithm: cmf.AlgBcrypt, Hash: cmf.HashValue{Value: "nope", Encoding: cmf.EncodingUTF8}},
+		"hmac requires":         {Algorithm: cmf.AlgHMAC, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}},
+		"hmac key isn't valid":  {Algorithm: cmf.AlgHMAC, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex, Digest: "sha256"}, Key: &cmf.KeyValue{Value: "zz", Encoding: cmf.EncodingHex}},
+		"salt isn't valid":      {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}, Salt: &cmf.SaltValue{Value: "zz", Encoding: cmf.EncodingHex}},
+		"salt position":         {Algorithm: cmf.AlgMD5, Hash: cmf.HashValue{Value: md5hex, Encoding: cmf.EncodingHex}, Salt: &cmf.SaltValue{Value: "00", Encoding: cmf.EncodingHex, Position: "middle"}},
+		"phc_string is":         {Algorithm: cmf.AlgScrypt, PHCString: "$pbkdf2-sha256$i=1000$c2FsdA$aGFzaA", Hash: cmf.HashValue{Value: "aGFzaA", Encoding: cmf.EncodingBase64}},
+		"phc_string: ":          {Algorithm: cmf.AlgPBKDF2, PHCString: "nonsense", Hash: cmf.HashValue{Value: "aGFzaA", Encoding: cmf.EncodingBase64}},
+	} {
+		require.ErrorContains(t, iamhash.Validate(p), want, want)
+	}
+}

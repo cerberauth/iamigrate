@@ -21,6 +21,8 @@ import (
 // Strategy hook points configured under `strategies`.
 const (
 	ExportRecord     = "export.record"
+	IDSource         = "id.source"
+	HashDetect       = "hash.detect"
 	ExportUser       = "export.user"
 	ValidateUser     = "validate.user"
 	ValidateDedupKey = "validate.dedup_key"
@@ -45,6 +47,8 @@ const (
 // built-in alternatives.
 var configurable = map[string][]string{
 	ExportRecord:     nil,
+	IDSource:         nil,
+	HashDetect:       nil,
 	ExportUser:       nil,
 	ValidateUser:     nil,
 	ValidateDedupKey: nil,
@@ -62,8 +66,6 @@ var configurable = map[string][]string{
 // says so rather than that it doesn't exist.
 var planned = map[string]string{
 	"identity.primary": "not supported yet",
-	"id.source":        "not supported yet: map source_id with a field, a custom transform or export.record",
-	"hash.detect":      "not supported yet: map the password columns with fields, or use export.record",
 	"import.conflict":  "per-user conflict decisions aren't supported yet: use the conflict section's on_duplicate",
 	"metadata.place":   "a handler isn't supported yet: route keys with the metadata section",
 }

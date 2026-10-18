@@ -40,8 +40,10 @@ const (
 )
 
 // rowToUser converts one flat row into a CMF user. skipReason is non-empty
-// when the row can't be represented (e.g. no source_id).
-func rowToUser(row map[string]string, hints map[string]cmf.Algorithm) (cmf.User, string, error) {
+// when the row can't be represented (e.g. no source_id). detected, when
+// not nil, is the row's password as the hash.detect handler decided it,
+// instead of reading the password columns.
+func rowToUser(row map[string]string, hints map[string]cmf.Algorithm, detected *cmf.Password) (cmf.User, string, error) {
 	sourceID := row[colSourceID]
 	if sourceID == "" {
 		return cmf.User{}, "missing source_id", nil
@@ -73,16 +75,16 @@ func rowToUser(row map[string]string, hints map[string]cmf.Algorithm) (cmf.User,
 		u.Emails = []cmf.Contact{{Value: row[colEmail], Verified: verified, Primary: true}}
 	}
 
-	if raw := row[colPassword]; raw != "" {
-		hint, reason := passwordHint(row, hints)
-		if reason != "" {
-			return cmf.User{}, reason, nil
+	if row[colPassword] != "" {
+		if detected != nil {
+			u.Password = detected
+		} else {
+			pw, reason := readPassword(row, hints)
+			if reason != "" {
+				return cmf.User{}, reason, nil
+			}
+			u.Password = &pw
 		}
-		pw, err := iamhash.Normalize(raw, hint)
-		if err != nil {
-			return cmf.User{}, fmt.Sprintf("password normalization failed: %v", err), nil
-		}
-		u.Password = &pw
 	}
 
 	known := map[string]bool{
@@ -110,6 +112,20 @@ func rowToUser(row map[string]string, hints map[string]cmf.Algorithm) (cmf.User,
 	}
 
 	return u, "", nil
+}
+
+// readPassword normalizes the row's password from its password columns.
+// reason is non-empty when they can't be used.
+func readPassword(row map[string]string, hints map[string]cmf.Algorithm) (pw cmf.Password, reason string) {
+	hint, reason := passwordHint(row, hints)
+	if reason != "" {
+		return pw, reason
+	}
+	pw, err := iamhash.Normalize(row[colPassword], hint)
+	if err != nil {
+		return pw, fmt.Sprintf("password normalization failed: %v", err)
+	}
+	return pw, ""
 }
 
 // passwordHint reads the columns describing a password hash into the hint

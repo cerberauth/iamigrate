@@ -266,3 +266,65 @@ func detectDigestEncoding(raw string, given cmf.Encoding) (value string, encodin
 	}
 	return "", "", fmt.Errorf("hash: %q is neither valid hex nor base64", raw)
 }
+
+// Validate checks a password that didn't come from Normalize (one an
+// operator's handler answered with, say) is one the translators can work
+// with: a known algorithm, a hash, salt and key that decode as the encoding
+// they name, a raw digest of the right size, a bcrypt hash of the right
+// shape, an hmac with its key and digest, and a PHC string that says the
+// same algorithm.
+func Validate(p cmf.Password) error {
+	alg, err := ParseAlgorithm(string(p.Algorithm))
+	if err != nil || alg != p.Algorithm {
+		return fmt.Errorf("hash: unknown algorithm %q", p.Algorithm)
+	}
+	if p.Hash.Value == "" {
+		return fmt.Errorf("hash: %s password has no hash value", alg)
+	}
+	want, raw := digestSizes[alg]
+	switch p.Hash.Encoding {
+	case cmf.EncodingHex, cmf.EncodingBase64:
+		b, err := decodeBinary(p.Hash.Value, p.Hash.Encoding)
+		if err != nil {
+			return err
+		}
+		if raw && len(b) != want {
+			return fmt.Errorf("hash: not a %s digest (%d bytes expected, got %d): is the algorithm or the encoding wrong?", alg, want, len(b))
+		}
+	case cmf.EncodingUTF8:
+		if raw || alg == cmf.AlgHMAC {
+			return fmt.Errorf("hash: a %s digest is encoded as hex or base64, not %q", alg, p.Hash.Encoding)
+		}
+	default:
+		return fmt.Errorf("hash: hash encoding must be hex, base64 or utf8, got %q", p.Hash.Encoding)
+	}
+	if alg == cmf.AlgBcrypt && !bcryptRE.MatchString(p.Hash.Value) {
+		return fmt.Errorf("hash: %q is not a bcrypt hash", p.Hash.Value)
+	}
+	if alg == cmf.AlgHMAC {
+		if p.Key == nil || p.Hash.Digest == "" {
+			return fmt.Errorf("hash: hmac requires a key and a hash digest")
+		}
+		if _, err := DecodeBytes(p.Key.Value, p.Key.Encoding); err != nil || p.Key.Value == "" {
+			return fmt.Errorf("hash: hmac key isn't valid %s", p.Key.Encoding)
+		}
+	}
+	if s := p.Salt; s != nil {
+		if _, err := DecodeBytes(s.Value, s.Encoding); err != nil {
+			return fmt.Errorf("hash: salt isn't valid %s", s.Encoding)
+		}
+		if s.Position != "" && s.Position != cmf.SaltPrefix && s.Position != cmf.SaltSuffix {
+			return fmt.Errorf("hash: salt position must be prefix or suffix, got %q", s.Position)
+		}
+	}
+	if p.PHCString != "" {
+		got, err := Normalize(p.PHCString, Hint{})
+		if err != nil {
+			return fmt.Errorf("hash: phc_string: %w", err)
+		}
+		if got.Algorithm != alg {
+			return fmt.Errorf("hash: phc_string is %s, not %s", got.Algorithm, alg)
+		}
+	}
+	return nil
+}

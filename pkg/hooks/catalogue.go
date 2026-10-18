@@ -48,6 +48,8 @@ var events = map[string]eventKind{
 // handler (declared in hooks.yaml) a strategy is delegated to.
 var strategies = map[string]bool{
 	"export.record":      true,
+	"id.source":          true,
+	"hash.detect":        true,
 	"map.field":          true,
 	"export.user":        true,
 	"validate.user":      true,
