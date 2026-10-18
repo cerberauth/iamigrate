@@ -55,6 +55,10 @@ type Capabilities struct {
 	// SupportsUpsert is whether the target can update a user it already
 	// has (ImportOptions.Upsert).
 	SupportsUpsert bool
+	// PrimaryIdentifiers are the kinds of identifier the target can make a
+	// user's primary one (the mapping's identity.primary strategy): the
+	// ones it carries as a login. Empty, the target has no such choice.
+	PrimaryIdentifiers []cmf.Identifier
 }
 
 // SupportsAlgorithm reports whether alg is in the capability set.

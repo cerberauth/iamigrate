@@ -64,6 +64,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		SupportsRoles:  false,
 		// Kratos (v1.3) rejects an "id" in the identity it creates.
 		SupportsCustomID: false,
+		// All three traits are set; the identity schema decides which logs in.
+		PrimaryIdentifiers: []cmf.Identifier{cmf.IdentifierEmail, cmf.IdentifierUsername, cmf.IdentifierPhone},
 	}
 }
 
@@ -196,7 +198,7 @@ func indexOf(s, sub string) int {
 
 // Import creates one Kratos identity per CMF user via the Admin API.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
-	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx), importprep.WithPrimaryIdentifiers(c.Capabilities().PrimaryIdentifiers))
 	if err != nil {
 		return connector.ImportReport{}, err
 	}

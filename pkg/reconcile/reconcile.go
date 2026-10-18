@@ -145,6 +145,13 @@ func Run(ctx context.Context, r *cmf.Reader, check CheckFunc) (connector.DiffRep
 		if err != nil {
 			return report, err
 		}
+		if ref, ok := opts.Mapping.Strategies[strategy.IdentityPrimary]; ok {
+			// Look the user up as the import saw them: with identity.primary,
+			// the contact it made primary is not the first of the file's.
+			// (A handler's own choice can't be replayed here: see verify.lookup.)
+			kind, value := strategy.BuiltinPrimary(ref.Strategy, u, nil)
+			u = strategy.ApplyPrimary(u, kind, value)
+		}
 		if opts.NotImported[u.SourceID] {
 			bar.Add(1)
 			report.Skipped = append(report.Skipped, u.SourceID)

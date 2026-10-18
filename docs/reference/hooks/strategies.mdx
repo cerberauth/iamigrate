@@ -116,12 +116,42 @@ More keys two users can't share, on top of the emails, usernames and phones vali
 
 ## Import
 
-The import-side strategies run on a batch of users before the target connector builds its payloads, in this order: `import.user`, `hash.translate`, `mfa.translate`, then the mapping's `metadata` routes and `target_fields`. `import.payload` runs last, on the payloads. They are asked again whenever the import runs again, so they must give the same answer every time (see [Hooks](../)).
+The import-side strategies run on a batch of users before the target connector builds its payloads, in this order: `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, then the mapping's `metadata` routes and `target_fields`. `import.payload` runs last, on the payloads. They are asked again whenever the import runs again, so they must give the same answer every time (see [Hooks](../)).
 
 ### `import.user`
 
 - Item: the user.
 - Result: `{}` to import it, `{"action": "drop", "reason": "..."}` to skip it, or `{"action": "replace", "user": {...}}` as for `export.user`. Skipped users are listed under the report's `skipped` with code `SKIPPED`, and verify doesn't look for them.
+
+### `identity.primary`
+
+Which of a user's identifiers is their primary one: the kind (email, username or phone), and which contact when they have several emails or phones. Every connector reads the decision the same way, but what it changes depends on the target:
+
+| Target | What `identity.primary` changes | Kinds it accepts |
+| --- | --- | --- |
+| Keycloak | Which value becomes the Keycloak `username`: the username, the email or the phone | `email`, `username`, `phone` |
+| Kratos | Nothing about the kind: the email, username and phone traits are always all set, and the identity schema decides which one logs in. Only the contact choice below applies | `email`, `username`, `phone` |
+| Firebase | Nothing about the kind: the account takes an email and a phone number, and has no username. Only the contact choice below applies | `email`, `phone` |
+| Auth0 | Nothing about the kind: the bulk import requires an email. Only the contact choice below applies | `email` |
+
+The contact choice applies to every target: the contact the strategy picks (or, failing that, the one flagged `primary`) is the one the target takes as the user's email or phone, instead of the first in the list.
+
+| `identity.primary` | Prefers, in this order |
+| --- | --- |
+| *(not set)* | Each connector's own order, the first contact of each list |
+| `{strategy: email_first}` | email, username, phone |
+| `{strategy: username_first}` | username, email, phone |
+| `{strategy: phone_first}` | phone, email, username |
+| `{handler: <name>}` | As the handler answers |
+
+A built-in falls back along its order for a user without the kind it prefers, and skips the kinds the target doesn't accept. `validate --mapping` rejects a built-in that prefers a kind the target doesn't accept (`username_first` for Auth0 or Firebase, `phone_first` for Auth0).
+
+With `identity.primary` set, Keycloak takes the *chosen* identifier as its username, so `email_first` makes the email the username for a user who also has a username, where Keycloak otherwise prefers the username.
+
+Verify looks users up as the import saw them, replaying a built-in's choice and the contacts flagged `primary`. It can't replay a handler's own answer: if a handler picks a contact that isn't flagged `primary`, set [`verify.lookup`](#verifylookup) to look that user up by the identifier you want.
+
+- Item: the user.
+- Result: `{"identifier": "email"}` (or `"username"`, `"phone"`) to make that kind primary, `{"value": "ada@example.com"}` to name the identifier itself (which also picks the contact among several), or `{}` for no opinion: the connector picks the kind, with the contacts flagged `primary` first. Naming a kind the user lacks, a value that is none of their identifiers, or a kind the target doesn't accept fails the import, as does answering both `identifier` and `value`.
 
 ### `hash.translate`
 

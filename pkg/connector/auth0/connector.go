@@ -54,6 +54,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		// prefix.
 		SupportsCustomID: true,
 		SupportsUpsert:   true,
+		// The bulk import requires an email.
+		PrimaryIdentifiers: []cmf.Identifier{cmf.IdentifierEmail},
 	}
 }
 
@@ -68,7 +70,7 @@ func (*Connector) Capabilities() connector.Capabilities {
 // without any auth0| prefix it carried, behind the auth0| prefix Auth0
 // adds (see targetUserID).
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
-	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx), importprep.WithPrimaryIdentifiers(c.Capabilities().PrimaryIdentifiers))
 	if err != nil {
 		return connector.ImportReport{}, err
 	}

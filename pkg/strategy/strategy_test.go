@@ -24,7 +24,7 @@ func TestCheck(t *testing.T) {
 		require.ErrorContains(t, strategy.Check(m), want)
 	}
 	require.NoError(t, strategy.Check(mapping.Mapping{
-		Strategies: map[string]mapping.StrategyRef{"verify.lookup": {Strategy: "target_id"}, "import.user": {Handler: "h"}, "id.source": {Handler: "h"}, "hash.detect": {Handler: "h", OnFailure: "ignore"}},
+		Strategies: map[string]mapping.StrategyRef{"verify.lookup": {Strategy: "target_id"}, "import.user": {Handler: "h"}, "id.source": {Handler: "h"}, "identity.primary": {Strategy: "phone_first"}, "hash.detect": {Handler: "h", OnFailure: "ignore"}},
 		Metadata:   []mapping.MetadataRoute{{Key: "k", From: "app_metadata", Destination: "drop"}},
 		Conflict:   &mapping.Conflict{OnDuplicate: "skip"},
 	}))
@@ -128,10 +128,9 @@ func TestValidator(t *testing.T) {
 
 func TestCheckExplainsPlannedStrategies(t *testing.T) {
 	for name, want := range map[string]string{
-		"identity.primary": "not supported yet",
-		"import.conflict":  "use the conflict section's on_duplicate",
-		"metadata.place":   "route keys with the metadata section",
-		"map.field":        "see the ids and transforms sections",
+		"import.conflict": "use the conflict section's on_duplicate",
+		"metadata.place":  "route keys with the metadata section",
+		"map.field":       "see the ids and transforms sections",
 	} {
 		err := strategy.Check(mapping.Mapping{Strategies: map[string]mapping.StrategyRef{name: {Handler: "h"}}})
 		require.ErrorContains(t, err, want, name)
