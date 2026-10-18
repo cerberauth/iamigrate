@@ -1,0 +1,125 @@
+---
+title: mapping.yaml
+description: Every section of mapping.yaml, from field renames to ID strategies and hooks.
+---
+
+`mapping.yaml` describes how fields move between a source, CMF and a target, and which [strategies](../hooks/strategies/) apply. [`export`](../cli/export/) scaffolds one and [`map`](../cli/map/) sets its target; the other commands read it with `--mapping`. Every section is optional except `target` where noted.
+
+```yaml
+target: auth0
+connection_id: con_1a2b3c
+
+# Source side: flat-file columns -> CMF (export --source flatfile)
+records_path: data.users
+fields:
+  - {source: id, cmf: source_id}
+  - {source: mail, cmf: email, transform: "trim|lowercase"}
+  - {source: active, cmf: blocked, transform: not}
+
+# Custom transforms, usable in any transform pipeline
+transforms:
+  normalize_phone: {handler: audit}
+
+# IDs the target is to give the users
+ids:
+  target: {strategy: uuidv5, namespace: 6ba7b811-9dad-11d1-80b4-00c04fd430c8}
+
+# Target side: CMF -> target fields, on import
+target_fields:
+  - {cmf: profile.locale, target: user_metadata.locale, transform: lowercase}
+metadata:
+  - {key: internal_notes, from: user_metadata, destination: app_metadata.notes}
+conflict: {on_duplicate: skip}
+
+# Decisions handed to handlers
+strategies:
+  import.payload: {handler: audit}
+  verify.lookup: {strategy: target_id}
+```
+
+Handlers are declared in `hooks.yaml` and selected here by name; a mapping can't hold a URL or a secret. See [Hooks](../hooks/).
+
+## `target`, `connection_id`
+
+The target connector the mapping is for (`auth0`, `kratos`, `keycloak`, `firebase`), required by `validate --mapping` and by `ids.target`, and the Auth0 database connection to import into (`--connection-id` wins over it).
+
+## `fields`, `records_path`
+
+How a flat file's own columns become CMF fields, on `export --source flatfile` (and [`prepare`](../cli/prepare/)). See [`export`](../cli/export/) for the column convention and [`prepare`](../cli/prepare/) for the full options of a field: `source`, `cmf`, `pattern`, `values`, `transform` and `default`. `records_path` is the dotted path to the array of users in a JSON file whose root is an object.
+
+A `transform` is a pipeline of transforms joined with `|`, run left to right: the built-ins `trim`, `lowercase`, `uppercase`, `bool` (true/false, yes/no, 1/0, on/off... into `true` or `false`) and `not` (`bool`, inverted), and the custom ones under `transforms`. An empty value stays empty.
+
+## `transforms`
+
+Custom transforms, each handed to a handler: on export as the [`map.field`](../hooks/strategies/) strategy, on import as `map.target_field`. A name can't be a built-in's.
+
+```yaml
+transforms:
+  normalize_phone: {handler: audit, on_failure: fail}
+```
+
+## `ids`
+
+`ids.target` decides the user ID each user gets in the target: `preserve` (the source ID, the default), `prefix`, `template`, `uuidv5`, or a handler. It is assigned once into the users file's `target_ids`, by a job's export or [`ids assign`](../cli/ids/), and only Auth0 and Firebase accept it. See [`id.target`](../hooks/strategies/).
+
+## `target_fields`
+
+Fields of the target's user set from CMF fields, on import, after the connector's own mapping (so they win over it).
+
+```yaml
+target_fields:
+  - {cmf: profile.locale, target: traits.locale, transform: lowercase}
+  - {cmf: emails.0.value, target: metadata_admin.contact}
+  - {cmf: app_metadata.tier, target: metadata_public.tier, default: free}
+```
+
+`cmf` is a dotted path into the CMF user, array indexes included. An empty result leaves the target field unset. Without a transform the value keeps its type (a number, a boolean, an object); a transform needs a string, number or boolean.
+
+`target` is a path the target accepts:
+
+| Target | Paths |
+| --- | --- |
+| `auth0` | `given_name`, `family_name`, `name`, `nickname`, `picture`, `user_metadata.<key>`, `app_metadata.<key>` |
+| `kratos` | `traits.<key>` (not `email`, `username` or `phone`, which iamigrate sets from the user's identifiers), `metadata_public.<key>`, `metadata_admin.<key>` |
+| `keycloak` | `firstName`, `lastName`, `attributes.<key>` (a one-element list; a non-string value in JSON) |
+| `firebase` | `displayName`, `photoUrl`, `custom_claims.<key>` (not a reserved claim name; merged with the claims from `app_metadata`, within Firebase's 1000 bytes) |
+
+`validate --mapping` rejects a path the target doesn't accept.
+
+## `metadata`
+
+Moves a metadata key away from where the target connector puts it by default, to a target field path (as above), or `drop` to leave it out:
+
+```yaml
+metadata:
+  - {key: email, from: user_metadata, destination: metadata_admin.legacy_email}
+  - {key: internal_notes, from: app_metadata, destination: drop}
+```
+
+Use it for a key that would collide with something the connector sets: the Kratos connector copies `user_metadata` into the identity's traits, so a `user_metadata.email` would otherwise overwrite the user's email trait.
+
+## `conflict`
+
+What an import does with a user the target already has:
+
+| `on_duplicate` | Effect |
+| --- | --- |
+| `fail` (the default) | The user is reported as failed, as without the section |
+| `skip` | The user is reported under the report's `skipped` instead of `failed`, and still verified |
+| `upsert` | The user is updated, as with `--upsert`. Only Auth0 and Firebase can; `validate` rejects it for Kratos and Keycloak |
+
+## `strategies`
+
+The strategies handed to handlers, by name, and the built-in alternatives of `verify.lookup`. See [Strategies](../hooks/strategies/) for each: `export.record`, `export.user`, `validate.user`, `validate.dedup_key`, `import.user`, `hash.translate`, `mfa.translate`, `import.payload`, `org.resolve`, `role.resolve`, `verify.lookup`, `verify.compare`.
+
+```yaml
+strategies:
+  export.user: {handler: audit}
+  verify.lookup: {strategy: target_id}
+```
+
+A step only needs the handlers of the strategies it runs: `validate` doesn't need `--hooks` for a mapping whose only handler is an `import.payload`'s.
+
+## `app_metadata`, `user_metadata`, `manual_steps`
+
+Written by `export` and `map` for review: the metadata keys found in the export, and the decisions left to a human. They don't change what is imported; use `metadata` and `target_fields` for that.

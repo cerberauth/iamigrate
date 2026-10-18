@@ -14,6 +14,8 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
+	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/x/fsx"
 	"github.com/spf13/cobra"
@@ -21,6 +23,7 @@ import (
 
 func newImportCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "import", Short: "Import CMF identities into a target"}
+	addHooksFlag(cmd)
 	cmd.AddCommand(newImportAuth0Cmd())
 	cmd.AddCommand(newImportKratosCmd())
 	cmd.AddCommand(newImportKeycloakCmd())
@@ -82,6 +85,7 @@ func newImportAuth0Cmd() *cobra.Command {
 			}
 			defer r.Close()
 
+			upsert = importprep.Upsert(m, upsert)
 			opts := connector.ImportOptions{ConnectionID: m.ConnectionID, Upsert: upsert}
 
 			dir := filepath.Dir(in)
@@ -97,12 +101,22 @@ func newImportAuth0Cmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("importing users", countUsers(bar, in))
+			if err := checkImportMapping(m, auth0.Name); err != nil {
+				return err
+			}
+			if opts.ConnectionID, err = lifecycle.ImportBefore(ctx, auth0.Name, opts.ConnectionID, upsert); err != nil {
+				return err
+			}
+			m.ConnectionID = opts.ConnectionID
 			report, err := target.Import(ctx, r, m, opts)
 			bar.Done()
 			if err != nil {
 				return err
 			}
 
+			if err := conflicts(m, auth0.Name, &report); err != nil {
+				return err
+			}
 			b, err := json.MarshalIndent(report, "", "  ")
 			if err != nil {
 				return err
@@ -115,7 +129,7 @@ func newImportAuth0Cmd() *cobra.Command {
 			}
 
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
-			return nil
+			return lifecycle.ImportAfter(ctx, report)
 		},
 	}
 
@@ -133,16 +147,24 @@ func newImportAuth0Cmd() *cobra.Command {
 
 func newImportKratosCmd() *cobra.Command {
 	var (
-		in         string
-		schemaID   string
-		adminURL   string
-		reportPath string
+		mappingPath string
+		in          string
+		schemaID    string
+		adminURL    string
+		reportPath  string
 	)
 
 	cmd := &cobra.Command{
 		Use:   kratos.Name,
 		Short: "Create Ory Kratos identities from a CMF file via the Admin API",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var m mapping.Mapping
+			if mappingPath != "" {
+				var err error
+				if m, err = mapping.Load(mappingPath); err != nil {
+					return err
+				}
+			}
 			if adminURL == "" {
 				adminURL = os.Getenv("KRATOS_ADMIN_URL")
 			}
@@ -167,12 +189,21 @@ func newImportKratosCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("importing users", countUsers(bar, in))
-			report, err := target.Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{})
+			if err := checkImportMapping(m, kratos.Name); err != nil {
+				return err
+			}
+			if _, err := lifecycle.ImportBefore(ctx, kratos.Name, "", false); err != nil {
+				return err
+			}
+			report, err := target.Import(ctx, r, m, connector.ImportOptions{})
 			bar.Done()
 			if err != nil {
 				return err
 			}
 
+			if err := conflicts(m, kratos.Name, &report); err != nil {
+				return err
+			}
 			b, err := json.MarshalIndent(report, "", "  ")
 			if err != nil {
 				return err
@@ -185,7 +216,7 @@ func newImportKratosCmd() *cobra.Command {
 			}
 
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
-			return nil
+			return lifecycle.ImportAfter(ctx, report)
 		},
 	}
 
@@ -193,21 +224,30 @@ func newImportKratosCmd() *cobra.Command {
 	cmd.Flags().StringVar(&schemaID, "schema-id", "default", "Kratos identity schema ID to create identities against")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path: its target_fields and transforms (optional)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
 }
 
 func newImportKeycloakCmd() *cobra.Command {
 	var (
-		in         string
-		reportPath string
-		auth       keycloakFlags
+		mappingPath string
+		in          string
+		reportPath  string
+		auth        keycloakFlags
 	)
 
 	cmd := &cobra.Command{
 		Use:   keycloak.Name,
 		Short: "Create Keycloak users from a CMF file via the Admin API",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var m mapping.Mapping
+			if mappingPath != "" {
+				var err error
+				if m, err = mapping.Load(mappingPath); err != nil {
+					return err
+				}
+			}
 			client, err := auth.client()
 			if err != nil {
 				return err
@@ -227,12 +267,21 @@ func newImportKeycloakCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("importing users", countUsers(bar, in))
-			report, err := keycloak.New(client).Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{})
+			if err := checkImportMapping(m, keycloak.Name); err != nil {
+				return err
+			}
+			if _, err := lifecycle.ImportBefore(ctx, keycloak.Name, "", false); err != nil {
+				return err
+			}
+			report, err := keycloak.New(client).Import(ctx, r, m, connector.ImportOptions{})
 			bar.Done()
 			if err != nil {
 				return err
 			}
 
+			if err := conflicts(m, keycloak.Name, &report); err != nil {
+				return err
+			}
 			b, err := json.MarshalIndent(report, "", "  ")
 			if err != nil {
 				return err
@@ -245,29 +294,38 @@ func newImportKeycloakCmd() *cobra.Command {
 			}
 
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
-			return nil
+			return lifecycle.ImportAfter(ctx, report)
 		},
 	}
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path: its target_fields and transforms (optional)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
 }
 
 func newImportFirebaseCmd() *cobra.Command {
 	var (
-		in         string
-		upsert     bool
-		reportPath string
-		auth       firebaseFlags
+		mappingPath string
+		in          string
+		upsert      bool
+		reportPath  string
+		auth        firebaseFlags
 	)
 
 	cmd := &cobra.Command{
 		Use:   firebase.Name,
 		Short: "Create Firebase Authentication users from a CMF file via the Identity Toolkit API",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var m mapping.Mapping
+			if mappingPath != "" {
+				var err error
+				if m, err = mapping.Load(mappingPath); err != nil {
+					return err
+				}
+			}
 			client, err := auth.client()
 			if err != nil {
 				return err
@@ -287,12 +345,22 @@ func newImportFirebaseCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("importing users", countUsers(bar, in))
-			report, err := firebase.New(client).Import(ctx, r, mapping.Mapping{}, connector.ImportOptions{Upsert: upsert})
+			if err := checkImportMapping(m, firebase.Name); err != nil {
+				return err
+			}
+			if _, err := lifecycle.ImportBefore(ctx, firebase.Name, "", upsert); err != nil {
+				return err
+			}
+			upsert = importprep.Upsert(m, upsert)
+			report, err := firebase.New(client).Import(ctx, r, m, connector.ImportOptions{Upsert: upsert})
 			bar.Done()
 			if err != nil {
 				return err
 			}
 
+			if err := conflicts(m, firebase.Name, &report); err != nil {
+				return err
+			}
 			b, err := json.MarshalIndent(report, "", "  ")
 			if err != nil {
 				return err
@@ -305,7 +373,7 @@ func newImportFirebaseCmd() *cobra.Command {
 			}
 
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
-			return nil
+			return lifecycle.ImportAfter(ctx, report)
 		},
 	}
 
@@ -313,6 +381,7 @@ func newImportFirebaseCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&upsert, "upsert", false, "overwrite existing users with the same uid instead of failing them")
 	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path: its target_fields and transforms (optional)")
 	_ = cmd.MarkFlagRequired("in")
 	return cmd
 }
@@ -351,6 +420,9 @@ func printImportSummary(w io.Writer, report connector.ImportReport, reportPath s
 	sort.Strings(codes)
 	for _, code := range codes {
 		fmt.Fprintf(w, "  %d failed: %s\n", failedByCode[code], code)
+	}
+	if n := len(report.Skipped); n > 0 {
+		fmt.Fprintf(w, "  %d skipped (see the report)\n", n)
 	}
 }
 

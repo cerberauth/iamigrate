@@ -49,6 +49,12 @@ type Capabilities struct {
 	MFATypes       []cmf.MFAType
 	SupportsOrgs   bool
 	SupportsRoles  bool
+	// SupportsCustomID is whether the target creates a user with the ID it
+	// is given (a CMF user's TargetIDs), rather than generating its own.
+	SupportsCustomID bool
+	// SupportsUpsert is whether the target can update a user it already
+	// has (ImportOptions.Upsert).
+	SupportsUpsert bool
 }
 
 // SupportsAlgorithm reports whether alg is in the capability set.
@@ -119,6 +125,22 @@ type ImportReport struct {
 	RequiresPasswordReset     []string          `json:"requires_password_reset,omitempty"`
 	RequiresReenrollment      []string          `json:"requires_reenrollment,omitempty"`
 	RequiresRecoveryCodeRegen []string          `json:"requires_recovery_code_regen,omitempty"`
+	// TargetIDs is the user ID the target gave each imported user, by
+	// source ID: the one iamigrate chose for a target that accepts it, the
+	// one the target generated otherwise. Later phases (orgs/roles, verify)
+	// address users by it.
+	TargetIDs map[string]string `json:"target_ids,omitempty"`
+	// Skipped are the users not imported on purpose: by an import.user
+	// hook, or as already existing when the mapping's conflict says skip.
+	Skipped []ImportError `json:"skipped,omitempty"`
+}
+
+// SetTargetID records the user ID the target gave the user sourceID.
+func (r *ImportReport) SetTargetID(sourceID, targetID string) {
+	if r.TargetIDs == nil {
+		r.TargetIDs = map[string]string{}
+	}
+	r.TargetIDs[sourceID] = targetID
 }
 
 // DriftEntry is one attribute mismatch found by Verify.
@@ -139,6 +161,10 @@ type DiffReport struct {
 	// NoIdentifier lists users with no email, username, or phone to look
 	// them up by, so they couldn't be checked at all.
 	NoIdentifier []string `json:"no_identifier,omitempty"`
+	// Skipped lists users the import skipped on purpose (an import.user
+	// hook), so not looked for: they count in neither SourceCount nor
+	// TargetCount.
+	Skipped []string `json:"skipped,omitempty"`
 }
 
 // CountMismatch reports whether fewer users were found in the target than
@@ -149,6 +175,20 @@ func (r DiffReport) CountMismatch() bool { return r.SourceCount != r.TargetCount
 type SourceConnector interface {
 	Name() string
 	Export(ctx context.Context, w *cmf.Writer, opts ExportOptions) (Manifest, error)
+}
+
+// TargetFieldChecker is a TargetConnector whose Import applies
+// mapping.yaml's target_fields: it reports whether it can set a target
+// path, so validate can reject a mapping before an import does.
+type TargetFieldChecker interface {
+	CheckTargetField(path string) error
+}
+
+// ConflictDetector is a TargetConnector telling which import failures are
+// for users it already has, so a mapping's conflict.on_duplicate: skip can
+// report them as skipped rather than failed.
+type ConflictDetector interface {
+	IsConflict(e ImportError) bool
 }
 
 // TargetConnector imports CMF identities into a provider.

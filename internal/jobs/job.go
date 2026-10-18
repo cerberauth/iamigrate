@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
 )
 
 // Job is the persisted record of one migration: where it is, what each
@@ -25,10 +26,20 @@ type Job struct {
 	FailedIn State  `json:"failed_in,omitempty"`
 
 	// Results of the steps, each set by its step.
-	Manifest *connector.Manifest     `json:"manifest,omitempty"`
-	Problems []connector.Problem     `json:"problems,omitempty"`
+	Manifest *connector.Manifest `json:"manifest,omitempty"`
+	Problems []connector.Problem `json:"problems,omitempty"`
+	// Warnings are problems a validate.after hook downgraded: shown, but
+	// not failing the job.
+	Warnings []connector.Problem     `json:"warnings,omitempty"`
 	Report   *connector.ImportReport `json:"report,omitempty"`
 	Diff     *connector.DiffReport   `json:"diff,omitempty"`
+
+	// Hooks records the hook calls that vetoed a step, failed, or failed
+	// and were ignored.
+	Hooks []hooks.Result `json:"hooks,omitempty"`
+	// HooksFingerprint identifies the hooks file the job last ran with, to
+	// notice it changed when the job is resumed.
+	HooksFingerprint string `json:"hooks_fingerprint,omitempty"`
 
 	// Chunks are the import's checkpoints, by chunk index.
 	Chunks map[int]connector.ChunkCheckpoint `json:"chunks,omitempty"`

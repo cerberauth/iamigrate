@@ -25,18 +25,18 @@ var errEmailRequired = errors.New("auth0: bulk import requires an email; user ha
 // imported into a database connection.
 const userIDPrefix = "auth0|"
 
-// importUserID is the user_id sent in the bulk import payload for a source
-// ID. Auth0 adds userIDPrefix itself, so a source ID that already carries it
-// (an Auth0 export's) has it stripped, or the user would end up as
-// auth0|auth0|<id>.
-func importUserID(sourceID string) string {
-	return strings.TrimPrefix(sourceID, userIDPrefix)
+// importUserID is the user_id sent in the bulk import payload for a user
+// whose target ID (see cmf.User.TargetID) is id. Auth0 adds userIDPrefix
+// itself, so an ID that already carries it (an Auth0 export's source ID)
+// has it stripped, or the user would end up as auth0|auth0|<id>.
+func importUserID(id string) string {
+	return strings.TrimPrefix(id, userIDPrefix)
 }
 
-// targetUserID is the user_id Auth0 gives a user imported from sourceID,
-// which the orgs/roles phase needs to address them.
-func targetUserID(sourceID string) string {
-	return userIDPrefix + importUserID(sourceID)
+// targetUserID is the user_id Auth0 gives a user imported with target ID
+// id, which the orgs/roles phase and Verify address them by.
+func targetUserID(id string) string {
+	return userIDPrefix + importUserID(id)
 }
 
 // buildImportUser translates one CMF user into an Auth0 bulk-import user
@@ -45,7 +45,7 @@ func targetUserID(sourceID string) string {
 func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, error) {
 	var flags userFlags
 	rec := map[string]any{
-		keyUserID: importUserID(u.SourceID),
+		keyUserID: importUserID(u.TargetID(Name)),
 	}
 	if len(u.Emails) == 0 {
 		return nil, flags, errEmailRequired
@@ -60,23 +60,23 @@ func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, e
 		rec["phone_verified"] = u.Phones[0].Verified
 	}
 	if u.Profile.GivenName != "" {
-		rec["given_name"] = u.Profile.GivenName
+		rec[keyGivenName] = u.Profile.GivenName
 	}
 	if u.Profile.FamilyName != "" {
-		rec["family_name"] = u.Profile.FamilyName
+		rec[keyFamilyName] = u.Profile.FamilyName
 	}
 	if u.Profile.Name != "" {
 		rec[keyName] = u.Profile.Name
 	}
 	if u.Profile.Nickname != "" {
-		rec["nickname"] = u.Profile.Nickname
+		rec[keyNickname] = u.Profile.Nickname
 	}
 	if u.Profile.Picture != "" {
-		rec["picture"] = u.Profile.Picture
+		rec[keyPicture] = u.Profile.Picture
 	}
 	rec["blocked"] = u.Blocked
 	if len(u.AppMetadata) > 0 {
-		rec["app_metadata"] = u.AppMetadata
+		rec[keyAppMetadata] = u.AppMetadata
 	}
 	if len(u.UserMetadata) > 0 {
 		rec["user_metadata"] = u.UserMetadata

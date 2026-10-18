@@ -66,8 +66,9 @@ func TestRunBulkImportResumesWithoutResubmittingChunks(t *testing.T) {
 	crashCtx, crash := context.WithCancel(connector.WithChunkStore(context.Background(), store))
 	defer crash()
 	go func() {
-		// The crash: once chunk 2's job exists and is checkpointed.
-		for srv.submittedCount() < 2 || store.get(2).JobID == "" {
+		// The crash: once chunk 1 is done and chunk 2's job exists and is
+		// checkpointed.
+		for srv.submittedCount() < 2 || store.get(2).JobID == "" || !store.get(1).Done {
 			time.Sleep(time.Millisecond)
 		}
 		crash()

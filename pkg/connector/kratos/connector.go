@@ -2,6 +2,7 @@ package kratos
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,8 +11,11 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/iamigrate/pkg/reconcile"
 )
 
 // defaultPageSize is the number of identities requested per page during
@@ -58,6 +62,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		MFATypes:       []cmf.MFAType{cmf.MFATOTP, cmf.MFARecoveryCodes},
 		SupportsOrgs:   false,
 		SupportsRoles:  false,
+		// Kratos (v1.3) rejects an "id" in the identity it creates.
+		SupportsCustomID: false,
 	}
 }
 
@@ -190,6 +196,11 @@ func indexOf(s, sub string) int {
 
 // Import creates one Kratos identity per CMF user via the Admin API.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	if err != nil {
+		return connector.ImportReport{}, err
+	}
+	tr := importprep.NewReader(ctx, r, applier)
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
 
@@ -200,43 +211,65 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 		default:
 		}
 
-		u, err := r.ReadUser()
+		batch, err := tr.ReadBatch()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return report, err
 		}
-		bar.Add(1)
 
-		id, flags, err := buildIdentity(u, c.SchemaID)
-		if err != nil {
-			report.Failed = append(report.Failed, connector.ImportError{
-				SourceID: u.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
-			})
-			continue
+		// The batch's identities are all built before any is sent, for
+		// import.payload to see them together.
+		var sources []string
+		var bodies []any
+		var allFlags []userFlags
+		for _, p := range batch {
+			bar.Add(1)
+			id, flags, err := buildIdentity(p.User, c.SchemaID)
+			if err != nil {
+				report.Failed = append(report.Failed, connector.ImportError{
+					SourceID: p.User.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
+				})
+				continue
+			}
+			applyFields(&id, p.Fields)
+			sources, bodies, allFlags = append(sources, p.User.SourceID), append(bodies, id), append(allFlags, flags)
+		}
+		if bodies, err = applier.Payloads(ctx, sources, bodies); err != nil {
+			return report, err
 		}
 
-		var created identity
-		if _, err := c.Client.doJSON(ctx, http.MethodPost, "/admin/identities", id, &created); err != nil {
-			report.Failed = append(report.Failed, connector.ImportError{
-				SourceID: u.SourceID, Code: "REQUEST_ERROR", Message: err.Error(),
-			})
-			continue
-		}
+		for i, source := range sources {
+			if err := ctx.Err(); err != nil {
+				return report, err
+			}
+			var created identity
+			if _, err := c.Client.doJSON(ctx, http.MethodPost, "/admin/identities", bodies[i], &created); err != nil {
+				report.Failed = append(report.Failed, connector.ImportError{
+					SourceID: source, Code: "REQUEST_ERROR", Message: err.Error(),
+				})
+				continue
+			}
 
-		report.Succeeded = append(report.Succeeded, u.SourceID)
-		if flags.requiresPasswordReset {
-			report.RequiresPasswordReset = append(report.RequiresPasswordReset, u.SourceID)
-		}
-		if flags.requiresReenrollment {
-			report.RequiresReenrollment = append(report.RequiresReenrollment, u.SourceID)
-		}
-		if flags.requiresRecoveryCodeRegen {
-			report.RequiresRecoveryCodeRegen = append(report.RequiresRecoveryCodeRegen, u.SourceID)
+			report.Succeeded = append(report.Succeeded, source)
+			if created.ID != "" {
+				report.SetTargetID(source, created.ID)
+			}
+			flags := allFlags[i]
+			if flags.requiresPasswordReset {
+				report.RequiresPasswordReset = append(report.RequiresPasswordReset, source)
+			}
+			if flags.requiresReenrollment {
+				report.RequiresReenrollment = append(report.RequiresReenrollment, source)
+			}
+			if flags.requiresRecoveryCodeRegen {
+				report.RequiresRecoveryCodeRegen = append(report.RequiresRecoveryCodeRegen, source)
+			}
 		}
 	}
 
+	report.Skipped = append(report.Skipped, tr.Skipped()...)
 	return report, nil
 }
 
@@ -245,42 +278,42 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 // credentials_identifier filter, which matches any trait the identity
 // schema marks as a password identifier.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
-	var report connector.DiffReport
-	bar := progress.FromContext(ctx)
+	return reconcile.Run(ctx, r, c.check)
+}
 
-	for {
-		u, err := r.ReadUser()
-		if err == io.EOF {
-			break
+// check looks u up by l's target ID, or by its identifier, and compares
+// whether the identity is inactive.
+func (c *Connector) check(ctx context.Context, u cmf.User, l reconcile.Lookup) (reconcile.Found, error) {
+	var found []identity
+	if l.TargetID != "" {
+		var id identity
+		if _, err := c.Client.doJSON(ctx, http.MethodGet, "/admin/identities/"+url.PathEscape(l.TargetID), nil, &id); err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+				return reconcile.Found{Missing: true}, nil
+			}
+			return reconcile.Found{}, fmt.Errorf("kratos: looking up identity %s: %w", l.TargetID, err)
 		}
-		if err != nil {
-			return report, err
-		}
-		bar.Add(1)
-		report.SourceCount++
-		identifier := loginIdentifier(u)
+		found = []identity{id}
+	} else {
+		identifier := l.Identifier
 		if identifier == "" {
-			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
-			continue
+			identifier = loginIdentifier(u)
 		}
-
-		var found []identity
+		if identifier == "" {
+			return reconcile.Found{NoIdentifier: true}, nil
+		}
 		path := "/admin/identities?credentials_identifier=" + url.QueryEscape(identifier)
 		if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
-			return report, fmt.Errorf("kratos: looking up %s: %w", identifier, err)
-		}
-
-		if len(found) == 0 {
-			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
-			continue
-		}
-		report.TargetCount++
-		blocked := found[0].State == stateInactive
-		if blocked != u.Blocked {
-			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{
-				SourceID: u.SourceID, Fields: []string{"blocked"},
-			})
+			return reconcile.Found{}, fmt.Errorf("kratos: looking up %s: %w", identifier, err)
 		}
 	}
-	return report, nil
+	if len(found) == 0 {
+		return reconcile.Found{Missing: true}, nil
+	}
+	f := reconcile.Found{Record: found[0]}
+	if blocked := found[0].State == stateInactive; blocked != u.Blocked {
+		f.Drift = []string{"blocked"}
+	}
+	return f, nil
 }

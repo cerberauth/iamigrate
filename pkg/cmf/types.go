@@ -153,7 +153,21 @@ type User struct {
 	Roles        []string       `json:"roles,omitempty"`
 	GlobalRoles  []string       `json:"global_roles,omitempty"`
 	Memberships  []Membership   `json:"memberships,omitempty"`
-	Provenance   Provenance     `json:"provenance"`
+	// TargetIDs is the user ID each target is to give this user, by target
+	// connector name, assigned once by the mapping's ids.target strategy
+	// before the import so every run, resumed ones included, sends the
+	// same ID. A target missing from it gets the source ID.
+	TargetIDs  map[string]string `json:"target_ids,omitempty"`
+	Provenance Provenance        `json:"provenance"`
+}
+
+// TargetID returns the user ID target is to give u: the one assigned in
+// TargetIDs, else the source ID.
+func (u User) TargetID(target string) string {
+	if id := u.TargetIDs[target]; id != "" {
+		return id
+	}
+	return u.SourceID
 }
 
 // Organization is one row of organizations.cmf.jsonl.

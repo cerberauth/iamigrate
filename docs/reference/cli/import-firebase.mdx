@@ -7,6 +7,10 @@ import { Aside } from '@/components/docs';
 
 Streams a CMF file and creates users with the bulk `accounts:batchCreate` endpoint, up to 1000 per request. A request can only declare one hash algorithm and parameter set, so users are grouped by theirs. A failed user is recorded in `import-report.json` without stopping the run, and a throttled (`429`) or unavailable (`503`) request is retried up to five times.
 
+A user's uid is its `target_ids.firebase` when the users file has one (see [`ids assign`](../ids/)), else its `source_id`. The report's `target_ids` maps each imported user's `source_id` to its uid.
+
+With a `--mapping`, the import applies its `target_fields`, `metadata` routes, `conflict` and import [strategies](../../hooks/strategies/). Users skipped on purpose, by an `import.user` hook or `conflict: {on_duplicate: skip}`, are listed under the report's `skipped` rather than `failed`.
+
 For a step-by-step walkthrough, including verifying logins, see [Import users into Firebase](../../../guides/import/firebase/).
 
 ## Usage
@@ -26,6 +30,8 @@ iamigrate import firebase --in users.cmf.jsonl.gz \
 | `--access-token` | OAuth2 access token, e.g. from `gcloud auth print-access-token` (or `$FIREBASE_ACCESS_TOKEN`); exclusive with `--service-account` |
 | `--upsert` | Overwrite existing users with the same uid instead of failing them |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
+| `--mapping` | `mapping.yaml` path: its `target_fields`, `metadata`, `conflict`, `transforms` and import strategies (optional; see [`mapping.yaml`](../../mapping/)) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |
 
 Either a service account or an access token is required. When `$FIREBASE_AUTH_EMULATOR_HOST` is set, the command talks to the Auth emulator at that address and needs only a project ID.
 

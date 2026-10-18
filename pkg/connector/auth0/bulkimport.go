@@ -17,6 +17,9 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/httpx"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
 	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
@@ -67,11 +70,17 @@ const maxConcurrentJobs = 2
 // already running are waited for, and the report covers every chunk that
 // finished.
 func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectionID string, allowUpsert bool) (connector.ImportReport, []userRoleInfo, error) {
+	return runBulkImport(ctx, client, importprep.NewReader(ctx, r, nil), connectionID, allowUpsert)
+}
+
+// runBulkImport is RunBulkImport over users read with their target fields.
+func runBulkImport(ctx context.Context, client *Client, r *importprep.Reader, connectionID string, allowUpsert bool) (connector.ImportReport, []userRoleInfo, error) {
 	var report connector.ImportReport
 	runner := newJobRunner(ctx, client, connectionID, allowUpsert)
 	roleInfos, readErr := streamChunks(ctx, r, allowUpsert, &report, runner.submit)
 	jobsReport, jobErr := runner.wait()
 	mergeReport(&report, jobsReport)
+	report.Skipped = append(report.Skipped, r.Skipped()...)
 	progress.FromContext(ctx).Status("")
 	if jobErr != nil {
 		return report, roleInfos, jobErr
@@ -82,20 +91,24 @@ func RunBulkImport(ctx context.Context, client *Client, r *cmf.Reader, connectio
 // streamChunks translates the users from r into import records and hands
 // each full chunk, with the source ID of every record, to submit. Users that
 // can't be translated, and the follow-ups they need, go straight into report.
-func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *connector.ImportReport, submit func(chunk []map[string]any, sourceIDs []string) error) ([]userRoleInfo, error) {
+func streamChunks(ctx context.Context, r *importprep.Reader, allowUpsert bool, report *connector.ImportReport, submit func(chunk []map[string]any, sourceIDs, userIDs []string) error) ([]userRoleInfo, error) {
 	var roleInfos []userRoleInfo
 	var chunk []map[string]any
 	var chunkSources []string // source ID of each chunk record
+	var chunkUserIDs []string // payload user_id of each chunk record
 	chunkBytes := 2           // "[]"
 
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
 		}
-		if err := submit(chunk, chunkSources); err != nil {
+		if err := finalPayloads(ctx, r, chunk, chunkSources); err != nil {
 			return err
 		}
-		chunk, chunkSources = nil, nil
+		if err := submit(chunk, chunkSources, chunkUserIDs); err != nil {
+			return err
+		}
+		chunk, chunkSources, chunkUserIDs = nil, nil, nil
 		chunkBytes = 2
 		return nil
 	}
@@ -107,7 +120,7 @@ func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *
 		default:
 		}
 
-		u, err := r.ReadUser()
+		u, fields, err := r.ReadUser()
 		if err == io.EOF {
 			break
 		}
@@ -130,6 +143,7 @@ func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *
 			})
 			continue
 		}
+		applyFields(rec, fields)
 		if flags.requiresPasswordReset {
 			report.RequiresPasswordReset = append(report.RequiresPasswordReset, u.SourceID)
 		}
@@ -153,6 +167,7 @@ func streamChunks(ctx context.Context, r *cmf.Reader, allowUpsert bool, report *
 		}
 		chunk = append(chunk, rec)
 		chunkSources = append(chunkSources, u.SourceID)
+		chunkUserIDs = append(chunkUserIDs, importUserID(u.TargetID(Name)))
 		chunkBytes += recBytes
 	}
 
@@ -201,7 +216,7 @@ func newJobRunner(ctx context.Context, client *Client, connectionID string, upse
 // If ctx carries a connector.ChunkStore, a chunk it holds as done is not
 // submitted again, and one whose job was already created is waited for
 // instead of being resubmitted.
-func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
+func (j *jobRunner) submit(chunk []map[string]any, sourceIDs, userIDs []string) error {
 	chunkNum := len(j.results) + 1
 
 	body, err := json.Marshal(chunk)
@@ -222,7 +237,7 @@ func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
 	if cp.Done {
 		j.results = append(j.results, &chunkResult{report: cp.Report})
 		progress.FromContext(j.ctx).Add(len(chunk))
-		return nil
+		return chunkAfter(j.ctx, chunkNum, len(chunk), cp.Report)
 	}
 
 	select {
@@ -247,7 +262,7 @@ func (j *jobRunner) submit(chunk []map[string]any, sourceIDs []string) error {
 	go func() {
 		defer j.wg.Done()
 		defer func() { <-j.slots }()
-		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, body, sourceIDs, cp, store)
+		res.report, res.err = submitAndPoll(j.ctx, j.client, j.connectionID, j.upsert, body, sourceIDs, userIDs, cp, store)
 		if res.err != nil {
 			j.failOnce.Do(func() {
 				j.err = res.err
@@ -312,25 +327,27 @@ func jobFailedMessage(jobID string, upsert bool) string {
 func mergeReport(dst *connector.ImportReport, src connector.ImportReport) {
 	dst.Succeeded = append(dst.Succeeded, src.Succeeded...)
 	dst.Failed = append(dst.Failed, src.Failed...)
+	for s, t := range src.TargetIDs {
+		dst.SetTargetID(s, t)
+	}
 }
 
 // submitAndPoll imports one chunk, whose JSON payload is body, and reports
 // on it by source ID. sourceIDs[i] is the source ID of the chunk's i-th
-// record, whose user_id in the payload is importUserID(sourceIDs[i]).
+// record, and userIDs[i] its user_id in the payload.
 //
 // cp is the chunk's checkpoint: with a JobID the job already exists, so it is
 // waited for instead of being created. The checkpoint is saved to store, if
 // any, once the job is created and again once it has finished.
-func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, body []byte, sourceIDs []string, cp connector.ChunkCheckpoint, store connector.ChunkStore) (connector.ImportReport, error) {
+func submitAndPoll(ctx context.Context, client *Client, connectionID string, upsert bool, body []byte, sourceIDs, userIDs []string, cp connector.ChunkCheckpoint, store connector.ChunkStore) (connector.ImportReport, error) {
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
 	chunkNum := cp.Index
 
-	// Job errors name a user by its payload user_id, which has lost any
-	// auth0| prefix the source ID carried.
+	// Job errors name a user by its payload user_id.
 	bySourceID := make(map[string]string, len(sourceIDs))
-	for _, id := range sourceIDs {
-		bySourceID[importUserID(id)] = id
+	for i, id := range sourceIDs {
+		bySourceID[userIDs[i]] = id
 	}
 
 	jobID := cp.JobID
@@ -373,7 +390,7 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 		}
 		report.Failed = append(report.Failed, je)
 	}
-	for _, id := range sourceIDs {
+	for i, id := range sourceIDs {
 		if failedIDs[id] {
 			continue
 		}
@@ -389,6 +406,7 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 			continue
 		}
 		report.Succeeded = append(report.Succeeded, id)
+		report.SetTargetID(id, targetUserID(userIDs[i]))
 	}
 
 	if store != nil {
@@ -404,7 +422,17 @@ func submitAndPoll(ctx context.Context, client *Client, connectionID string, ups
 			return report, fmt.Errorf("auth0: saving checkpoint for chunk %d: %w", chunkNum, err)
 		}
 	}
-	return report, nil
+	return report, chunkAfter(ctx, chunkNum, len(sourceIDs), report)
+}
+
+// chunkAfter fires import.chunk.after for a finished chunk. A chunk found
+// done in its checkpoint fires it again, so a crash between the checkpoint
+// and the event doesn't lose it; the event ID is the same both times.
+func chunkAfter(ctx context.Context, index, size int, report connector.ImportReport) error {
+	_, err := hooks.FromContext(ctx).EventAt(ctx, hooks.ImportChunkAfter, index, size, map[string]any{
+		"chunk": index, "report": report,
+	})
+	return err
 }
 
 func submitImportJob(ctx context.Context, client *Client, connectionID string, upsert bool, usersJSON []byte) (string, error) {
@@ -488,19 +516,7 @@ const maxTransientRetries = 5
 // reports its error as temporary, so one dropped connection or rate-limit
 // response doesn't abandon an import job that is still running on Auth0.
 func retryTransient(ctx context.Context, retryable func(error) bool, fn func() error) error {
-	delay := pollInterval
-	for attempt := 0; ; attempt++ {
-		err := fn()
-		if err == nil || attempt >= maxTransientRetries || ctx.Err() != nil || !retryable(err) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-		delay = min(delay*2, pollMaxInterval)
-	}
+	return httpx.Retry(ctx, httpx.Backoff{Initial: pollInterval, Max: pollMaxInterval, Retries: maxTransientRetries}, retryable, fn)
 }
 
 func isRateLimited(err error) bool {
@@ -597,4 +613,40 @@ func boolStr(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// finalPayloads hands a chunk's records to import.payload, if configured,
+// replacing them in place with what it answers. Chunks are sized before,
+// so a replaced chunk still has to fit Auth0's limit.
+func finalPayloads(ctx context.Context, r *importprep.Reader, chunk []map[string]any, sourceIDs []string) error {
+	in := make([]any, len(chunk))
+	for i, rec := range chunk {
+		in[i] = rec
+	}
+	out, err := r.Payloads(ctx, sourceIDs, in)
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i, p := range out {
+		raw, ok := p.(json.RawMessage)
+		if !ok {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			return fmt.Errorf("auth0: import.payload for %s: %w", sourceIDs[i], err)
+		}
+		chunk[i], replaced = rec, true
+	}
+	if replaced {
+		b, err := json.Marshal(chunk)
+		if err != nil {
+			return err
+		}
+		if len(b) > chunkMaxBytes {
+			return fmt.Errorf("auth0: a chunk is %d bytes once import.payload replaced its records, over Auth0's %d", len(b), chunkMaxBytes)
+		}
+	}
+	return nil
 }

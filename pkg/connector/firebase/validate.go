@@ -43,8 +43,8 @@ func (*Connector) ValidateUser(u cmf.User) []connector.Problem {
 		problems = append(problems, connector.Problem{SourceID: u.SourceID, Field: field, Rule: rule, Value: value})
 	}
 
-	if n := utf8.RuneCountInString(u.SourceID); n > maxUIDLen {
-		add("source_id", fmt.Sprintf("must be at most %d characters to be a Firebase uid", maxUIDLen), fmt.Sprintf("%d characters", n))
+	if n := utf8.RuneCountInString(u.TargetID(Name)); n > maxUIDLen {
+		add(targetIDField(u), fmt.Sprintf("must be at most %d characters to be a Firebase uid", maxUIDLen), fmt.Sprintf("%d characters", n))
 	}
 
 	if len(u.Emails) == 0 && len(u.Phones) == 0 {
@@ -88,4 +88,12 @@ func (*Connector) ValidateUser(u cmf.User) []connector.Problem {
 	}
 
 	return problems
+}
+
+// targetIDField names the CMF field the user's Firebase uid comes from.
+func targetIDField(u cmf.User) string {
+	if u.TargetIDs[Name] != "" {
+		return "target_ids." + Name
+	}
+	return "source_id"
 }

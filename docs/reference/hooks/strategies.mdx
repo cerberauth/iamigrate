@@ -1,0 +1,163 @@
+---
+title: Strategies
+description: Every strategy hook point, how to configure it, what it sends and what it answers.
+---
+
+A strategy is a decision iamigrate makes for each user (or record, role, organization) that you can hand to a handler declared in `hooks.yaml` (see [Hooks](../)). Strategies are configured in [`mapping.yaml`](../../mapping/), and each keeps today's behavior unless configured.
+
+Most go under `strategies`, by name:
+
+```yaml
+strategies:
+  export.user: {handler: audit}
+  import.payload: {handler: audit, on_failure: fail}
+  verify.lookup: {strategy: target_id}     # a built-in alternative
+```
+
+`id.target` goes under `ids`, and custom transforms (`map.field`, `map.target_field`) under `transforms`. See [`mapping.yaml`](../../mapping/).
+
+Every strategy is batched: one request carries up to the handler's `batch_size` items, `{"items": {"<key>": <item>}}`, and the answer holds one result per key, `{"results": {"<key>": <result>}}`. The key is the user's `source_id` unless said otherwise. A strategy's `on_failure` defaults to `fail`; with `ignore`, a failed call leaves the users of that batch to the built-in behavior.
+
+## What a handler sees of a user
+
+A handler deciding about a user gets who they are, **never their credentials**: only `hash.translate` and `mfa.translate`, whose job they are, see passwords and MFA factors.
+
+```json
+{
+  "source_id": "u1", "username": "ada", "blocked": false,
+  "emails": [{"value": "ada@example.com", "verified": true, "primary": true}],
+  "phones": [], "profile": {"given_name": "Ada", "family_name": "Lovelace"},
+  "app_metadata": {"plan": "pro"}, "user_metadata": {"theme": "dark"},
+  "roles": [], "global_roles": [], "memberships": [],
+  "provenance": {"source_connector": "flatfile", "exported_at": "2026-10-17T09:12:03Z"},
+  "target_ids": {"auth0": "legacy-1"}
+}
+```
+
+`target_ids` is only there once assigned. Below, this is called *the user*.
+
+## Export
+
+### `export.record`
+
+Each raw record a flat file holds, as read and before the mapping's fields apply. Configured in the flat-file source's mapping (`export --mapping`, `job create --source-mapping`). Other sources don't have it.
+
+- Key: `record <n>`, the record's position from 1, as it has no source ID yet.
+- Item: `{"record": {"<column>": "<value>", ...}}`.
+- Result: `{"action": "keep"}` (or `{}`), `{"action": "drop", "reason": "..."}`, or `{"action": "replace", "record": {...}}`. A dropped record is listed under the manifest's `skipped_records`, as `record <n>`.
+
+### `map.field`
+
+A custom transform on the export side, named in a field's `transform` pipeline, e.g. `transform: "trim|normalize_phone|lowercase"`, and declared under `transforms`. A pipeline runs over a whole column at a time, so it's one request per batch of values, not one per value. Empty values aren't sent.
+
+- Key: the record's position.
+- Item: `{"transform": "normalize_phone", "field": "phone", "value": "+1 (415) 555-0100"}`.
+- Result: `{"value": "+14155550100"}`.
+
+### `export.user`
+
+Each CMF user the export produced, whatever the source, before it is written to the users file. In a job, any source; standalone, with a flat-file `export --mapping`.
+
+- Item: the user.
+- Result: `{}` to keep it, `{"action": "drop", "reason": "..."}`, or `{"action": "replace", "user": {...}}`. A replacement keeps the user's `source_id` and its credentials, which `export.user` never sees. Dropped users are listed under the manifest's `skipped_records`, and the manifest's counts are those of the users written.
+
+### `id.target`
+
+The user ID each user gets in the target, assigned once into the users file's `target_ids` so that every import of it, a resumed one included, sends the same. Configured under `ids.target`, with a built-in or a handler; a job's export applies it, and [`ids assign`](../../cli/ids/) does for a users file that didn't come from one.
+
+| `ids.target` | ID |
+| --- | --- |
+| `{strategy: preserve}` (the default) | The source ID |
+| `{strategy: prefix, prefix: "legacy-"}` | `legacy-` + the source ID |
+| `{strategy: template, template: "{{.SourceID}}@acme"}` | A Go template over `SourceID`, `Email`, `Username` and `Phone` |
+| `{strategy: uuidv5, namespace: <uuid>}` | The version 5 UUID of the source ID in that namespace: the same user always gets the same UUID |
+| `{handler: <name>}` | The handler's answer |
+
+- Item: the user, plus `"target": "<connector>"`.
+- Result: `{"id": "..."}`.
+
+Only Auth0 and Firebase accept a chosen user ID. Ory Kratos and Keycloak generate their own, so `validate` rejects an `ids.target` for them; their import records the generated IDs instead (`target_ids` in the import report). An ID already assigned is kept. `on_failure: ignore` isn't accepted: some users would get the handler's ID and others their source ID, with no way to tell which.
+
+## Validate
+
+### `validate.user`
+
+More problems per user, on top of validate's own.
+
+- Item: the user.
+- Result: `{"problems": [{"field": "emails", "rule": "domain is blocked", "value": "x@example.org"}]}`, or `{}` for none.
+
+### `validate.dedup_key`
+
+More keys two users can't share, on top of the emails, usernames and phones validate already compares: a normalized email, say.
+
+- Item: the user.
+- Result: `{"keys": ["ada.lovelace@example.com"]}`. A user with a key an earlier one had gets a `dedup_key` problem.
+
+## Import
+
+The import-side strategies run on a batch of users before the target connector builds its payloads, in this order: `import.user`, `hash.translate`, `mfa.translate`, then the mapping's `metadata` routes and `target_fields`. `import.payload` runs last, on the payloads. They are asked again whenever the import runs again, so they must give the same answer every time (see [Hooks](../)).
+
+### `import.user`
+
+- Item: the user.
+- Result: `{}` to import it, `{"action": "drop", "reason": "..."}` to skip it, or `{"action": "replace", "user": {...}}` as for `export.user`. Skipped users are listed under the report's `skipped` with code `SKIPPED`, and verify doesn't look for them.
+
+### `hash.translate`
+
+Each user's password, for a hash the target can't take as it is, or to make users reset theirs.
+
+- Item: `{"source_id": "u1", "password": {"algorithm": "md5", "hash": {"value": "...", "encoding": "hex"}, ...}}`.
+- Result: `{"password": {...}}`, a CMF password to import instead; `{"reset": true}` to import none and have the user reset it (reported under `requires_password_reset`); or `{}` to keep it.
+
+### `mfa.translate`
+
+Each user's MFA factors.
+
+- Item: `{"source_id": "u1", "mfa_factors": [{"type": "totp", "value": "...", "portable": true}]}`.
+- Result: `{"mfa_factors": [...]}` to import instead (`[]` for none), or `{}` to keep them.
+
+### `map.target_field`
+
+A custom transform on the import side, in a `target_fields` entry's `transform`. As `map.field`, keyed by `source_id`, with `field` the target path.
+
+### `import.payload`
+
+The payloads the target connector built for a batch of users, as they would be sent, for the final say.
+
+- Item: `{"source_id": "u1", "payload": {...}}`: an Auth0 bulk import record, a Kratos identity, a Keycloak user representation, or a Firebase account.
+- Result: `{"payload": {...}}` to send instead, or `{}` to send it as is.
+
+A replacement must keep the user's ID. For Auth0, a chunk is re-checked against the 500 KB job limit once its records are replaced.
+
+### `org.resolve`, `role.resolve`
+
+Auth0 only, the one target with organizations and roles: each organization of `organizations.cmf.jsonl` and role of `roles.cmf.jsonl`, before they are matched by name or created.
+
+- Key: the organization's or role's `source_id`.
+- Item: the CMF organization (`source_id`, `name`, `display_name`, `metadata`) or role (`source_id`, `name`, `description`).
+- Result: `{"id": "rol_..."}` to use that existing Auth0 role or organization, `{"name": "..."}` to match or create it by that name, or `{}`.
+
+## Verify
+
+Verify is a job's verifying step, or `diff` with `--mapping` (and `--report` for the import's target IDs).
+
+### `verify.lookup`
+
+How to find each user in the target.
+
+| `verify.lookup` | Looks a user up |
+| --- | --- |
+| *(not set)* | By identifier, as each connector does: email, else username or phone |
+| `{strategy: target_id}` | By the ID the import gave it, from the import report (`--report` for `diff`); by identifier when there's none |
+| `{handler: <name>}` | As the handler answers |
+
+- Item: the user, plus `"target_id"` when the import recorded one.
+- Result: `{"target_id": "..."}`, or `{"identifier": "..."}` (an email when it has an `@`; for Firebase, a phone number when it starts with `+`; else a username).
+
+### `verify.compare`
+
+For each user found, whether it differs from the CMF user.
+
+- Item: `{"user": <the user>, "target": <the target's record of it>, "drift": ["blocked"]}`, `drift` being what iamigrate itself found.
+- Result: `{"drift": [...]}`, the fields that differ (`[]` for none).

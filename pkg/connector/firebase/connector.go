@@ -8,15 +8,22 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/iamigrate/pkg/reconcile"
 )
 
 const (
+	// fieldEmail is the lookup field and payload key of an account email.
+	fieldEmail = "email"
+
 	// exportPageSize is the number of accounts requested per page during
 	// Export; Firebase caps it at 1000.
 	exportPageSize = 1000
@@ -63,6 +70,10 @@ func (*Connector) Capabilities() connector.Capabilities {
 		MFATypes:       []cmf.MFAType{cmf.MFASMS},
 		SupportsOrgs:   false,
 		SupportsRoles:  false,
+		// The account's localId (uid).
+		SupportsCustomID: true,
+		// batchCreate's allowOverwrite.
+		SupportsUpsert: true,
 	}
 }
 
@@ -137,9 +148,9 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 // batchCreateRequest is an accounts:batchCreate body. Its embedded hash
 // parameters apply to every user in Users.
 type batchCreateRequest struct {
-	Users          []account `json:"users"`
-	AllowOverwrite bool      `json:"allowOverwrite,omitempty"`
-	SanityCheck    bool      `json:"sanityCheck"`
+	Users          []any `json:"users"`
+	AllowOverwrite bool  `json:"allowOverwrite,omitempty"`
+	SanityCheck    bool  `json:"sanityCheck"`
 	iamhash.FirebaseHashParams
 }
 
@@ -163,7 +174,12 @@ type pendingBatch struct {
 // Import creates the CMF users through accounts:batchCreate. A request can
 // only declare one hash algorithm and configuration, so users are grouped
 // by theirs and each group is sent in batches of up to 1000.
-func (c *Connector) Import(ctx context.Context, r *cmf.Reader, _ mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
+func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	if err != nil {
+		return connector.ImportReport{}, err
+	}
+	tr := importprep.NewReader(ctx, r, applier)
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
 
@@ -177,7 +193,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, _ mapping.Mapping
 		default:
 		}
 
-		u, err := r.ReadUser()
+		u, fields, err := tr.ReadUser()
 		if err == io.EOF {
 			break
 		}
@@ -188,6 +204,12 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, _ mapping.Mapping
 
 		a, params, flags, err := buildAccount(u)
 		if err != nil {
+			report.Failed = append(report.Failed, connector.ImportError{
+				SourceID: u.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
+			})
+			continue
+		}
+		if err := applyFields(&a, fields); err != nil {
 			report.Failed = append(report.Failed, connector.ImportError{
 				SourceID: u.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
 			})
@@ -205,7 +227,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, _ mapping.Mapping
 		b.flags = append(b.flags, flags)
 
 		if len(b.accounts) == importBatchSize {
-			if err := c.flush(ctx, b, opts.Upsert, &report); err != nil {
+			if err := c.flush(ctx, applier, b, opts.Upsert, &report); err != nil {
 				return report, err
 			}
 			*b = pendingBatch{params: params}
@@ -214,20 +236,30 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, _ mapping.Mapping
 
 	for _, params := range order {
 		if b := batches[params]; len(b.accounts) > 0 {
-			if err := c.flush(ctx, b, opts.Upsert, &report); err != nil {
+			if err := c.flush(ctx, applier, b, opts.Upsert, &report); err != nil {
 				return report, err
 			}
 		}
 	}
+	report.Skipped = append(report.Skipped, tr.Skipped()...)
 	return report, nil
 }
 
 // flush sends one batch and records each of its users as succeeded or
-// failed in report. It returns an error only when ctx is done; a failed
-// request fails the batch's users and the import carries on.
-func (c *Connector) flush(ctx context.Context, b *pendingBatch, upsert bool, report *connector.ImportReport) error {
+// failed in report. It returns an error only when ctx is done or an
+// import.payload hook fails; a failed request fails the batch's users and
+// the import carries on.
+func (c *Connector) flush(ctx context.Context, applier *importprep.Applier, b *pendingBatch, upsert bool, report *connector.ImportReport) error {
+	users := make([]any, len(b.accounts))
+	for i, a := range b.accounts {
+		users[i] = a
+	}
+	users, err := applier.Payloads(ctx, b.sources, users)
+	if err != nil {
+		return err
+	}
 	req := batchCreateRequest{
-		Users:              b.accounts,
+		Users:              users,
 		AllowOverwrite:     upsert,
 		SanityCheck:        true,
 		FirebaseHashParams: b.params,
@@ -257,6 +289,7 @@ func (c *Connector) flush(ctx context.Context, b *pendingBatch, upsert bool, rep
 			continue
 		}
 		report.Succeeded = append(report.Succeeded, id)
+		report.SetTargetID(id, b.accounts[i].LocalID)
 		if b.flags[i].requiresPasswordReset {
 			report.RequiresPasswordReset = append(report.RequiresPasswordReset, id)
 		}
@@ -290,55 +323,43 @@ func errorCode(msg string) string {
 // their email, else phone number, with accounts:lookup, and comparing
 // whether the account is disabled and its email verified.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
-	var report connector.DiffReport
-	bar := progress.FromContext(ctx)
+	return reconcile.Run(ctx, r, c.check)
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return report, ctx.Err()
-		default:
-		}
-
-		u, err := r.ReadUser()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return report, err
-		}
-		bar.Add(1)
-		report.SourceCount++
-
-		field, value := loginIdentifier(u)
-		if value == "" {
-			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
-			continue
-		}
-
-		var found struct {
-			Users []account `json:"users"`
-		}
-		body := map[string][]string{field: {value}}
-		if err := c.Client.doJSON(ctx, http.MethodPost, c.Client.projectPath(":lookup"), body, &found); err != nil {
-			return report, fmt.Errorf("firebase: looking up %s: %w", value, err)
-		}
-		if len(found.Users) == 0 {
-			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
-			continue
-		}
-		report.TargetCount++
-
-		var drift []string
-		if found.Users[0].Disabled != u.Blocked {
-			drift = append(drift, "blocked")
-		}
-		if field == "email" && found.Users[0].EmailVerified != u.Emails[0].Verified {
-			drift = append(drift, "email_verified")
-		}
-		if len(drift) > 0 {
-			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{SourceID: u.SourceID, Fields: drift})
-		}
+// check looks u up by l's target ID (its uid), or by l's identifier (a phone
+// number when it starts with +, else an email), or else by its email or
+// phone, and compares whether the account is disabled and, looked up by
+// email or uid, its email verified.
+func (c *Connector) check(ctx context.Context, u cmf.User, l reconcile.Lookup) (reconcile.Found, error) {
+	field, value := loginIdentifier(u)
+	switch {
+	case l.TargetID != "":
+		field, value = "localId", l.TargetID
+	case strings.HasPrefix(l.Identifier, "+"):
+		field, value = "phoneNumber", l.Identifier
+	case l.Identifier != "":
+		field, value = fieldEmail, l.Identifier
 	}
-	return report, nil
+	if value == "" {
+		return reconcile.Found{NoIdentifier: true}, nil
+	}
+	var found struct {
+		Users []account `json:"users"`
+	}
+	body := map[string][]string{field: {value}}
+	if err := c.Client.doJSON(ctx, http.MethodPost, c.Client.projectPath(":lookup"), body, &found); err != nil {
+		return reconcile.Found{}, fmt.Errorf("firebase: looking up %s: %w", value, err)
+	}
+	if len(found.Users) == 0 {
+		return reconcile.Found{Missing: true}, nil
+	}
+
+	f := reconcile.Found{Record: found.Users[0]}
+	if found.Users[0].Disabled != u.Blocked {
+		f.Drift = append(f.Drift, "blocked")
+	}
+	if (field == fieldEmail || field == "localId") && len(u.Emails) > 0 && found.Users[0].EmailVerified != u.Emails[0].Verified {
+		f.Drift = append(f.Drift, "email_verified")
+	}
+	return f, nil
 }

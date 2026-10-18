@@ -7,6 +7,10 @@ import { Aside } from '@/components/docs';
 
 Streams a CMF file and creates one user per record via `POST /admin/realms/{realm}/users`. Keycloak has no bulk-import job, so users are created one at a time; a failed user is recorded in `import-report.json` without stopping the run.
 
+Keycloak generates each user's ID (`POST /users` ignores one it is given), so a CMF `target_ids` can't choose it (`validate` rejects one). The report's `target_ids` maps each imported user's `source_id` to the ID Keycloak gave it, read from the response's `Location`.
+
+With a `--mapping`, the import applies its `target_fields`, `metadata` routes, `conflict` and import [strategies](../../hooks/strategies/). Users skipped on purpose, by an `import.user` hook or `conflict: {on_duplicate: skip}`, are listed under the report's `skipped` rather than `failed`.
+
 For a step-by-step walkthrough, including realm setup and verifying logins, see [Import users into Keycloak](../../../guides/import/keycloak/).
 
 ## Usage
@@ -28,6 +32,8 @@ iamigrate import keycloak --in users.cmf.jsonl.gz \
 | `--username` / `--password` | Admin credentials, for the password grant (or `$KEYCLOAK_USERNAME`/`$KEYCLOAK_PASSWORD`) |
 | `--client-id` / `--client-secret` | A service-account client's credentials, for the `client_credentials` grant (or `$KEYCLOAK_CLIENT_ID`/`$KEYCLOAK_CLIENT_SECRET`); also the client ID `--username` authenticates as (default `admin-cli`) |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
+| `--mapping` | `mapping.yaml` path: its `target_fields`, `metadata`, `conflict`, `transforms` and import strategies (optional; see [`mapping.yaml`](../../mapping/)) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |
 
 Either `--username`/`--password`, or `--client-id`/`--client-secret`, is required.
 

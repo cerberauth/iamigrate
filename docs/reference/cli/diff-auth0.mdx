@@ -30,3 +30,6 @@ Authenticate with either a Management API token (`--token`) or a Machine-to-Mach
 | `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
 | `--client-id` | Machine-to-Machine application client ID (or `$AUTH0_CLIENT_ID`). With `--client-secret`, iamigrate gets the Management API token itself through the `client_credentials` grant and renews it before it expires. Can't be combined with `--token`. |
 | `--client-secret` | Machine-to-Machine application client secret (or `$AUTH0_CLIENT_SECRET`) |
+| `--mapping` | `mapping.yaml` path: its `verify.lookup` and `verify.compare` [strategies](../../hooks/strategies/) (optional) |
+| `--report` | `import-report.json` of the import being verified: its target IDs, for `verify.lookup: {strategy: target_id}`, and the users it skipped on purpose, which aren't looked for (optional) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |

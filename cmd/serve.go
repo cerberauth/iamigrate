@@ -21,7 +21,7 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func newServeCmd() *cobra.Command {
-	var listen, dir string
+	var listen, dir, hooksPath string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -40,6 +40,11 @@ func newServeCmd() *cobra.Command {
 			}
 			runner, err := openJobRunner(dir)
 			if err != nil {
+				return err
+			}
+			// Hooks come only from this flag: a job's params, which API
+			// clients send, can't add one or change where it points.
+			if runner.Hooks, err = loadHooks(hooksPath); err != nil {
 				return err
 			}
 			ln, err := net.Listen("tcp", listen)
@@ -85,6 +90,7 @@ func newServeCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
 	cmd.Flags().StringVar(&dir, "dir", "./jobs/", "directory the jobs' state is kept in")
+	cmd.Flags().StringVar(&hooksPath, "hooks", "", "hooks.yaml path: the hooks every job fires, and the handlers job mappings can delegate strategies to")
 	return cmd
 }
 

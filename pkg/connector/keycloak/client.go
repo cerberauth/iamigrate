@@ -154,18 +154,24 @@ func (c *Client) adminPath(suffix string) string {
 // doJSON issues an authorized JSON request and decodes a JSON response
 // into out (if non-nil).
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
+	_, err := c.do(ctx, method, path, body, out)
+	return err
+}
+
+// do is doJSON, also returning the response headers, for a Location.
+func (c *Client) do(ctx context.Context, method, path string, body, out any) (http.Header, error) {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("keycloak: encoding request body: %w", err)
+			return nil, fmt.Errorf("keycloak: encoding request body: %w", err)
 		}
 		reqBody = bytes.NewReader(b)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
 	if err != nil {
-		return fmt.Errorf("keycloak: building request: %w", err)
+		return nil, fmt.Errorf("keycloak: building request: %w", err)
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -174,28 +180,28 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if c.Credentials != nil {
 		token, err := c.Credentials.Token(ctx, c.HTTP)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("keycloak: %s %s: %w", method, path, err)
+		return nil, fmt.Errorf("keycloak: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("keycloak: reading response body: %w", err)
+		return nil, fmt.Errorf("keycloak: reading response body: %w", err)
 	}
 	if resp.StatusCode >= 300 {
-		return &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 	if out != nil && len(respBody) > 0 {
 		if err := json.Unmarshal(respBody, out); err != nil {
-			return fmt.Errorf("keycloak: decoding response: %w", err)
+			return nil, fmt.Errorf("keycloak: decoding response: %w", err)
 		}
 	}
-	return nil
+	return resp.Header, nil
 }

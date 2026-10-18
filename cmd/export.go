@@ -16,6 +16,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
+	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/spf13/cobra"
 )
@@ -56,6 +57,10 @@ func newExportCmd() *cobra.Command {
 					return err
 				}
 			}
+			pass, err := exportPass(cmd.Context(), fileMapping)
+			if err != nil {
+				return err
+			}
 
 			// Everything a Firebase export needs is checked before the output
 			// file is created, so a mistake doesn't leave an empty export.
@@ -93,7 +98,14 @@ func newExportCmd() *cobra.Command {
 			}
 
 			usersPath, newWriter := usersOutput(outDir, noGzip)
-			f, err := os.Create(usersPath)
+			// With export strategies, the export is written aside and
+			// rewritten through them into usersPath.
+			exportPath := usersPath
+			if pass != nil {
+				exportPath = usersPath + ".raw"
+				defer os.Remove(exportPath)
+			}
+			f, err := os.Create(exportPath)
 			if err != nil {
 				return err
 			}
@@ -135,6 +147,19 @@ func newExportCmd() *cobra.Command {
 			if err := w.Close(); err != nil {
 				return err
 			}
+			if pass != nil {
+				f.Close()
+				if err := rewriteExport(ctx, pass, exportPath, usersPath, newWriter, &manifest); err != nil {
+					os.Remove(usersPath)
+					return err
+				}
+			}
+			if err := lifecycle.ExportAfter(ctx, manifest); err != nil {
+				// A vetoed export is not to be used: don't leave it around.
+				f.Close()
+				os.Remove(usersPath)
+				return err
+			}
 			if err := writeManifest(outDir, manifest); err != nil {
 				return err
 			}
@@ -165,7 +190,7 @@ func newExportCmd() *cobra.Command {
 	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
-	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields (flatfile source)")
+	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile source)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
 	fbAuth.register(cmd)
@@ -174,6 +199,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&a0Export.ConnectionID, "connection-id", "", "export only the users of this connection, e.g. con_xxx (default: every connection; auth0 source)")
 	cmd.Flags().StringSliceVar(&a0Export.Fields, "fields", nil, "export only these user attributes, comma-separated; user_id is always exported (default: all of "+strings.Join(auth0.ExportFields, ",")+"; auth0 source)")
 	cmd.Flags().IntVar(&a0Export.Limit, "limit", 0, "export at most this many users, to try an export on a sample (default: no limit; auth0 source)")
+	addHooksFlag(cmd)
 	cmd.Flags().BoolVar(&noGzip, "no-gzip", false, "write users.cmf.jsonl uncompressed instead of users.cmf.jsonl.gz")
 	return cmd
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
 )
 
 // StepFunc runs the work of one state against j, recording its results on
@@ -46,6 +47,12 @@ type Runner struct {
 	// on a state (the one it resumes in included), and once more when the
 	// job reaches Done or Failed.
 	OnState func(j *Job)
+
+	// Hooks, if set, fire the hooks of the operator's hooks file: the steps
+	// find it, scoped to the job and its state, through
+	// hooks.FromContext. It is the runner's, never a job's, so a job's
+	// params can't point a hook anywhere.
+	Hooks *hooks.Dispatcher
 
 	// Now is the clock; time.Now if nil.
 	Now func() time.Time
@@ -108,31 +115,113 @@ func (r *Runner) Run(ctx context.Context, id string) (*Job, error) {
 			r.notify(j)
 		}
 	}()
+	if j.State.Terminal() {
+		return j, nil
+	}
+
+	// One checkpoints for the whole run: it is also where the hooks of the
+	// run record their results, under its lock.
+	cp := &checkpoints{job: j, store: r.Store, now: r.now}
+	d := r.Hooks.ForJob(j.ID, cp.recordHook)
+	// stop ends the run on err, from a step or a hook: an interruption
+	// leaves the job to be resumed, anything else fails it.
+	stop := func(err error) (*Job, error) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Interrupted rather than failed: leave the state as
+			// persisted so the step is run again on resume.
+			return j, ctxErr
+		}
+		if serr := r.fail(j, err); serr != nil {
+			return j, serr
+		}
+		return j, r.finish(ctx, d, j)
+	}
+
+	r.noteHooksFile(j, cp)
+
+	// Fired on every run, a resumed one included, with the same event ID.
+	if _, err := d.InState(string(j.State)).Event(ctx, hooks.JobBeforeRun, jobData(j)); err != nil {
+		return stop(err)
+	}
 	for !j.State.Terminal() {
 		if err := ctx.Err(); err != nil {
 			return j, err
 		}
 		r.notify(j)
+		sd := d.InState(string(j.State))
+		if _, err := sd.Event(ctx, hooks.StateEnter, jobData(j)); err != nil {
+			return stop(err)
+		}
 		if step := r.Steps.forState(j.State); step != nil {
-			err := r.runStep(ctx, j, step)
+			if err := r.runStep(ctx, j, step, cp, sd); err != nil {
+				return stop(err)
+			}
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				// Interrupted rather than failed: leave the state as
-				// persisted so the step is run again on resume.
 				return j, ctxErr
 			}
-			if err != nil {
-				if serr := r.fail(j, err); serr != nil {
-					return j, serr
-				}
-				return j, nil
-			}
+		}
+		if _, err := sd.Event(ctx, hooks.StateExit, jobData(j)); err != nil {
+			return stop(err)
 		}
 		next, _ := j.State.Next()
 		if err := r.transition(j, next); err != nil {
 			return j, err
 		}
 	}
-	return j, nil
+	return j, r.finish(ctx, d, j)
+}
+
+// noteHooksFile records on j the hooks file this run has, and a Changed
+// result when it isn't the one an earlier run had: strategies feeding the
+// import must answer a resumed job as they did before, which another hooks
+// file may not. A job first run without hooks has nothing to compare with.
+func (r *Runner) noteHooksFile(j *Job, cp *checkpoints) {
+	fp := r.Hooks.Config().Fingerprint()
+	if fp == j.HooksFingerprint || (fp != "" && j.HooksFingerprint == "") {
+		j.HooksFingerprint = fp
+		return
+	}
+	reason := "the hooks file changed since the job's last run (" + short(j.HooksFingerprint) + " -> " + short(fp) + ")"
+	if fp == "" {
+		reason = "the job's last run had a hooks file (" + short(j.HooksFingerprint) + "), this one has none"
+	} else {
+		j.HooksFingerprint = fp
+	}
+	cp.recordHook(hooks.Result{Hook: "hooks", State: string(j.State), Outcome: hooks.Changed, Reason: reason, At: r.now()})
+}
+
+func short(fp string) string { return fp[:min(len(fp), 12)] }
+
+// finish fires job.done or job.failed for j, just terminal, and saves the
+// results of the hook calls, if any were recorded.
+func (r *Runner) finish(ctx context.Context, d *hooks.Dispatcher, j *Job) error {
+	hook := hooks.JobDone
+	if j.State == Failed {
+		hook = hooks.JobFailed
+	}
+	n := len(j.Hooks)
+	// The job is over whatever the hook answers: its failure is recorded,
+	// not acted on.
+	_, _ = d.InState(string(j.State)).Event(ctx, hook, jobData(j))
+	if len(j.Hooks) == n {
+		return nil
+	}
+	j.UpdatedAt = r.now()
+	return r.Store.Save(j)
+}
+
+// jobData is what job and state events tell of j: where it is, not the
+// results of its steps, which their own events carry.
+func jobData(j *Job) map[string]any {
+	return map[string]any{
+		"id":         j.ID,
+		"state":      j.State,
+		"failed_in":  j.FailedIn,
+		"error":      j.Error,
+		"params":     j.Params,
+		"created_at": j.CreatedAt,
+		"updated_at": j.UpdatedAt,
+	}
 }
 
 // Retry puts a failed job back in a state, ready for Run to try its step
@@ -173,7 +262,7 @@ func (r *Runner) Retry(id string, from State) (*Job, error) {
 			j.Manifest = nil
 		}
 		if from.index() <= Validating.index() {
-			j.Problems = nil
+			j.Problems, j.Warnings = nil, nil
 		}
 		if from.index() <= Importing.index() {
 			j.Report, j.Chunks = nil, nil
@@ -181,6 +270,7 @@ func (r *Runner) Retry(id string, from State) (*Job, error) {
 		if from.index() <= Verifying.index() {
 			j.Diff = nil
 		}
+		j.Hooks = hooksBefore(j.Hooks, from)
 	}
 	j.State, j.FailedIn, j.Error = from, "", ""
 	j.UpdatedAt = r.now()
@@ -190,10 +280,23 @@ func (r *Runner) Retry(id string, from State) (*Job, error) {
 	return j, nil
 }
 
-// runStep runs step with j's chunk checkpoints in the context, and saves j
-// when it's done.
-func (r *Runner) runStep(ctx context.Context, j *Job, step StepFunc) error {
-	cp := &checkpoints{job: j, store: r.Store, now: r.now}
+// hooksBefore returns the hook results recorded in states before from,
+// those of the states a retry goes back over being discarded with the rest
+// of their results.
+func hooksBefore(rs []hooks.Result, from State) []hooks.Result {
+	var kept []hooks.Result
+	for _, r := range rs {
+		if i := State(r.State).index(); i >= 0 && i < from.index() {
+			kept = append(kept, r)
+		}
+	}
+	return kept
+}
+
+// runStep runs step with j's chunk checkpoints and hooks, d, in the
+// context, and saves j when it's done.
+func (r *Runner) runStep(ctx context.Context, j *Job, step StepFunc, cp *checkpoints, d *hooks.Dispatcher) error {
+	ctx = hooks.WithDispatcher(ctx, d)
 	err := step(connector.WithChunkStore(ctx, cp), j)
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
@@ -255,6 +358,14 @@ func (c *checkpoints) SaveChunk(cp connector.ChunkCheckpoint) error {
 	}
 	c.job.Chunks[cp.Index] = cp
 	return c.save()
+}
+
+// recordHook keeps a hook result on the job, saved with it. Hooks may fire
+// from concurrent chunks, hence the lock.
+func (c *checkpoints) recordHook(res hooks.Result) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.job.Hooks = append(c.job.Hooks, res)
 }
 
 // save persists the job. The caller holds c.mu.

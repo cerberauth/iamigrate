@@ -12,10 +12,10 @@ queued → exporting → validating → importing → verifying → done
 
 | State | Step |
 | --- | --- |
-| `exporting` | `export` from `--source` into `--users`. Skipped when the job has no `--source` and starts from an existing `--users` file. |
-| `validating` | The same checks as [`validate`](../validate/). Any problem fails the job. |
+| `exporting` | `export` from `--source` into `--users`, then the `--mapping`'s `export.user` and `ids.target`, if any. Skipped when the job has no `--source` and starts from an existing `--users` file. |
+| `validating` | The same checks as [`validate`](../validate/). Any problem fails the job, unless a `validate.after` hook downgrades it to a warning or decides otherwise. |
 | `importing` | `import` into `--target`, with `organizations.cmf.jsonl` and `roles.cmf.jsonl` read from beside `--users` if present. |
-| `verifying` | The same lookups as `diff`. A user missing from the target, or with drifted attributes, fails the job. |
+| `verifying` | The same lookups as `diff`, with the import's target IDs for `verify.lookup: {strategy: target_id}`. A user missing from the target, or with drifted attributes, fails the job, unless a `verify.after` hook decides otherwise. Users the import skipped on purpose aren't looked for. |
 
 If the process dies or is interrupted (Ctrl-C and `SIGTERM` stop it cleanly), the job stays in the state it was in. `job run` picks it up there and repeats only that step and the ones after it. Steps already finished are not redone.
 
@@ -61,7 +61,19 @@ A job can only be driven by one `job run` at a time; a second gets `job is being
 | `job status <id>` | Show the state and the result of each finished step; `--json` prints the whole record |
 | `job report <id>` | Print, as JSON, what a finished (`done` or `failed`) job's steps found |
 
-All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job, and `--api-url`.
+All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job, `--api-url`, and `--hooks`.
+
+## Hooks
+
+With `--hooks hooks.yaml`, the jobs run in this process fire [hooks](../../hooks/): `job.before_run` and the state events around every step, the export, validate, import and verify events of the steps, and the handlers of the `--mapping`'s [strategies](../../hooks/strategies/).
+
+
+```sh
+iamigrate job --hooks hooks.yaml run "$id"
+```
+
+
+Hooks aren't stored with a job: pass `--hooks` to every `job run`, a resumed one included. The job remembers a fingerprint of the file, and `job status` lists a run under a different one as `changed`. A resumed job fires its events again, with the same event IDs. A hook call that vetoed a step, failed, or failed and was ignored is listed by `job status`, under `hooks`, and validate's downgraded problems under `warnings`. `--hooks` can't be combined with `--api-url`: a server's jobs fire the hooks the server was started with.
 
 ## Driving a server
 

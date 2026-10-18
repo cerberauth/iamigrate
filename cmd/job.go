@@ -32,7 +32,7 @@ const pollInterval = time.Second
 // jobFlags say which jobs the job commands act on: the jobs kept in dir and run in process, or
 // those of the `iamigrate serve` instance at apiURL.
 type jobFlags struct {
-	dir, apiURL string
+	dir, apiURL, hooks string
 }
 
 // client returns the client of the server --api-url names, or nil if the
@@ -45,7 +45,14 @@ func (f *jobFlags) client() *api.Client {
 }
 
 func (f *jobFlags) runner() (*jobs.Runner, error) {
-	return openJobRunner(f.dir)
+	r, err := openJobRunner(f.dir)
+	if err != nil {
+		return nil, err
+	}
+	if r.Hooks, err = loadHooks(f.hooks); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 func newJobCmd() *cobra.Command {
@@ -58,6 +65,14 @@ func newJobCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVar(&f.dir, "dir", "./jobs/", "directory the jobs' state is kept in")
 	cmd.PersistentFlags().StringVar(&f.apiURL, "api-url", os.Getenv(envAPIURL),
 		"drive the jobs of a running `iamigrate serve` at this URL instead of running them in process (or $"+envAPIURL+"; its bearer token is $"+envAPIToken+")")
+	cmd.PersistentFlags().StringVar(&f.hooks, "hooks", "",
+		"hooks.yaml path: the hooks the jobs run in this process fire (see `iamigrate serve --hooks` for a server's)")
+	cmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if f.apiURL != "" && f.hooks != "" {
+			return fmt.Errorf("--hooks can't be used with --api-url: a server's jobs fire the hooks it was started with (serve --hooks)")
+		}
+		return nil
+	}
 	cmd.AddCommand(newJobCreateCmd(&f), newJobRunCmd(&f), newJobRetryCmd(&f), newJobStatusCmd(&f), newJobReportCmd(&f))
 	return cmd
 }
@@ -363,6 +378,12 @@ func printJob(w io.Writer, j *jobs.Job) {
 			fmt.Fprintln(w, "   -", p)
 		}
 	}
+	if len(j.Warnings) > 0 {
+		fmt.Fprintf(w, "  validate: %d warning(s)\n", len(j.Warnings))
+		for _, p := range j.Warnings {
+			fmt.Fprintln(w, "   -", p)
+		}
+	}
 	if j.Report != nil {
 		duplicated := 0
 		byCode := map[string]int{}
@@ -375,6 +396,9 @@ func printJob(w io.Writer, j *jobs.Job) {
 		}
 		fmt.Fprintf(w, "  imported: %d succeeded, %d already exist, %d failed\n",
 			len(j.Report.Succeeded), duplicated, len(j.Report.Failed)-duplicated)
+		if n := len(j.Report.Skipped); n > 0 {
+			fmt.Fprintf(w, "  skipped: %d (see the report)\n", n)
+		}
 		codes := make([]string, 0, len(byCode))
 		for c := range byCode {
 			codes = append(codes, c)
@@ -395,5 +419,11 @@ func printJob(w io.Writer, j *jobs.Job) {
 	if j.Diff != nil {
 		fmt.Fprintf(w, "  verify: %d found of %d, %d missing, %d with drift\n",
 			j.Diff.TargetCount, j.Diff.SourceCount, len(j.Diff.MissingInTarget), len(j.Diff.AttributeDrift))
+	}
+	if len(j.Hooks) > 0 {
+		fmt.Fprintf(w, "  hooks: %d vetoed, failed, ignored or changed\n", len(j.Hooks))
+		for _, h := range j.Hooks {
+			fmt.Fprintf(w, "   - %s in %s: %s: %s\n", h.Hook, h.State, h.Outcome, h.Reason)
+		}
 	}
 }
