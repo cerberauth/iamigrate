@@ -20,3 +20,6 @@ iamigrate diff firebase --in users.cmf.jsonl.gz \
 | `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project) |
 | `--service-account` | Service account key JSON path (or `$GOOGLE_APPLICATION_CREDENTIALS`) |
 | `--access-token` | OAuth2 access token (or `$FIREBASE_ACCESS_TOKEN`); exclusive with `--service-account` |
+| `--mapping` | `mapping.yaml` path: its `verify.lookup` and `verify.compare` [strategies](../../hooks/strategies/) (optional) |
+| `--report` | `import-report.json` of the import being verified: its target IDs, for `verify.lookup: {strategy: target_id}`, and the users it skipped on purpose, which aren't looked for (optional) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |

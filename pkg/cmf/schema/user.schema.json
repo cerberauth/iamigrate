@@ -68,6 +68,10 @@
     "user_metadata": { "type": "object" },
     "roles": { "type": "array", "items": { "type": "string" } },
     "global_roles": { "type": "array", "items": { "type": "string" } },
+    "target_ids": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
     "memberships": {
       "type": "array",
       "items": {

@@ -1,0 +1,35 @@
+---
+title: ids assign
+description: Assign the user IDs a target is to give the users, per the mapping's ids.target.
+---
+
+Writes a copy of a CMF users file in which every user has an ID for `--target` under `target_ids`, as the mapping's `ids.target` strategy decides: a prefix, a template, a UUIDv5, or a handler's answer (see [`id.target`](../../hooks/strategies/)). A user that already has one keeps it.
+
+The IDs are assigned once, into the file, so every import of it, a resumed one included, sends the same IDs, and `diff` and the Auth0 organizations/roles phase address the same users. A [`job`](../job/) with a `--source` does this itself during its export; use `ids assign` for a users file that didn't come from one. `validate --mapping` reports the users of a file `ids.target` hasn't been applied to.
+
+Only targets that accept a chosen user ID can be given one: `auth0` (the `user_id`, behind its `auth0|` prefix) and `firebase` (the uid). Ory Kratos and Keycloak generate their own; their import records the IDs they gave under the report's `target_ids`.
+
+## Usage
+
+
+```sh
+cat > mapping.yaml <<'EOF'
+target: auth0
+ids:
+  target: {strategy: uuidv5, namespace: 6ba7b811-9dad-11d1-80b4-00c04fd430c8}
+EOF
+
+iamigrate ids assign --in users.cmf.jsonl.gz --out users.ids.cmf.jsonl.gz --mapping mapping.yaml --target auth0
+iamigrate validate --in users.ids.cmf.jsonl.gz --target auth0 --mapping mapping.yaml
+```
+
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF users file to read; gzip is detected automatically (required) |
+| `--out` | CMF users file to write, gzipped when it ends in `.gz`; must differ from `--in` (required) |
+| `--mapping` | `mapping.yaml` holding the `ids.target` strategy (required) |
+| `--target` | Target connector name: `auth0` or `firebase` (required) |
+| `--hooks` | `hooks.yaml` declaring the handler an `ids.target` hands the decision to |

@@ -13,6 +13,7 @@ iamigrate serve --listen 127.0.0.1:8080 --dir ./jobs/
 | --- | --- |
 | `--listen` | Address to listen on (default `127.0.0.1:8080`) |
 | `--dir` | Directory the jobs' state is kept in (default `./jobs/`) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) every job fires, and the handlers job mappings can hand strategies to |
 
 ## Endpoints
 
@@ -20,7 +21,7 @@ iamigrate serve --listen 127.0.0.1:8080 --dir ./jobs/
 | --- | --- |
 | `POST /jobs` | Queue a job and start running it in the background. Answers `202` with the job record and its `Location` |
 | `GET /jobs/{id}` | The job record: state, params, and the result of each finished step |
-| `GET /jobs/{id}/report` | What the finished steps found: `manifest`, `problems`, `import` and `verify`. Answers `409` while the job is still running |
+| `GET /jobs/{id}/report` | What the finished steps found: `manifest`, `problems`, `warnings`, `import`, `verify`, and the hook calls that vetoed, failed or were ignored (`hooks`). Answers `409` while the job is still running |
 | `POST /jobs/{id}/retry` | Put a failed job back in a state and run it again, as `job retry` does. The optional body `{"from": "exporting"}` goes back to an earlier state. Answers `202` with the job record, `409` for a job that hasn't failed, `400` for a state it can't go back to |
 
 `POST /jobs` takes the same params as `job create`, under `params`:
@@ -42,3 +43,7 @@ Credentials are never part of a request. Each step reads them from the environme
 Set `$IAMIGRATE_API_TOKEN` to require it as a bearer token (`Authorization: Bearer <token>`). Without a token, `serve` only accepts a loopback `--listen` address and refuses to start on any other.
 
 `SIGINT` or `SIGTERM` stops the server and interrupts its running jobs, which stay in the state they were in. When `serve` starts it resumes every unfinished job in `--dir`, the ones a crash or a shutdown interrupted, exactly as `job run` would: finished steps aren't redone and an Auth0 import carries on from its chunk checkpoints. A job another process is running is left to it.
+
+## Hooks
+
+A server fires the hooks of the `hooks.yaml` it was started with, for every job. They come only from `--hooks`: a request can't add a hook or change where one points. A job's params have no hook key, and the mapping a job's `mapping` param names can only select handlers that file declares, by name, never hold a URL. See [Hooks](../../hooks/) for what fires when, and how to verify a request's signature.

@@ -33,5 +33,5 @@ func (m Mapping) Validate() error {
 			return fmt.Errorf("mapping: manual_steps entry missing a field name")
 		}
 	}
-	return nil
+	return m.IDs.Target.validate()
 }

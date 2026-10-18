@@ -7,11 +7,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/iamigrate/pkg/strategy"
 )
 
 // Format names the flat-file encoding.
@@ -72,13 +75,18 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	if err != nil {
 		return connector.Manifest{}, err
 	}
-	if rows, err = Normalize(rows, opts.Mapping); err != nil {
+	rows, dropped, err := exportRecord(ctx, rows, opts.Mapping)
+	if err != nil {
+		return connector.Manifest{}, err
+	}
+	if rows, err = normalize(ctx, rows, opts.Mapping, hooks.FromContext(ctx)); err != nil {
 		return connector.Manifest{}, err
 	}
 
 	manifest := connector.Manifest{
 		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
 		NonPortableMFACounts: map[cmf.MFAType]int{},
+		SkippedRecords:       dropped,
 	}
 	bar := progress.FromContext(ctx)
 	bar.SetTotal(len(rows))
@@ -179,3 +187,57 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
 	return connector.DiffReport{}, fmt.Errorf("flatfile: Verify is not supported (no live system to reconcile against)")
 }
+
+// exportRecord hands the raw rows, as read and before any mapping, to the
+// mapping's export.record handler, if any, which keeps, drops or replaces
+// each. Rows are keyed by their record number, as they have no source ID
+// yet; so are the dropped ones in the manifest.
+func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mapping) ([]map[string]string, []connector.SkippedRecord, error) {
+	if m.Strategies[strategy.ExportRecord].Handler == "" {
+		return rows, nil, nil
+	}
+	set, err := strategy.New(strategy.Only(m, strategy.ExportRecord), hooks.FromContext(ctx))
+	if err != nil {
+		return nil, nil, err
+	}
+	items := make([]hooks.Item, len(rows))
+	for i, row := range rows {
+		items[i] = hooks.Item{Key: recordKey(i), Data: map[string]any{"record": row}}
+	}
+	res, err := set.Resolve(ctx, strategy.ExportRecord, items)
+	if err != nil || res == nil {
+		return rows, nil, err
+	}
+	var kept []map[string]string
+	var dropped []connector.SkippedRecord
+	for i, row := range rows {
+		var a struct {
+			Action string            `json:"action"`
+			Reason string            `json:"reason"`
+			Record map[string]string `json:"record"`
+		}
+		if err := strategy.Decode(strategy.ExportRecord, recordKey(i), res[recordKey(i)], &a); err != nil {
+			return nil, nil, err
+		}
+		switch a.Action {
+		case "", strategy.ActionKeep:
+			kept = append(kept, row)
+		case strategy.ActionReplace:
+			if a.Record == nil {
+				return nil, nil, fmt.Errorf("%s: %s: replace needs a record", strategy.ExportRecord, recordKey(i))
+			}
+			kept = append(kept, a.Record)
+		case strategy.ActionDrop:
+			reason := a.Reason
+			if reason == "" {
+				reason = "dropped by the " + strategy.ExportRecord + " hook"
+			}
+			dropped = append(dropped, connector.SkippedRecord{SourceID: recordKey(i), Reason: reason})
+		default:
+			return nil, nil, fmt.Errorf("%s: %s: unknown action %q (keep, drop or replace)", strategy.ExportRecord, recordKey(i), a.Action)
+		}
+	}
+	return kept, dropped, nil
+}
+
+func recordKey(i int) string { return "record " + strconv.Itoa(i+1) }

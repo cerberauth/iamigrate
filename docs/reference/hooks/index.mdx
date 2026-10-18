@@ -1,0 +1,173 @@
+---
+title: Hooks
+description: React to a migration's events and hand its per-user decisions to your own code.
+---
+
+Hooks let you customize a migration without forking iamigrate. There are two kinds:
+
+- **Events** tell your code what is happening: a job starting, a state entered, an export finished, each user's import outcome. A few can also stop the step (a *veto*) or decide its outcome (validate's problems, verify's drift). See [Events](./events/).
+- **Strategies** hand a decision iamigrate otherwise makes itself to your code: the ID a user gets in the target, a custom value transform, which users are exported or imported, the final payload sent to the target, how users are looked up when verifying. Each keeps today's behavior unless you configure it. See [Strategies](./strategies/).
+
+Your code is reached through a **handler**. The only kind today is an HTTP **webhook**: iamigrate POSTs a signed JSON request and reads the answer from the response body.
+
+With no hooks configured, iamigrate behaves exactly as without this feature.
+
+## Configuration
+
+Handlers and events are declared in a `hooks.yaml` file, passed with `--hooks`:
+
+```yaml
+version: 1
+handlers:
+  audit:
+    webhook:
+      url: https://hooks.example.com/iamigrate   # required: there is no default
+      secret_env: IAMIGRATE_HOOK_SECRET          # or secret_file: /run/secrets/hook
+      timeout: 10s                               # per try (default 10s)
+      retries: 3                                 # on a 5xx, a 429 or a network error (default 3, 0 for none)
+      batch_size: 100                            # users per request, for per-user hooks (default 100)
+events:
+  job.before_run: {handler: audit, on_failure: fail}
+  state.enter: {handler: audit}
+  import.after: {handler: audit}
+```
+
+Strategies are configured in [`mapping.yaml`](../mapping/), since they are about fields and users, and refer to handlers **by name**:
+
+```yaml
+target: auth0
+ids:
+  target: {strategy: uuidv5, namespace: 6ba7b811-9dad-11d1-80b4-00c04fd430c8}
+transforms:
+  normalize_phone: {handler: audit}
+strategies:
+  import.payload: {handler: audit}
+```
+
+A mapping can't hold a URL or a secret: it can only select a handler `hooks.yaml` declares, and naming one it doesn't is an error. Unknown keys in `hooks.yaml` are an error too, so a misspelled hook name fails at once instead of never firing.
+
+`--hooks` is accepted by [`job`](../cli/job/), [`serve`](../cli/serve/), [`export`](../cli/export/), [`validate`](../cli/validate/), `import`, `diff` and [`ids assign`](../cli/ids/). A handler's secret is read when the command starts, so a missing one stops it before any step runs.
+
+### `on_failure`
+
+A handler call that still fails after its retries, or answers something iamigrate can't use, does what its `on_failure` says:
+
+| `on_failure` | Effect |
+| --- | --- |
+| `fail` | The step fails, and so does the job. The default for a veto or decide event, and for a strategy, since carrying on would skip the check or decision you asked for. |
+| `ignore` | The step carries on with the built-in behavior. The default for a notify event. |
+
+Either way, the failure is recorded on the job (see [Results](#results)).
+
+### `serve` and security
+
+A server only fires the hooks of the `hooks.yaml` it was started with (`iamigrate serve --hooks`). A job created through `POST /jobs` can't add a hook or change where one points: its params have no hook key, and its mapping can only select one of the server's handlers. This matters because a job's `mapping` param is a path on the server, so an inline URL in a mapping would let an API client make the server send requests anywhere.
+
+`job --api-url` can't be combined with `--hooks`: a server's jobs fire the server's hooks.
+
+## Webhook requests
+
+Every request is a `POST` with a JSON body, the **envelope**:
+
+```json
+{
+  "version": "1",
+  "hook": "import.user.result",
+  "event_id": "38332668b1e4c0d6a5f1c2e9d3b7a840",
+  "job_id": "12d52003b49afbca",
+  "state": "importing",
+  "batch": {"index": 1, "size": 8},
+  "data": {"items": [ ... ]}
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Envelope version, `"1"`. It changes only for a change a receiver could trip over |
+| `hook` | The hook point |
+| `event_id` | Identifies the call: the same job, hook, state and batch always give the same ID, a resumed job's re-fired events and a retried request included. Deduplicate on it |
+| `job_id` | The job, empty for a standalone command (`import`, `diff`, ...), which runs none |
+| `state` | The job's state, absent for a standalone command |
+| `batch` | For a call carrying one of several parts of a step: per-user hooks and Auth0's import chunks. `index` counts from 1 |
+| `data` | The hook's payload: see [Events](./events/) and [Strategies](./strategies/) |
+
+A standalone command has no job ID to derive event IDs from, so its event IDs are unique to one run of the command.
+
+Headers:
+
+| Header | Value |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `User-Agent` | `iamigrate/<version> (+https://github.com/cerberauth/iamigrate)` |
+| `X-Iamigrate-Hook` | The hook point |
+| `X-Iamigrate-Event-Id` | The envelope's `event_id` |
+| `X-Iamigrate-Timestamp` | When the request was signed, in Unix seconds |
+| `X-Iamigrate-Signature` | `v1=` followed by the hex HMAC-SHA256 of the timestamp, a `.`, and the raw body, keyed with the handler's secret |
+
+### Answers
+
+Answer with a `2xx`. An empty body is an empty answer; otherwise it must be JSON (at most 32 MiB). What the JSON says depends on the hook. Notify events ignore it.
+
+Per-user hooks (strategies and `import.user.result`) send many users per request, never one request per user. A strategy's request carries `{"items": {"<key>": <item>, ...}}`, keyed by the user's `source_id` (or the record or role the strategy is about), and its answer must have exactly one result per key:
+
+```json
+{"results": {"fx_05fc70bbddf8c895": {"id": "legacy-42"}, "fx_ea2efcf826ac977c": {"id": "legacy-43"}}}
+```
+
+A missing or extra key is a handler failure.
+
+A `5xx`, a `429` or a network error (a timeout included) is retried up to `retries` times, waiting 1s and then twice as long each time up to 30s, or as long as a `Retry-After` (in seconds) asks, within that cap. Any other status fails the call at once. Redirects are not followed: the signed request only goes to the URL you configured, and a `3xx` is a failure.
+
+### Verifying a request
+
+Check the signature over the raw body, before parsing it, and reject an old timestamp, so a captured request can't be replayed:
+
+```python
+import hashlib, hmac, time
+
+def verify(secret: bytes, headers, body: bytes, tolerance: int = 300) -> None:
+    timestamp = headers["X-Iamigrate-Timestamp"]
+    if abs(time.time() - int(timestamp)) > tolerance:
+        raise ValueError("timestamp outside tolerance")
+    expected = "v1=" + hmac.new(secret, timestamp.encode() + b"." + body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected, headers["X-Iamigrate-Signature"]):
+        raise ValueError("signature mismatch")
+```
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verify(secret, headers, body, toleranceSeconds = 300) {
+  const timestamp = headers["x-iamigrate-timestamp"];
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > toleranceSeconds) {
+    throw new Error("timestamp outside tolerance");
+  }
+  const expected = "v1=" + createHmac("sha256", secret).update(`${timestamp}.`).update(body).digest("hex");
+  const given = headers["x-iamigrate-signature"] ?? "";
+  if (expected.length !== given.length || !timingSafeEqual(Buffer.from(expected), Buffer.from(given))) {
+    throw new Error("signature mismatch");
+  }
+}
+```
+
+In Go, use `hooks.Verify` from `github.com/cerberauth/iamigrate/pkg/hooks`:
+
+```go
+err := hooks.Verify(secret, r.Header.Get(hooks.HeaderTimestamp), body,
+	r.Header.Get(hooks.HeaderSignature), time.Now(), 5*time.Minute)
+```
+
+## Results
+
+A hook call that vetoed a step, failed it, or failed and was ignored is recorded on the job, under `hooks`, with its hook, event ID, state, outcome (`vetoed`, `failed` or `ignored`) and reason. So is a job run under another `hooks.yaml` than its previous run, with outcome `changed` (see below). `iamigrate job status` lists them, and so do `GET /jobs/{id}` and `GET /jobs/{id}/report`. Successful calls aren't recorded. Retrying a job from an earlier state drops the results of the states it goes back over.
+
+## Determinism and resuming
+
+A job may run a step more than once: after a crash, a restart of `serve`, or a `job retry`. Events fire again with the same event IDs, so a receiver that deduplicates on `event_id` sees each once; one that doesn't must tolerate repeats.
+
+Strategies feeding the import must give the same answer every time:
+
+- Prefer the export-side strategies (`export.user`, `id.target`) to change users: their answers are written into the CMF users file, which every later step, a resumed import included, reads, so a handler is asked once.
+- The import-side strategies (`import.user`, `hash.translate`, `mfa.translate`, `import.payload`, `map.target_field` transforms) are asked again whenever the import runs again. They must answer the same for the same user. For an Auth0 target, whose import resumes from chunk checkpoints, a chunk built differently on resume fails the job ("no longer matches its checkpoint") rather than importing something else.
+
+A job remembers which `hooks.yaml` it ran with (`hooks_fingerprint`, a SHA-256 of the file). Run again under a different file, or with none after having one, it records a `changed` result naming both, and carries on: whether the change matters (a new URL for the same handler, or a handler answering differently) is for you to judge. A job first run without hooks has nothing to compare with.

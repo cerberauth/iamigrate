@@ -40,6 +40,22 @@ func requireStatus(t *testing.T, err error, status int) {
 	require.Equal(t, status, apiErr.Status)
 }
 
+// retryJob retries a failed job. The job is saved as failed before the run
+// that failed it releases the job's lock, so a retry sent as soon as Wait
+// returns can be answered 409 until then: it is sent again.
+func retryJob(t *testing.T, c *api.Client, id string, from jobs.State) *jobs.Job {
+	t.Helper()
+	var j *jobs.Job
+	var err error
+	require.Eventually(t, func() bool {
+		j, err = c.Retry(context.Background(), id, from)
+		var apiErr *api.Error
+		return !errors.As(err, &apiErr) || apiErr.Status != http.StatusConflict
+	}, 5*time.Second, time.Millisecond)
+	require.NoError(t, err)
+	return j
+}
+
 func TestCreateRunsJobToCompletion(t *testing.T) {
 	c, _ := newTestServer(t, jobs.Steps{
 		Import: func(_ context.Context, j *jobs.Job) error {
@@ -222,8 +238,7 @@ func TestRetryRunsAFailedJobAgain(t *testing.T) {
 	require.Equal(t, jobs.Failed, failed.State)
 
 	fail = false
-	retried, err := c.Retry(ctx, j.ID, "")
-	require.NoError(t, err)
+	retried := retryJob(t, c, j.ID, "")
 	require.Equal(t, jobs.Importing, retried.State)
 
 	done, err := c.Wait(ctx, j.ID, 5*time.Millisecond, nil)
@@ -252,8 +267,7 @@ func TestRetryFromAnEarlierState(t *testing.T) {
 	require.NoError(t, err)
 
 	fail = false
-	retried, err := c.Retry(ctx, j.ID, jobs.Exporting)
-	require.NoError(t, err)
+	retried := retryJob(t, c, j.ID, jobs.Exporting)
 	require.Equal(t, jobs.Exporting, retried.State)
 	_, err = c.Wait(ctx, j.ID, 5*time.Millisecond, nil)
 	require.NoError(t, err)

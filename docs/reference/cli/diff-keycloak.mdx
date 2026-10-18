@@ -23,3 +23,6 @@ iamigrate diff keycloak --in users.cmf.jsonl.gz \
 | `--auth-realm` | Realm the admin user or client authenticates in (or `$KEYCLOAK_AUTH_REALM`; default: `--realm`) |
 | `--username` / `--password` | Admin credentials (or `$KEYCLOAK_USERNAME`/`$KEYCLOAK_PASSWORD`) |
 | `--client-id` / `--client-secret` | A service-account client's credentials (or `$KEYCLOAK_CLIENT_ID`/`$KEYCLOAK_CLIENT_SECRET`) |
+| `--mapping` | `mapping.yaml` path: its `verify.lookup` and `verify.compare` [strategies](../../hooks/strategies/) (optional) |
+| `--report` | `import-report.json` of the import being verified: its target IDs, for `verify.lookup: {strategy: target_id}`, and the users it skipped on purpose, which aren't looked for (optional) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |

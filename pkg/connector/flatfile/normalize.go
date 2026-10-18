@@ -1,6 +1,8 @@
 package flatfile
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -8,53 +10,17 @@ import (
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/iamigrate/pkg/transform"
 )
-
-// transforms are the value transforms a mapping's `transform` can name, run
-// left to right when several are joined with "|" (e.g. "trim|lowercase").
-// Empty stays empty, so a default or a missing value is never turned into
-// something else.
-var transforms = map[string]func(string) (string, error){
-	"trim":      func(s string) (string, error) { return strings.TrimSpace(s), nil },
-	"lowercase": func(s string) (string, error) { return strings.ToLower(s), nil },
-	"uppercase": func(s string) (string, error) { return strings.ToUpper(s), nil },
-	// bool turns true/false, yes/no, y/n, on/off, t/f and 1/0 (any case)
-	// into "true" or "false".
-	"bool": func(s string) (string, error) {
-		if s == "" {
-			return "", nil
-		}
-		b, err := parseTruthy(s)
-		return strconv.FormatBool(b), err
-	},
-	// not is bool, inverted: a source's `active` or `enabled` column becomes
-	// the CMF `blocked`.
-	"not": func(s string) (string, error) {
-		if s == "" {
-			return "", nil
-		}
-		b, err := parseTruthy(s)
-		return strconv.FormatBool(!b), err
-	},
-}
-
-func parseTruthy(s string) (bool, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "true", "t", "1", "yes", "y", "on":
-		return true, nil
-	case "false", "f", "0", "no", "n", "off":
-		return false, nil
-	}
-	return false, fmt.Errorf("%q is not a boolean (true/false, yes/no, 1/0)", s)
-}
 
 // rule is one validated mapping.FieldMapping.
 type rule struct {
 	source, dest, def string
 	pattern           *regexp.Regexp
 	values            map[string]string
-	steps             []func(string) (string, error)
+	pipeline          *transform.Pipeline
 }
 
 // validDestination reports whether dest is a column rowToUser reads, or an
@@ -73,7 +39,7 @@ func validDestination(dest string) bool {
 	return false
 }
 
-func compileRules(m mapping.Mapping) ([]rule, error) {
+func compileRules(m mapping.Mapping, reg *transform.Registry) ([]rule, error) {
 	rules := make([]rule, 0, len(m.Fields))
 	for i, f := range m.Fields {
 		if !validDestination(f.CMF) {
@@ -94,15 +60,11 @@ func compileRules(m mapping.Mapping) ([]rule, error) {
 			}
 			r.pattern = re
 		}
-		if f.Transform != "" {
-			for _, name := range strings.Split(f.Transform, "|") {
-				step, ok := transforms[strings.TrimSpace(name)]
-				if !ok {
-					return nil, fmt.Errorf("mapping: fields[%d] (%s): unknown transform %q", i, f.CMF, name)
-				}
-				r.steps = append(r.steps, step)
-			}
+		p, err := reg.Compile(f.Transform)
+		if err != nil {
+			return nil, fmt.Errorf("mapping: fields[%d] (%s): %w", i, f.CMF, err)
 		}
+		r.pipeline = p
 		rules = append(rules, r)
 	}
 	return rules, nil
@@ -122,10 +84,22 @@ func compileRules(m mapping.Mapping) ([]rule, error) {
 // only needs to cover what differs from the convention. With no fields the
 // rows are returned untouched.
 func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string, error) {
+	return normalize(context.Background(), rows, m, nil)
+}
+
+// normalize is Normalize, with custom transforms sent to their handlers
+// through d. Each field runs over every row before the next field does, so a
+// custom transform is one batched call per field, not one per row; the
+// result is the same as field by field within each row.
+func normalize(ctx context.Context, rows []map[string]string, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
 	if len(m.Fields) == 0 {
 		return rows, nil
 	}
-	rules, err := compileRules(m)
+	reg, err := transform.New(m, transform.ExportHook, d)
+	if err != nil {
+		return nil, err
+	}
+	rules, err := compileRules(m, reg)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +111,7 @@ func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string
 	}
 
 	out := make([]map[string]string, len(rows))
+	written := make([]map[string]bool, len(rows))
 	for i, row := range rows {
 		n := make(map[string]string, len(row))
 		for k, v := range row {
@@ -144,9 +119,13 @@ func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string
 				n[k] = v
 			}
 		}
-		written := map[string]bool{}
-		for _, r := range rules {
-			if written[r.dest] {
+		out[i], written[i] = n, map[string]bool{}
+	}
+	for _, r := range rules {
+		var idx []int
+		var keys, vals []string
+		for i, row := range rows {
+			if written[i][r.dest] {
 				continue
 			}
 			var v string
@@ -165,21 +144,28 @@ func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string
 			if v == "" {
 				v = r.def
 			}
-			for _, step := range r.steps {
-				if v, err = step(v); err != nil {
-					return nil, fmt.Errorf("record %d: %s -> %s: %w", i+1, r.source, r.dest, err)
-				}
+			idx, keys, vals = append(idx, i), append(keys, strconv.Itoa(i+1)), append(vals, v)
+		}
+		if err := r.pipeline.Apply(ctx, r.dest, keys, vals); err != nil {
+			var ve *transform.ValueError
+			if errors.As(err, &ve) {
+				return nil, fmt.Errorf("record %d: %s -> %s: %w", idx[ve.Index]+1, r.source, r.dest, ve.Err)
 			}
-			if v != "" {
-				n[r.dest] = v
-				written[r.dest] = true
+			return nil, fmt.Errorf("%s -> %s: %w", r.source, r.dest, err)
+		}
+		for k, i := range idx {
+			if vals[k] != "" {
+				out[i][r.dest] = vals[k]
+				written[i][r.dest] = true
 			}
 		}
+	}
+	for i, n := range out {
 		// rowToUser reads these leniently (anything but "true" is false);
 		// settle them here so a stray "yes" can't silently become false.
 		for _, c := range []string{colBlocked, colEmailVerified} {
 			if v := n[c]; v != "" {
-				b, err := parseTruthy(v)
+				b, err := transform.ParseBool(v)
 				if err != nil {
 					return nil, fmt.Errorf("record %d: %s: %w", i+1, c, err)
 				}
@@ -189,7 +175,6 @@ func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string
 		if err := settlePasswordColumns(n); err != nil {
 			return nil, fmt.Errorf("record %d: %w", i+1, err)
 		}
-		out[i] = n
 	}
 	return out, nil
 }

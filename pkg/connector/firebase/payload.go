@@ -68,7 +68,7 @@ func buildAccount(u cmf.User) (account, iamhash.FirebaseHashParams, userFlags, e
 	}
 
 	a := account{
-		LocalID:     u.SourceID,
+		LocalID:     u.TargetID(Name),
 		DisplayName: displayName(u.Profile),
 		PhotoURL:    u.Profile.Picture,
 		Disabled:    u.Blocked,
@@ -234,7 +234,7 @@ func parseTime(s string) *time.Time {
 func loginIdentifier(u cmf.User) (field, value string) {
 	switch {
 	case len(u.Emails) > 0:
-		return "email", u.Emails[0].Value
+		return fieldEmail, u.Emails[0].Value
 	case len(u.Phones) > 0:
 		return "phoneNumber", u.Phones[0].Value
 	}

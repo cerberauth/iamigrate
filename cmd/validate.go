@@ -11,7 +11,12 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/ids"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
+	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/iamigrate/pkg/strategy"
 	"github.com/cerberauth/iamigrate/pkg/validate"
 	"github.com/spf13/cobra"
 )
@@ -67,6 +72,8 @@ func newValidateCmd() *cobra.Command {
 			}
 			caps := tc.Capabilities()
 
+			var idStrategy *mapping.IDStrategy
+			var hooked *strategy.Validator
 			if mappingPath != "" {
 				m, err := mapping.Load(mappingPath)
 				if err != nil {
@@ -75,6 +82,17 @@ func newValidateCmd() *cobra.Command {
 				if err := m.Validate(); err != nil {
 					return err
 				}
+				if err := importprep.Check(m, tc); err != nil {
+					return err
+				}
+				if err := strategy.Check(m); err != nil {
+					return err
+				}
+				set, err := strategy.New(strategy.Only(m, strategy.ValidateUser, strategy.ValidateDedupKey), hooks.FromContext(cmd.Context()))
+				if err != nil {
+					return err
+				}
+				idStrategy, hooked = m.IDs.Target, strategy.NewValidator(set)
 			}
 
 			f, err := os.Open(in)
@@ -88,12 +106,13 @@ func newValidateCmd() *cobra.Command {
 			}
 			defer r.Close()
 
-			_, bar := startProgress(cmd)
+			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
 
 			var problems []connector.Problem
 			dups := validate.NewDupTracker()
+			targetIDs := ids.NewChecker(idStrategy, target, caps)
 			count := 0
 			for {
 				u, err := r.ReadUser()
@@ -108,14 +127,38 @@ func newValidateCmd() *cobra.Command {
 				problems = append(problems, validate.CheckUser(u, caps)...)
 				problems = append(problems, tc.ValidateUser(u)...)
 				problems = append(problems, dups.Check(u)...)
+				problems = append(problems, targetIDs.Check(u)...)
+				ps, err := hooked.Add(ctx, u)
+				if err != nil {
+					return err
+				}
+				problems = append(problems, ps...)
 			}
+			ps, err := hooked.Flush(ctx)
+			if err != nil {
+				return err
+			}
+			problems = append(problems, ps...)
 
 			bar.Done()
+			problems, warnings, fail, err := lifecycle.ValidateAfter(ctx, problems)
+			if err != nil {
+				return err
+			}
 			fmt.Fprintf(cmd.OutOrStdout(), "checked %d users against %s: %d problem(s)\n", count, target, len(problems))
 			for _, p := range problems {
 				fmt.Fprintln(cmd.OutOrStdout(), " -", p)
 			}
-			if len(problems) > 0 {
+			if len(warnings) > 0 {
+				fmt.Fprintf(cmd.OutOrStdout(), "%d warning(s), downgraded by the %s hook:\n", len(warnings), hooks.ValidateAfter)
+				for _, p := range warnings {
+					fmt.Fprintln(cmd.OutOrStdout(), " -", p)
+				}
+			}
+			if fail && len(problems) == 0 {
+				return fmt.Errorf("validate failed: the %s hook failed it", hooks.ValidateAfter)
+			}
+			if fail {
 				return fmt.Errorf("validate failed: %d problem(s) found", len(problems))
 			}
 			return nil
@@ -127,6 +170,7 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
 	cmd.Flags().StringVar(&schemaFile, "schema-file", "", "Kratos identity schema JSON path, to check traits against (only with --target kratos)")
 	cmd.Flags().StringVar(&connectionConfig, "connection-config", "", "Auth0 connection JSON path, to tighten username/identifier rules (only with --target auth0)")
+	addHooksFlag(cmd)
 	_ = cmd.MarkFlagRequired("in")
 	_ = cmd.MarkFlagRequired("target")
 	return cmd

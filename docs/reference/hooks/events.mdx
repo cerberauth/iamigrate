@@ -1,0 +1,115 @@
+---
+title: Events
+description: Every event hook point, what it sends and what its answer can do.
+---
+
+Events are configured under `events` in `hooks.yaml` (see [Hooks](../)). Each is one of three kinds:
+
+| Kind | The answer | Default `on_failure` |
+| --- | --- | --- |
+| notify | is ignored | `ignore` |
+| veto | `{"allow": false, "reason": "..."}` stops the step, and fails the job with the reason; anything else (`{}`, an empty body, `{"allow": true}`) lets it go on | `fail` |
+| decide | is interpreted by the step, as each hook says below | `fail` |
+
+A veto is recorded on the job as `vetoed`.
+
+## Job events
+
+Fired by a job only ([`job`](../../cli/job/), [`serve`](../../cli/serve/)), never by a standalone command.
+
+| Event | Kind | When |
+| --- | --- | --- |
+| `job.before_run` | veto | Every time a job is run, a resumed one included, before any step. A veto fails the job in the state it was in |
+| `state.enter` | notify | Before working on a state, `queued` included, and again for the state a resumed job is in |
+| `state.exit` | notify | After a state's step succeeded, before the job moves on. Not fired for a step that failed: `job.failed` is |
+| `job.done` | notify | Once the job is done |
+| `job.failed` | notify | Once the job has failed, whatever failed it (a step, a veto, a failed hook) |
+
+All five send the job, without the results of its steps (their own events carry those):
+
+```json
+{
+  "id": "12d52003b49afbca",
+  "state": "importing",
+  "failed_in": "",
+  "error": "",
+  "params": {"source": "flatfile", "target": "kratos", "users": "/srv/work/users.cmf.jsonl"},
+  "created_at": "2026-10-17T09:12:03Z",
+  "updated_at": "2026-10-17T09:12:41Z"
+}
+```
+
+A failing `state.enter` or `state.exit` with `on_failure: fail` fails the job in that state. A failing `job.done` or `job.failed` is only recorded: the job is over.
+
+## Step events
+
+Fired by a job's steps, and by the standalone commands doing the same work: [`export`](../../cli/export/), [`validate`](../../cli/validate/), `import` and `diff`.
+
+### `export.after` (veto)
+
+After the export, before the users file is put in place. A job's vetoed export leaves no users file; a standalone `export` deletes the one it wrote.
+
+```json
+{"manifest": {"record_count": 10, "hash_algorithm_counts": {"bcrypt": 10}, "skipped_records": [...]}}
+```
+
+### `validate.after` (decide)
+
+After validate's checks, with every problem found. `index` below is a problem's position in `problems`.
+
+```json
+{"problems": [{"source_id": "u17", "field": "username", "rule": "length must be 1-15 characters", "value": "a-very-long-username"}]}
+```
+
+Answer `{"downgrade": [0, 3]}` to turn those problems into warnings: they are reported (`warnings` on the job, and by `validate`) but don't fail it. Add `"fail": true` or `"fail": false` to decide the outcome outright, to apply a threshold, say; without it validate fails if a problem is left.
+
+### `import.before` (veto)
+
+Before the import, once the connection to import into is known: from `--connection-id`, the mapping's `connection_id`, or, for Auth0, looked up by name.
+
+```json
+{"target": "auth0", "connection_id": "con_1a2b3c", "upsert": false}
+```
+
+Answer `{"connection_id": "con_..."}` to import into another connection.
+
+### `import.chunk.after` (notify)
+
+After each chunk of an Auth0 import, the only target importing in checkpointed chunks, with the chunk's report. `batch.index` is the chunk's number. A chunk found already done on resume fires again, with the same event ID.
+
+```json
+{"chunk": 2, "report": {"succeeded": ["u1001", ...], "failed": [], "target_ids": {"u1001": "auth0|u1001"}}}
+```
+
+### `import.user.result` (notify)
+
+After the import, every user's outcome, in batches of the handler's `batch_size`: those imported first, then those that failed, each in the import's order.
+
+```json
+{"items": [
+  {"source_id": "u1", "outcome": "succeeded", "target_id": "d963ec4c-ce8f-41b7-9a5e-0b4a8c1f2e3d", "follow_ups": ["password_reset"]},
+  {"source_id": "u2", "outcome": "failed", "code": "DUPLICATED_USER", "message": "user already exists in this connection"}
+]}
+```
+
+`target_id` is the ID the target gave the user. `follow_ups` lists what the user needs after the import: `password_reset`, `reenrollment` (MFA), `recovery_code_regen`. Users skipped on purpose, by the [`import.user`](../strategies/) strategy or the mapping's [`conflict`](../../mapping/) section, are not included.
+
+### `import.after` (notify)
+
+After the import, with its whole report, to start a password reset campaign, say.
+
+```json
+{"report": {"succeeded": [...], "failed": [...], "skipped": [...], "target_ids": {...}, "requires_password_reset": [...]}}
+```
+
+A job interrupted after its import but before moving on fires `import.user.result` and `import.after` again on resume, with the same event IDs.
+
+### `verify.after` (decide)
+
+After verify (a job's verifying step, or `diff`), with the diff.
+
+```json
+{"diff": {"source_count": 10, "target_count": 9, "missing_in_target": ["u4"], "skipped": ["u7"]}}
+```
+
+Answer `{"fail": true}` or `{"fail": false}` to decide the outcome. Without it, a job's verify fails on a missing user or drift, and `diff` only reports them.

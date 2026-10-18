@@ -2,16 +2,18 @@ package auth0
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
-	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/iamigrate/pkg/reconcile"
 )
 
 // Connector is the Auth0 TargetConnector.
@@ -48,6 +50,10 @@ func (*Connector) Capabilities() connector.Capabilities {
 		MFATypes:      []cmf.MFAType{cmf.MFATOTP, cmf.MFASMS, cmf.MFAEmail},
 		SupportsOrgs:  true,
 		SupportsRoles: true,
+		// The bulk import's user_id, which Auth0 puts behind its auth0|
+		// prefix.
+		SupportsCustomID: true,
+		SupportsUpsert:   true,
 	}
 }
 
@@ -58,10 +64,15 @@ func (*Connector) Capabilities() connector.Capabilities {
 // phases automatically.
 //
 // The orgs/roles phase addresses each user in report.Succeeded by the
-// user_id Auth0 gave them: the source_id, without any auth0| prefix it
-// carried, behind the auth0| prefix Auth0 adds (see targetUserID).
+// user_id Auth0 gave them, recorded in report.TargetIDs: their target ID,
+// without any auth0| prefix it carried, behind the auth0| prefix Auth0
+// adds (see targetUserID).
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
-	report, roleInfos, err := RunBulkImport(ctx, c.Client, r, opts.ConnectionID, opts.Upsert)
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	if err != nil {
+		return connector.ImportReport{}, err
+	}
+	report, roleInfos, err := runBulkImport(ctx, c.Client, importprep.NewReader(ctx, r, applier), opts.ConnectionID, opts.Upsert)
 	if err != nil {
 		return report, err
 	}
@@ -72,10 +83,18 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 
 	userIDs := make(map[string]string, len(report.Succeeded))
 	for _, id := range report.Succeeded {
-		userIDs[id] = targetUserID(id)
+		userIDs[id] = report.TargetIDs[id]
 	}
 
-	phaseReport, err := RunOrgsRolesPhase(ctx, c.Client, opts.Roles, opts.Organizations, roleInfos, userIDs, c.Concurrency)
+	roles, roleIDs, err := resolveRoles(ctx, m, opts.Roles)
+	if err != nil {
+		return report, err
+	}
+	orgs, orgIDs, err := resolveOrgs(ctx, m, opts.Organizations)
+	if err != nil {
+		return report, err
+	}
+	phaseReport, err := runOrgsRolesPhase(ctx, c.Client, roles, orgs, roleInfos, userIDs, c.Concurrency, roleIDs, orgIDs)
 	if err != nil {
 		return report, err
 	}
@@ -91,40 +110,43 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 // fields Import sets (see userDrift), and anyone with no identifier to
 // look up. Everything is keyed by the CMF source_id.
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
-	var report connector.DiffReport
-	bar := progress.FromContext(ctx)
+	return reconcile.Run(ctx, r, c.check)
+}
 
-	for {
-		u, err := r.ReadUser()
-		if err == io.EOF {
-			break
+// check looks u up by l's target ID (its user_id), or by l's identifier (an
+// email when it has an @, else a username), or else as Verify says, and
+// compares the fields Import sets.
+func (c *Connector) check(ctx context.Context, u cmf.User, l reconcile.Lookup) (reconcile.Found, error) {
+	if l.TargetID != "" {
+		var t tenantUser
+		if _, err := c.Client.doJSON(ctx, http.MethodGet, "/users/"+url.PathEscape(l.TargetID), nil, &t); err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+				return reconcile.Found{Missing: true}, nil
+			}
+			return reconcile.Found{}, fmt.Errorf("auth0: looking up %s: %w", l.TargetID, err)
 		}
-		if err != nil {
-			return report, err
-		}
-		bar.Add(1)
-		report.SourceCount++
-		path, identifier := lookupPath(u)
-		if path == "" {
-			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
-			continue
-		}
-
-		var found []tenantUser
-		if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
-			return report, fmt.Errorf("auth0: looking up %s: %w", identifier, err)
-		}
-
-		if len(found) == 0 {
-			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
-			continue
-		}
-		report.TargetCount++
-		if drift := userDrift(u, pickUser(found, u.SourceID)); len(drift) > 0 {
-			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{SourceID: u.SourceID, Fields: drift})
-		}
+		return reconcile.Found{Record: t, Drift: userDrift(u, t)}, nil
 	}
-	return report, nil
+	path, identifier := lookupPath(u)
+	switch {
+	case strings.Contains(l.Identifier, "@"):
+		path, identifier = "/users-by-email?email="+url.QueryEscape(l.Identifier), l.Identifier
+	case l.Identifier != "":
+		path, identifier = searchPath("username", l.Identifier), l.Identifier
+	}
+	if path == "" {
+		return reconcile.Found{NoIdentifier: true}, nil
+	}
+	var found []tenantUser
+	if _, err := c.Client.doJSON(ctx, http.MethodGet, path, nil, &found); err != nil {
+		return reconcile.Found{}, fmt.Errorf("auth0: looking up %s: %w", identifier, err)
+	}
+	if len(found) == 0 {
+		return reconcile.Found{Missing: true}, nil
+	}
+	t := pickUser(found, u.TargetID(Name))
+	return reconcile.Found{Record: t, Drift: userDrift(u, t)}, nil
 }
 
 // tenantUser is the part of a Management API user record Verify compares.
@@ -140,12 +162,12 @@ type tenantUser struct {
 	Picture       string `json:"picture"`
 }
 
-// pickUser returns the lookup result Import would have created for
-// sourceID, else the first one: an email can match users in several
-// connections.
-func pickUser(found []tenantUser, sourceID string) tenantUser {
+// pickUser returns the lookup result Import would have created for a user
+// with target ID id, else the first one: an email can match users in
+// several connections.
+func pickUser(found []tenantUser, id string) tenantUser {
 	for _, f := range found {
-		if f.UserID == targetUserID(sourceID) {
+		if f.UserID == targetUserID(id) {
 			return f
 		}
 	}
@@ -169,11 +191,11 @@ func userDrift(u cmf.User, t tenantUser) []string {
 		want, got string
 	}{
 		{"username", u.Username, t.Username},
-		{"given_name", u.Profile.GivenName, t.GivenName},
-		{"family_name", u.Profile.FamilyName, t.FamilyName},
+		{keyGivenName, u.Profile.GivenName, t.GivenName},
+		{keyFamilyName, u.Profile.FamilyName, t.FamilyName},
 		{"name", u.Profile.Name, t.Name},
-		{"nickname", u.Profile.Nickname, t.Nickname},
-		{"picture", u.Profile.Picture, t.Picture},
+		{keyNickname, u.Profile.Nickname, t.Nickname},
+		{keyPicture, u.Profile.Picture, t.Picture},
 	} {
 		if f.want != "" && f.want != f.got {
 			drift = append(drift, f.name)

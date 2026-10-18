@@ -8,8 +8,12 @@ Checks every user in a CMF file against the target before any API call is made:
 - the target's `Capabilities()` — which password algorithms and MFA types it accepts (for Auth0: `webauthn` and `recovery_codes` are never portable; for Kratos: only `bcrypt`/`argon2` password hashes and `totp`/`recovery_codes` MFA are supported; for Keycloak: only `pbkdf2`/`argon2` password hashes and `totp` MFA are supported; for Firebase: only `bcrypt`/`scrypt` password hashes and `sms` MFA are supported)
 - the target's `ValidateUser()` field rules — for Auth0: a required email, username length/characters and `requires_username`, phone E.164 format, `user_id` and metadata size limits; for Keycloak: `user_metadata`/`app_metadata` key names over 255 characters, or named `username`, `email`, `firstName` or `lastName` (Keycloak fails on the first and drops the others silently); for Firebase: a `source_id` over 128 characters (the uid limit), a missing email and phone number, an invalid email or non-E.164 phone number, `app_metadata` keys that are reserved claim names or exceed 1000 serialized characters, and a password hash that can't be translated; for Kratos: a username over 255 characters or made only of whitespace (Kratos fails with an HTTP 500), and traits checked against an identity schema (required fields, formats, `additionalProperties`) and every user having a value for a trait the schema marks as an identifier, when `--schema-file`/`--connection-config` is given
 - duplicate emails, usernames, or phones within the file, which break uniqueness in any target
+- each user's `target_ids` entry for the target: one the target can't accept (Kratos and Keycloak generate their own IDs), one missing although the `--mapping` has an `ids.target`, or one two users share
+- with `--mapping`, its `target_fields` and `metadata` destinations against the paths the target accepts, its transforms, strategies and `conflict` (an `upsert` the target can't do)
 
 Each problem printed shows the user's `source_id`, the field, the rule that failed, and the offending value. Catching these early avoids failing mid-import, often inside an async Auth0 job.
+
+With `--hooks`, the `--mapping`'s `validate.user` and `validate.dedup_key` handlers add their problems, and a `validate.after` hook can downgrade problems to warnings, printed apart, or decide the outcome. See [Hooks](../../hooks/).
 
 ## Usage
 
@@ -32,6 +36,7 @@ iamigrate validate --in users.cmf.jsonl.gz --target firebase
 | `--target` | Target connector name: `auth0` \| `kratos` \| `keycloak` \| `firebase` (required) |
 | `--schema-file` | Kratos identity schema JSON path, to check traits against (only with `--target kratos`) |
 | `--connection-config` | Auth0 connection JSON path (a `GET /connections/{id}` response, or just its `options` object), to tighten username/identifier rules (only with `--target auth0`) |
+| `--hooks` | `hooks.yaml` path: the `validate.after` [event](../../hooks/events/) and the handlers of `validate.user` and `validate.dedup_key` (optional) |
 
 Without `--schema-file`/`--connection-config`, Auth0's and Kratos' `ValidateUser` checks fall back to documented defaults (or, for Kratos, skip the trait checks since there's no schema to check traits against; the username rules still apply). `validate` makes no network calls either way.
 

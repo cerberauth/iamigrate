@@ -184,6 +184,42 @@ iamigrate job status "$id"
 
 See the [`job` reference](docs/reference/cli/job.mdx).
 
+## Hooks
+
+Hooks let your own code react to a migration and make its per-user decisions,
+through signed, batched HTTP webhooks. Events notify you (a job starting, each
+user's import outcome), and some can veto a step or decide its outcome.
+Strategies hand you a decision iamigrate otherwise makes itself: the ID a user
+gets in the target, a custom field transform, which users are imported, the
+final payload sent to the target, how users are looked up when verifying.
+
+```yaml
+# hooks.yaml: where your code is, passed with --hooks
+version: 1
+handlers:
+  audit:
+    webhook: {url: https://hooks.example.com/iamigrate, secret_env: IAMIGRATE_HOOK_SECRET}
+events:
+  import.after: {handler: audit}
+```
+
+```yaml
+# mapping.yaml: which decisions it makes, by handler name
+target: auth0
+ids:
+  target: {strategy: uuidv5, namespace: 6ba7b811-9dad-11d1-80b4-00c04fd430c8}
+strategies:
+  import.user: {handler: audit}
+```
+
+```sh
+iamigrate job --hooks hooks.yaml run "$id"
+```
+
+With no hooks configured, nothing changes. See the [hooks reference](docs/reference/hooks/index.mdx)
+for every event and strategy, the request format and how to verify its
+signature, and the [`mapping.yaml` reference](docs/reference/mapping.mdx).
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)

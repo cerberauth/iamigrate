@@ -139,14 +139,18 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		}
 	}
 
-	if l := len(importUserID(u.SourceID)); l == 0 || l > maxUserIDLen {
+	if id := u.TargetID(Name); len(importUserID(id)) == 0 || len(importUserID(id)) > maxUserIDLen {
+		field := "source_id"
+		if u.TargetIDs[Name] != "" {
+			field = "target_ids." + Name
+		}
 		problems = append(problems, connector.Problem{
-			SourceID: u.SourceID, Field: "source_id",
-			Rule: fmt.Sprintf("user_id must be 1-%d characters", maxUserIDLen), Value: u.SourceID,
+			SourceID: u.SourceID, Field: field,
+			Rule: fmt.Sprintf("user_id must be 1-%d characters", maxUserIDLen), Value: id,
 		})
 	}
 
-	if p := metadataSizeProblem(u.SourceID, "app_metadata", u.AppMetadata); p != nil {
+	if p := metadataSizeProblem(u.SourceID, keyAppMetadata, u.AppMetadata); p != nil {
 		problems = append(problems, *p)
 	}
 	if p := metadataSizeProblem(u.SourceID, "user_metadata", u.UserMetadata); p != nil {

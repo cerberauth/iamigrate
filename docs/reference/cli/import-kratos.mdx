@@ -7,6 +7,10 @@ import { Aside } from '@/components/docs';
 
 Streams a CMF file and creates one identity per user via `POST /admin/identities` against the Kratos instance at `--admin-url`. Kratos has no bulk-import job like Auth0's, so identities are created one at a time; a failed identity is recorded in `import-report.json` without stopping the run.
 
+Kratos generates each identity's ID, so a CMF `target_ids` can't choose it (`validate` rejects one). The report's `target_ids` maps each imported user's `source_id` to the identity ID Kratos gave it, for `diff --report` and your own records.
+
+With a `--mapping`, the import applies its `target_fields`, `metadata` routes, `conflict` and import [strategies](../../hooks/strategies/). Users skipped on purpose, by an `import.user` hook or `conflict: {on_duplicate: skip}`, are listed under the report's `skipped` rather than `failed`.
+
 For a step-by-step walkthrough, including identity schema requirements and verifying logins, see [Import users into Ory Kratos](../../../guides/import/kratos/).
 
 ## Usage
@@ -25,6 +29,8 @@ iamigrate import kratos --in users.cmf.jsonl.gz --schema-id default
 | `--schema-id` | Kratos identity schema ID to create identities against (default `default`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |
 | `--report` | `import-report.json` output path (default: alongside `--in`) |
+| `--mapping` | `mapping.yaml` path: its `target_fields`, `metadata`, `conflict`, `transforms` and import strategies (optional; see [`mapping.yaml`](../../mapping/)) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |
 
 Each CMF user's first email becomes the `email` trait and, if present, `username` becomes the `username` trait and the first phone number becomes the `phone` trait; every other identity schema trait comes from `user_metadata`. `app_metadata` maps to `metadata_admin`, `user_metadata` to `metadata_public`, and `blocked: true` maps to Kratos' `inactive` state.
 

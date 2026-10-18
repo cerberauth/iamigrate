@@ -27,6 +27,23 @@ func RunOrgsRolesPhase(
 	userIDs map[string]string,
 	concurrency int,
 ) (connector.ImportReport, error) {
+	return runOrgsRolesPhase(ctx, client, roles, orgs, roleInfos, userIDs, concurrency, nil, nil)
+}
+
+// runOrgsRolesPhase is RunOrgsRolesPhase, with roleIDs and orgIDs the
+// Auth0 IDs, by source ID, an org.resolve or role.resolve hook already
+// chose for some roles and organizations: those are neither matched nor
+// created.
+func runOrgsRolesPhase(
+	ctx context.Context,
+	client *Client,
+	roles []cmf.Role,
+	orgs []cmf.Organization,
+	roleInfos []userRoleInfo,
+	userIDs map[string]string,
+	concurrency int,
+	roleIDs, orgIDs map[string]string,
+) (connector.ImportReport, error) {
 	report := connector.ImportReport{
 		OrgIDMap:  map[string]string{},
 		RoleIDMap: map[string]string{},
@@ -42,6 +59,10 @@ func RunOrgsRolesPhase(
 	}
 	for _, role := range roles {
 		bar.Add(1)
+		if id, ok := roleIDs[role.SourceID]; ok {
+			report.RoleIDMap[role.SourceID] = id
+			continue
+		}
 		if id, ok := existingRoles[role.Name]; ok {
 			report.RoleIDMap[role.SourceID] = id
 			continue
@@ -60,6 +81,10 @@ func RunOrgsRolesPhase(
 	}
 	for _, org := range orgs {
 		bar.Add(1)
+		if id, ok := orgIDs[org.SourceID]; ok {
+			report.OrgIDMap[org.SourceID] = id
+			continue
+		}
 		if id, ok := existingOrgs[org.Name]; ok {
 			report.OrgIDMap[org.SourceID] = id
 			continue

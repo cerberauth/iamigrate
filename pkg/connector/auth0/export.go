@@ -20,8 +20,14 @@ import (
 
 // JSON keys shared by the export, payload and role/organization code.
 const (
-	keyUserID = "user_id"
-	keyName   = "name"
+	keyUserID       = "user_id"
+	keyName         = "name"
+	keyGivenName    = "given_name"
+	keyFamilyName   = "family_name"
+	keyNickname     = "nickname"
+	keyPicture      = "picture"
+	keyAppMetadata  = "app_metadata"
+	keyUserMetadata = "user_metadata"
 )
 
 // ExportFields are the user profile attributes an export can select, and
@@ -31,9 +37,9 @@ var ExportFields = []string{
 	"email", "email_verified",
 	"username",
 	"phone_number", "phone_verified",
-	"given_name", "family_name", keyName, "nickname", "picture",
+	keyGivenName, keyFamilyName, keyName, keyNickname, keyPicture,
 	"blocked",
-	"app_metadata", "user_metadata",
+	keyAppMetadata, keyUserMetadata,
 }
 
 // ExportOptions configures reading users out of an Auth0 tenant as a source.

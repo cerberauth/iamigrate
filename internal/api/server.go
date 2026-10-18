@@ -27,6 +27,7 @@ import (
 
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
 )
 
 // maxBodyBytes caps a request body; a job's params are a handful of strings.
@@ -56,8 +57,10 @@ type Report struct {
 
 	Manifest *connector.Manifest     `json:"manifest,omitempty"`
 	Problems []connector.Problem     `json:"problems,omitempty"`
+	Warnings []connector.Problem     `json:"warnings,omitempty"`
 	Import   *connector.ImportReport `json:"import,omitempty"`
 	Verify   *connector.DiffReport   `json:"verify,omitempty"`
+	Hooks    []hooks.Result          `json:"hooks,omitempty"`
 }
 
 // ErrorResponse is the body of every error response.
@@ -237,7 +240,8 @@ func (s *Server) report(w http.ResponseWriter, r *http.Request) {
 func NewReport(j *jobs.Job) Report {
 	return Report{
 		ID: j.ID, State: j.State, Error: j.Error, FailedIn: j.FailedIn,
-		Manifest: j.Manifest, Problems: j.Problems, Import: j.Report, Verify: j.Diff,
+		Manifest: j.Manifest, Problems: j.Problems, Warnings: j.Warnings, Import: j.Report, Verify: j.Diff,
+		Hooks: j.Hooks,
 	}
 }
 

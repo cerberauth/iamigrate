@@ -10,11 +10,15 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/spf13/cobra"
 )
 
 func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "diff", Short: "Reconcile a CMF file against a live target"}
+	addHooksFlag(cmd)
+	addVerifyFlags(cmd)
 	cmd.AddCommand(newDiffAuth0Cmd())
 	cmd.AddCommand(newDiffKratosCmd())
 	cmd.AddCommand(newDiffKeycloakCmd())
@@ -46,12 +50,24 @@ func newDiffAuth0Cmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
+			if ctx, err = verifyOptions(cmd, ctx); err != nil {
+				return err
+			}
 			report, err := auth0.New(client).Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err
 			}
 			printDiffReport(cmd, report)
+			// Unlike a job's verify, diff only reports drift: it fails on it
+			// only when a verify.after hook says so.
+			fail, err := lifecycle.VerifyAfter(ctx, report, false)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return fmt.Errorf("diff failed: the %s hook failed it", hooks.VerifyAfter)
+			}
 			return nil
 		},
 	}
@@ -89,12 +105,24 @@ func newDiffKratosCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
+			if ctx, err = verifyOptions(cmd, ctx); err != nil {
+				return err
+			}
 			report, err := kratos.New(client, "").Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err
 			}
 			printDiffReport(cmd, report)
+			// Unlike a job's verify, diff only reports drift: it fails on it
+			// only when a verify.after hook says so.
+			fail, err := lifecycle.VerifyAfter(ctx, report, false)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return fmt.Errorf("diff failed: the %s hook failed it", hooks.VerifyAfter)
+			}
 			return nil
 		},
 	}
@@ -129,12 +157,24 @@ func newDiffKeycloakCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
+			if ctx, err = verifyOptions(cmd, ctx); err != nil {
+				return err
+			}
 			report, err := keycloak.New(client).Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err
 			}
 			printDiffReport(cmd, report)
+			// Unlike a job's verify, diff only reports drift: it fails on it
+			// only when a verify.after hook says so.
+			fail, err := lifecycle.VerifyAfter(ctx, report, false)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return fmt.Errorf("diff failed: the %s hook failed it", hooks.VerifyAfter)
+			}
 			return nil
 		},
 	}
@@ -169,12 +209,24 @@ func newDiffFirebaseCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
+			if ctx, err = verifyOptions(cmd, ctx); err != nil {
+				return err
+			}
 			report, err := firebase.New(client).Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err
 			}
 			printDiffReport(cmd, report)
+			// Unlike a job's verify, diff only reports drift: it fails on it
+			// only when a verify.after hook says so.
+			fail, err := lifecycle.VerifyAfter(ctx, report, false)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return fmt.Errorf("diff failed: the %s hook failed it", hooks.VerifyAfter)
+			}
 			return nil
 		},
 	}
@@ -210,5 +262,8 @@ func printDiffReport(cmd *cobra.Command, report connector.DiffReport) {
 	}
 	for _, id := range report.NoIdentifier {
 		fmt.Fprintln(cmd.OutOrStdout(), " no identifier:", id)
+	}
+	if n := len(report.Skipped); n > 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "skipped by the import, not looked for: %d\n", n)
 	}
 }

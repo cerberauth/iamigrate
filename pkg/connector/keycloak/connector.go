@@ -8,14 +8,19 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"slices"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
+	"github.com/cerberauth/iamigrate/pkg/hooks"
+	"github.com/cerberauth/iamigrate/pkg/importprep"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/iamigrate/pkg/reconcile"
 )
 
 // UserExistsCode is the ImportError code for a user whose username or
@@ -58,6 +63,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		MFATypes:       []cmf.MFAType{cmf.MFATOTP},
 		SupportsOrgs:   false,
 		SupportsRoles:  false,
+		// POST /users ignores the "id" it's given and generates one.
+		SupportsCustomID: false,
 	}
 }
 
@@ -65,10 +72,16 @@ func (*Connector) Capabilities() connector.Capabilities {
 // accepts; a longer one makes it fail the request with an HTTP 500.
 const maxAttributeNameLen = 255
 
+// attrFirstName and attrLastName are the Keycloak name fields.
+const (
+	attrFirstName = "firstName"
+	attrLastName  = "lastName"
+)
+
 // profileAttributes are the user fields Keycloak keeps in its own
 // columns: an attribute with one of these names is dropped silently
 // instead of being stored.
-var profileAttributes = []string{"username", "email", "firstName", "lastName"}
+var profileAttributes = []string{"username", "email", attrFirstName, attrLastName}
 
 // ValidateUser applies Keycloak's user attribute rules to u, offline,
 // beyond the hash algorithm/MFA type checks Capabilities already covers:
@@ -166,6 +179,11 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 
 // Import creates one Keycloak user per CMF user via the Admin API.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	if err != nil {
+		return connector.ImportReport{}, err
+	}
+	tr := importprep.NewReader(ctx, r, applier)
 	var report connector.ImportReport
 	bar := progress.FromContext(ctx)
 
@@ -176,47 +194,72 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 		default:
 		}
 
-		u, err := r.ReadUser()
+		batch, err := tr.ReadBatch()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
 			return report, err
 		}
-		bar.Add(1)
 
-		rep, flags, err := buildUser(u)
-		if err != nil {
-			report.Failed = append(report.Failed, connector.ImportError{
-				SourceID: u.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
-			})
-			continue
-		}
-
-		if err := c.Client.doJSON(ctx, http.MethodPost, c.Client.adminPath("/users"), rep, nil); err != nil {
-			code := "REQUEST_ERROR"
-			var apiErr *APIError
-			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
-				code = UserExistsCode
+		// The batch's users are all built before any is sent, for
+		// import.payload to see them together.
+		var sources []string
+		var bodies []any
+		var allFlags []userFlags
+		for _, p := range batch {
+			bar.Add(1)
+			rep, flags, err := buildUser(p.User)
+			if err != nil {
+				report.Failed = append(report.Failed, connector.ImportError{
+					SourceID: p.User.SourceID, Code: "TRANSLATION_ERROR", Message: err.Error(),
+				})
+				continue
 			}
-			report.Failed = append(report.Failed, connector.ImportError{
-				SourceID: u.SourceID, Code: code, Message: err.Error(),
-			})
-			continue
+			applyFields(&rep, p.Fields)
+			sources, bodies, allFlags = append(sources, p.User.SourceID), append(bodies, rep), append(allFlags, flags)
+		}
+		if bodies, err = applier.Payloads(ctx, sources, bodies); err != nil {
+			return report, err
 		}
 
-		report.Succeeded = append(report.Succeeded, u.SourceID)
-		if flags.requiresPasswordReset {
-			report.RequiresPasswordReset = append(report.RequiresPasswordReset, u.SourceID)
-		}
-		if flags.requiresReenrollment {
-			report.RequiresReenrollment = append(report.RequiresReenrollment, u.SourceID)
-		}
-		if flags.requiresRecoveryCodeRegen {
-			report.RequiresRecoveryCodeRegen = append(report.RequiresRecoveryCodeRegen, u.SourceID)
+		for i, source := range sources {
+			if err := ctx.Err(); err != nil {
+				return report, err
+			}
+			h, err := c.Client.do(ctx, http.MethodPost, c.Client.adminPath("/users"), bodies[i], nil)
+			if err != nil {
+				code := "REQUEST_ERROR"
+				var apiErr *APIError
+				if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+					code = UserExistsCode
+				}
+				report.Failed = append(report.Failed, connector.ImportError{
+					SourceID: source, Code: code, Message: err.Error(),
+				})
+				continue
+			}
+
+			report.Succeeded = append(report.Succeeded, source)
+			// Keycloak generates the user's ID, and names it only in the
+			// Location of the new user.
+			if loc := h.Get("Location"); loc != "" {
+				report.SetTargetID(source, path.Base(loc))
+			}
+			flags := allFlags[i]
+			if flags.requiresPasswordReset {
+				report.RequiresPasswordReset = append(report.RequiresPasswordReset, source)
+			}
+			if flags.requiresReenrollment {
+				report.RequiresReenrollment = append(report.RequiresReenrollment, source)
+			}
+			if flags.requiresRecoveryCodeRegen {
+				report.RequiresRecoveryCodeRegen = append(report.RequiresRecoveryCodeRegen, source)
+			}
 		}
 	}
 
+	report.Skipped = append(report.Skipped, tr.Skipped()...)
 	return report, nil
 }
 
@@ -224,46 +267,48 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 // one up by email when they have one, else by the username Import gave
 // them (their username, else their phone).
 func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffReport, error) {
-	var report connector.DiffReport
-	bar := progress.FromContext(ctx)
+	return reconcile.Run(ctx, r, c.check)
+}
 
-	for {
-		u, err := r.ReadUser()
-		if err == io.EOF {
-			break
+// check looks u up by l's target ID, or by l's identifier (an email when it
+// has an @, else a username), or else as Verify says, and compares whether
+// the user is enabled.
+func (c *Connector) check(ctx context.Context, u cmf.User, l reconcile.Lookup) (reconcile.Found, error) {
+	var found []userRepresentation
+	if l.TargetID != "" {
+		var rep userRepresentation
+		if err := c.Client.doJSON(ctx, http.MethodGet, c.Client.adminPath("/users/"+url.PathEscape(l.TargetID)), nil, &rep); err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+				return reconcile.Found{Missing: true}, nil
+			}
+			return reconcile.Found{}, fmt.Errorf("keycloak: looking up %s: %w", u.SourceID, err)
 		}
-		if err != nil {
-			return report, err
-		}
-		bar.Add(1)
-		report.SourceCount++
-
+		found = []userRepresentation{rep}
+	} else {
 		query := url.Values{"exact": {jsonTrue}, "briefRepresentation": {jsonTrue}}
 		switch {
+		case l.Identifier != "" && strings.Contains(l.Identifier, "@"):
+			query.Set("email", l.Identifier)
+		case l.Identifier != "":
+			query.Set("username", l.Identifier)
 		case len(u.Emails) > 0:
 			query.Set("email", u.Emails[0].Value)
 		case loginUsername(u) != "":
 			query.Set("username", loginUsername(u))
 		default:
-			report.NoIdentifier = append(report.NoIdentifier, u.SourceID)
-			continue
+			return reconcile.Found{NoIdentifier: true}, nil
 		}
-
-		var found []userRepresentation
 		if err := c.Client.doJSON(ctx, http.MethodGet, c.Client.adminPath("/users?"+query.Encode()), nil, &found); err != nil {
-			return report, fmt.Errorf("keycloak: looking up %s: %w", u.SourceID, err)
-		}
-
-		if len(found) == 0 {
-			report.MissingInTarget = append(report.MissingInTarget, u.SourceID)
-			continue
-		}
-		report.TargetCount++
-		if found[0].Enabled == u.Blocked {
-			report.AttributeDrift = append(report.AttributeDrift, connector.DriftEntry{
-				SourceID: u.SourceID, Fields: []string{"blocked"},
-			})
+			return reconcile.Found{}, fmt.Errorf("keycloak: looking up %s: %w", u.SourceID, err)
 		}
 	}
-	return report, nil
+	if len(found) == 0 {
+		return reconcile.Found{Missing: true}, nil
+	}
+	f := reconcile.Found{Record: found[0]}
+	if found[0].Enabled == u.Blocked {
+		f.Drift = []string{"blocked"}
+	}
+	return f, nil
 }
