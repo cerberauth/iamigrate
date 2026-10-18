@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -19,6 +20,7 @@ import (
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/x/telemetryx"
 	"github.com/spf13/cobra"
 )
 
@@ -132,6 +134,7 @@ func newExportCmd() *cobra.Command {
 			var manifest connector.Manifest
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
+			exportStart := time.Now()
 			switch source {
 			case kratos.Name:
 				if adminURL == "" {
@@ -164,6 +167,7 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			telemetryx.Duration(ctx, "export.run", time.Since(exportStart), telemetryx.Vocab(source, flatfile.Name, kratos.Name, keycloak.Name, firebase.Name, auth0.Name, azureb2c.Name))
 			if err := w.Close(); err != nil {
 				return err
 			}
