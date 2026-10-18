@@ -20,7 +20,7 @@ Every strategy is batched: one request carries up to the handler's `batch_size` 
 
 ## What a handler sees of a user
 
-A handler deciding about a user gets who they are, **never their credentials**: only `hash.translate` and `mfa.translate`, whose job they are, see passwords and MFA factors.
+A handler deciding about a user gets who they are, **never their credentials**: only `hash.translate` and `mfa.translate`, whose job they are, see passwords and MFA factors; and `hash.detect`, which sees the password value of a record whose hash it is asked to identify.
 
 ```json
 {
@@ -45,6 +45,26 @@ Each raw record a flat file holds, as read and before the mapping's fields apply
 - Key: `record <n>`, the record's position from 1, as it has no source ID yet.
 - Item: `{"record": {"<column>": "<value>", ...}}`.
 - Result: `{"action": "keep"}` (or `{}`), `{"action": "drop", "reason": "..."}`, or `{"action": "replace", "record": {...}}`. A dropped record is listed under the manifest's `skipped_records`, as `record <n>`.
+
+### `id.source`
+
+The `source_id` of each raw record a flat file holds, for an ID that is a combination of columns or otherwise can't be read from one. Asked after `export.record` and before the mapping's fields, so what it answers is the `source_id` column the fields then see. Configured in the flat-file source's mapping, like `export.record`. Without it, a `fields` entry mapping a column (or several, as fallbacks) to `source_id` does the same for most files.
+
+- Key: `record <n>`, the record's position in the file from 1, as for `export.record` (a record it dropped keeps its number).
+- Item: `{"record": {"<column>": "<value>", ...}}`.
+- Result: `{"source_id": "..."}`. `{}` or an empty `source_id` keeps the record's own, if it has one.
+
+An ID must give the same answer for the same record on every run, as imports, reports and `verify` refer to users by it.
+
+### `hash.detect`
+
+The password of each record whose hash iamigrate can't read from its columns: a raw digest (md5, sha1, sha256, sha512) without a `password_algorithm`, an unreadable `password_encoding` or `password_salt`, and so on. Records the columns settle (a self-describing hash, or raw digests with their algorithm) aren't sent. Asked after the mapping's fields, so the columns are the ones the convention names. Configured in the flat-file source's mapping.
+
+- Key: the record's `source_id`. Records without one are skipped before this, and two sent records can't share one.
+- Item: `{"source_id": "u1", "password": "5f4dcc3b...", "columns": {"password_salt": "pepper", "password_salt_encoding": "utf8"}, "reason": "..."}`: the raw `password` value, the other password columns the record has, and why iamigrate couldn't read them.
+- Result: a CMF password, e.g. `{"algorithm": "md5", "hash": {"value": "5f4dcc3b...", "encoding": "hex"}, "salt": {"value": "pepper", "encoding": "utf8", "position": "prefix"}}` (`portable` is true unless set); `{"skip": "reason"}` to leave the record out, listed with that reason under the manifest's `skipped_records`; or `{}` to leave it to the built-in handling, which skips it with its own reason.
+
+The password is checked before it is written: a known algorithm, a hash, salt and key that decode as their encoding, a digest of the algorithm's size, an hmac with its key and digest. One that fails the check skips the record, with the reason, rather than writing a hash no target can use.
 
 ### `map.field`
 

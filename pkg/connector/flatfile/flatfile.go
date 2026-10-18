@@ -75,11 +75,18 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	if err != nil {
 		return connector.Manifest{}, err
 	}
-	rows, dropped, err := exportRecord(ctx, rows, opts.Mapping)
+	rows, positions, dropped, err := exportRecord(ctx, rows, opts.Mapping)
 	if err != nil {
 		return connector.Manifest{}, err
 	}
+	if rows, err = idSource(ctx, rows, positions, opts.Mapping); err != nil {
+		return connector.Manifest{}, err
+	}
 	if rows, err = normalize(ctx, rows, opts.Mapping, hooks.FromContext(ctx)); err != nil {
+		return connector.Manifest{}, err
+	}
+	detected, err := detectHashes(ctx, rows, opts.HashHints, opts.Mapping)
+	if err != nil {
 		return connector.Manifest{}, err
 	}
 
@@ -91,7 +98,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	bar := progress.FromContext(ctx)
 	bar.SetTotal(len(rows))
 
-	for _, row := range rows {
+	for i, row := range rows {
 		select {
 		case <-ctx.Done():
 			return manifest, ctx.Err()
@@ -99,7 +106,15 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		}
 
 		bar.Add(1)
-		u, skipReason, err := rowToUser(row, opts.HashHints)
+		det := detected[i]
+		if det.skip != "" {
+			manifest.SkippedRecords = append(manifest.SkippedRecords, connector.SkippedRecord{
+				SourceID: row[colSourceID],
+				Reason:   det.skip,
+			})
+			continue
+		}
+		u, skipReason, err := rowToUser(row, opts.HashHints, det.password)
 		if err != nil {
 			return manifest, err
 		}
@@ -191,14 +206,15 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 // exportRecord hands the raw rows, as read and before any mapping, to the
 // mapping's export.record handler, if any, which keeps, drops or replaces
 // each. Rows are keyed by their record number, as they have no source ID
-// yet; so are the dropped ones in the manifest.
-func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mapping) ([]map[string]string, []connector.SkippedRecord, error) {
+// yet; so are the dropped ones in the manifest. positions are the record
+// numbers (from 1) of the rows kept, nil when the rows keep their own.
+func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mapping) (kept []map[string]string, positions []int, dropped []connector.SkippedRecord, err error) {
 	if m.Strategies[strategy.ExportRecord].Handler == "" {
-		return rows, nil, nil
+		return rows, nil, nil, nil
 	}
 	set, err := strategy.New(strategy.Only(m, strategy.ExportRecord), hooks.FromContext(ctx))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	items := make([]hooks.Item, len(rows))
 	for i, row := range rows {
@@ -206,10 +222,8 @@ func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mappi
 	}
 	res, err := set.Resolve(ctx, strategy.ExportRecord, items)
 	if err != nil || res == nil {
-		return rows, nil, err
+		return rows, nil, nil, err
 	}
-	var kept []map[string]string
-	var dropped []connector.SkippedRecord
 	for i, row := range rows {
 		var a struct {
 			Action string            `json:"action"`
@@ -217,16 +231,16 @@ func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mappi
 			Record map[string]string `json:"record"`
 		}
 		if err := strategy.Decode(strategy.ExportRecord, recordKey(i), res[recordKey(i)], &a); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		switch a.Action {
 		case "", strategy.ActionKeep:
-			kept = append(kept, row)
+			kept, positions = append(kept, row), append(positions, i+1)
 		case strategy.ActionReplace:
 			if a.Record == nil {
-				return nil, nil, fmt.Errorf("%s: %s: replace needs a record", strategy.ExportRecord, recordKey(i))
+				return nil, nil, nil, fmt.Errorf("%s: %s: replace needs a record", strategy.ExportRecord, recordKey(i))
 			}
-			kept = append(kept, a.Record)
+			kept, positions = append(kept, a.Record), append(positions, i+1)
 		case strategy.ActionDrop:
 			reason := a.Reason
 			if reason == "" {
@@ -234,10 +248,10 @@ func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mappi
 			}
 			dropped = append(dropped, connector.SkippedRecord{SourceID: recordKey(i), Reason: reason})
 		default:
-			return nil, nil, fmt.Errorf("%s: %s: unknown action %q (keep, drop or replace)", strategy.ExportRecord, recordKey(i), a.Action)
+			return nil, nil, nil, fmt.Errorf("%s: %s: unknown action %q (keep, drop or replace)", strategy.ExportRecord, recordKey(i), a.Action)
 		}
 	}
-	return kept, dropped, nil
+	return kept, positions, dropped, nil
 }
 
 func recordKey(i int) string { return "record " + strconv.Itoa(i+1) }

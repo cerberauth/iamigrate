@@ -37,7 +37,7 @@ AUTH0_DOMAIN=acme.us.auth0.com AUTH0_TOKEN=... iamigrate export --source auth0 \
 | `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
 | `--in` | Input file path (flatfile source), or `kc.sh export` realm file or directory (keycloak source) |
 | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
-| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile source) |
+| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `id.source`, `hash.detect`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile source) |
 | `--out` | Output directory (default `./export/`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
 | `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project; firebase source) |

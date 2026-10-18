@@ -47,7 +47,7 @@ func Prepare(opts PrepareOptions) (PrepareReport, error) {
 
 	report := PrepareReport{Records: len(rows)}
 	for i, row := range rows {
-		if _, reason, _ := rowToUser(row, nil); reason != "" {
+		if _, reason, _ := rowToUser(row, nil, nil); reason != "" {
 			id := row[colSourceID]
 			if id == "" {
 				id = fmt.Sprintf("record %d", i+1)
