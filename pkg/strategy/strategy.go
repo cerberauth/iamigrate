@@ -34,6 +34,16 @@ const (
 	RoleResolve      = "role.resolve"
 	VerifyLookup     = "verify.lookup"
 	VerifyCompare    = "verify.compare"
+	IdentityPrimary  = "identity.primary"
+)
+
+// Built-in alternatives of identity.primary: which kind of identifier is
+// preferred as a user's primary one, the others following in this order if
+// the user lacks it.
+const (
+	PrimaryEmailFirst    = "email_first"
+	PrimaryUsernameFirst = "username_first"
+	PrimaryPhoneFirst    = "phone_first"
 )
 
 // Built-in alternatives of verify.lookup: look users up by their
@@ -60,14 +70,14 @@ var configurable = map[string][]string{
 	RoleResolve:      nil,
 	VerifyLookup:     {LookupIdentifier, LookupTargetID},
 	VerifyCompare:    nil,
+	IdentityPrimary:  {PrimaryEmailFirst, PrimaryUsernameFirst, PrimaryPhoneFirst},
 }
 
 // planned are strategy points designed but not built yet, so naming one
 // says so rather than that it doesn't exist.
 var planned = map[string]string{
-	"identity.primary": "not supported yet",
-	"import.conflict":  "per-user conflict decisions aren't supported yet: use the conflict section's on_duplicate",
-	"metadata.place":   "a handler isn't supported yet: route keys with the metadata section",
+	"import.conflict": "per-user conflict decisions aren't supported yet: use the conflict section's on_duplicate",
+	"metadata.place":  "a handler isn't supported yet: route keys with the metadata section",
 }
 
 // Check checks m's `strategies`, `metadata` and `conflict` sections
@@ -160,6 +170,16 @@ func New(m mapping.Mapping, d *hooks.Dispatcher) (*Set, error) {
 // Delegated reports whether name is handed to a handler.
 func (s *Set) Delegated(name string) bool {
 	return s != nil && s.batchers[name] != nil
+}
+
+// Configured reports whether name is configured at all, with a built-in
+// alternative or a handler.
+func (s *Set) Configured(name string) bool {
+	if s == nil {
+		return false
+	}
+	_, ok := s.refs[name]
+	return ok
 }
 
 // Builtin returns the built-in alternative configured for name, "" for the

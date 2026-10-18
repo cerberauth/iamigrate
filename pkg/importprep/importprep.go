@@ -1,6 +1,6 @@
 // Package importprep prepares the CMF users an import reads, for the
 // target connector to build its payloads from: the import-side strategies
-// (import.user, hash.translate, mfa.translate) decide what is imported of
+// (import.user, identity.primary, hash.translate, mfa.translate) decide what is imported of
 // each user, the mapping's metadata routes move metadata keys away from
 // where the connector puts them, and its target_fields set fields of the
 // target's user from CMF fields, through the same transforms as the export
@@ -42,6 +42,19 @@ type Applier struct {
 	routes []mapping.MetadataRoute
 	set    *strategy.Set
 	batch  int
+	// identifiers are the kinds of identifier the target can make a user's
+	// primary one, for identity.primary.
+	identifiers []cmf.Identifier
+}
+
+// Option sets how an Applier is built.
+type Option func(*Applier)
+
+// WithPrimaryIdentifiers tells the Applier which kinds of identifier its
+// target can make a user's primary one (see
+// connector.Capabilities.PrimaryIdentifiers), for identity.primary.
+func WithPrimaryIdentifiers(kinds []cmf.Identifier) Option {
+	return func(a *Applier) { a.identifiers = kinds }
 }
 
 type rule struct {
@@ -60,7 +73,7 @@ const defaultBatch = 100
 // New returns the Applier of m's import-side strategies, metadata routes and
 // target fields, nil when it has none. check is the target connector's word
 // on whether it can set a path; handlers are reached through d.
-func New(m mapping.Mapping, check func(path string) error, d *hooks.Dispatcher) (*Applier, error) {
+func New(m mapping.Mapping, check func(path string) error, d *hooks.Dispatcher, opts ...Option) (*Applier, error) {
 	set, err := strategy.New(strategy.Only(m, importStrategies...), d)
 	if err != nil {
 		return nil, err
@@ -69,7 +82,7 @@ func New(m mapping.Mapping, check func(path string) error, d *hooks.Dispatcher) 
 	for _, n := range importStrategies {
 		delegated = delegated || set.Delegated(n)
 	}
-	if len(m.TargetFields) == 0 && len(m.Metadata) == 0 && !delegated {
+	if len(m.TargetFields) == 0 && len(m.Metadata) == 0 && !delegated && !set.Configured(strategy.IdentityPrimary) {
 		return nil, nil
 	}
 	reg, err := transform.New(m, transform.ImportHook, d)
@@ -77,6 +90,9 @@ func New(m mapping.Mapping, check func(path string) error, d *hooks.Dispatcher) 
 		return nil, err
 	}
 	a := &Applier{set: set, routes: m.Metadata, batch: defaultBatch}
+	for _, o := range opts {
+		o(a)
+	}
 	for _, n := range importStrategies {
 		a.batch = max(a.batch, set.BatchSize(n))
 	}
@@ -112,6 +128,9 @@ func Check(m mapping.Mapping, target connector.TargetConnector) error {
 		return err
 	}
 	if err := strategy.Check(m); err != nil {
+		return err
+	}
+	if err := checkPrimary(m, target); err != nil {
 		return err
 	}
 	if c := m.Conflict; c != nil && c.OnDuplicate == mapping.OnDuplicateUpsert && !target.Capabilities().SupportsUpsert {

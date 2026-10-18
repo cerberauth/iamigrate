@@ -406,12 +406,19 @@ func firstAttribute(attrs map[string][]string, key string) string {
 	return ""
 }
 
-// loginUsername returns the Keycloak username for u: the CMF username,
-// else the email, else the phone, or "" when u has none of them. Keycloak
+// loginUsername returns the Keycloak username for u: the identifier the
+// identity.primary strategy chose (u.Login), else the CMF username, else the
+// email, else the phone, or "" when u has none of them. Keycloak
 // requires a username on every user and logs in by username or email, so
 // a phone-only user logs in with the phone as username.
 func loginUsername(u cmf.User) string {
 	switch {
+	case u.Login == cmf.IdentifierEmail && len(u.Emails) > 0:
+		return u.Emails[0].Value
+	case u.Login == cmf.IdentifierPhone && len(u.Phones) > 0:
+		return u.Phones[0].Value
+	case u.Login == cmf.IdentifierUsername && u.Username != "":
+		return u.Username
 	case u.Username != "":
 		return u.Username
 	case len(u.Emails) > 0:

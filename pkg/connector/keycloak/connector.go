@@ -65,6 +65,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		SupportsRoles:  false,
 		// POST /users ignores the "id" it's given and generates one.
 		SupportsCustomID: false,
+		// Any of them can be the Keycloak username.
+		PrimaryIdentifiers: []cmf.Identifier{cmf.IdentifierEmail, cmf.IdentifierUsername, cmf.IdentifierPhone},
 	}
 }
 
@@ -179,7 +181,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 
 // Import creates one Keycloak user per CMF user via the Admin API.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
-	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx), importprep.WithPrimaryIdentifiers(c.Capabilities().PrimaryIdentifiers))
 	if err != nil {
 		return connector.ImportReport{}, err
 	}

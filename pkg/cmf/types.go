@@ -57,6 +57,15 @@ const (
 	MFAPush          MFAType = "push"
 )
 
+// Identifier names a kind of identifier a user can log in with.
+type Identifier string
+
+const (
+	IdentifierEmail    Identifier = "email"
+	IdentifierUsername Identifier = "username"
+	IdentifierPhone    Identifier = "phone"
+)
+
 // Contact is an email or phone entry on a user record.
 type Contact struct {
 	Value    string `json:"value"`
@@ -159,6 +168,11 @@ type User struct {
 	// same ID. A target missing from it gets the source ID.
 	TargetIDs  map[string]string `json:"target_ids,omitempty"`
 	Provenance Provenance        `json:"provenance"`
+	// Login is the identifier the mapping's identity.primary strategy made
+	// this user's primary one, for a target that picks one (the Keycloak
+	// username). Empty, the target uses its own order. It is decided at
+	// import time and is not part of the format.
+	Login Identifier `json:"-"`
 }
 
 // TargetID returns the user ID target is to give u: the one assigned in

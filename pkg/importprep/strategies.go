@@ -15,7 +15,7 @@ import (
 )
 
 // importStrategies are the strategies an Applier runs.
-var importStrategies = []string{strategy.ImportUser, strategy.HashTranslate, strategy.MFATranslate, strategy.ImportPayload}
+var importStrategies = []string{strategy.ImportUser, strategy.IdentityPrimary, strategy.HashTranslate, strategy.MFATranslate, strategy.ImportPayload}
 
 // routeDrop is the metadata route destination that leaves a key out.
 const routeDrop = "drop"
@@ -26,12 +26,15 @@ const keySourceID = "source_id"
 // SkippedCode is the ImportError code of a user import.user skipped.
 const SkippedCode = reconcile.SkippedCode
 
-// prepare runs, over users, import.user, hash.translate, mfa.translate, the
+// prepare runs, over users, import.user, identity.primary, hash.translate, mfa.translate, the
 // metadata routes and the target fields, in that order, and returns the
 // users left with their fields, and those import.user skipped.
 func (a *Applier) prepare(ctx context.Context, users []cmf.User) ([]cmf.User, [][]Field, []connector.ImportError, error) {
 	users, skipped, err := a.importUser(ctx, users)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	if err := a.identityPrimary(ctx, users); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := a.hashTranslate(ctx, users); err != nil {

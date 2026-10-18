@@ -74,6 +74,8 @@ func (*Connector) Capabilities() connector.Capabilities {
 		SupportsCustomID: true,
 		// batchCreate's allowOverwrite.
 		SupportsUpsert: true,
+		// An account has an email and a phone number, no username.
+		PrimaryIdentifiers: []cmf.Identifier{cmf.IdentifierEmail, cmf.IdentifierPhone},
 	}
 }
 
@@ -175,7 +177,7 @@ type pendingBatch struct {
 // only declare one hash algorithm and configuration, so users are grouped
 // by theirs and each group is sent in batches of up to 1000.
 func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping, opts connector.ImportOptions) (connector.ImportReport, error) {
-	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx))
+	applier, err := importprep.New(m, c.CheckTargetField, hooks.FromContext(ctx), importprep.WithPrimaryIdentifiers(c.Capabilities().PrimaryIdentifiers))
 	if err != nil {
 		return connector.ImportReport{}, err
 	}

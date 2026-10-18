@@ -103,3 +103,25 @@ func TestUsersTheImportSkippedAreNotLookedFor(t *testing.T) {
 	require.NotContains(t, seen, "gone")
 	require.Contains(t, seen, "a", "a user skipped as already existing is still verified")
 }
+
+func TestVerifyLooksUsersUpAsIdentityPrimaryMadeThem(t *testing.T) {
+	var buf bytes.Buffer
+	w := cmf.NewPlainWriter(&buf)
+	require.NoError(t, w.WriteUser(cmf.User{CMFVersion: cmf.Version, SourceID: "u1", Username: "ada",
+		Emails: []cmf.Contact{{Value: "old@example.com"}, {Value: "new@example.com", Primary: true}},
+		Phones: []cmf.Contact{{Value: "+12025550142"}}}))
+	require.NoError(t, w.Close())
+	r, err := cmf.NewReader(&buf)
+	require.NoError(t, err)
+
+	var got cmf.User
+	m := mapping.Mapping{Strategies: map[string]mapping.StrategyRef{"identity.primary": {Strategy: "phone_first"}}}
+	_, err = reconcile.Run(reconcile.WithOptions(context.Background(), reconcile.OptionsFor(m, nil)), r,
+		func(_ context.Context, u cmf.User, _ reconcile.Lookup) (reconcile.Found, error) {
+			got = u
+			return reconcile.Found{}, nil
+		})
+	require.NoError(t, err)
+	require.Equal(t, "new@example.com", got.Emails[0].Value)
+	require.Equal(t, cmf.IdentifierPhone, got.Login)
+}

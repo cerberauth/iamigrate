@@ -64,6 +64,7 @@ var strategies = map[string]bool{
 	"role.resolve":       true,
 	"verify.lookup":      true,
 	"verify.compare":     true,
+	"identity.primary":   true,
 }
 
 // IsEvent reports whether name is an event hook point.
