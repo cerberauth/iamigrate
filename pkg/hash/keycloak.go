@@ -43,6 +43,9 @@ const (
 	keycloakArgon2       = "argon2"
 )
 
+// digestSHA1 is the SHA-1 digest name shared by the PBKDF2 mappings.
+const digestSHA1 = "sha1"
+
 // Argon2 version labels Keycloak uses in credentialData, keyed by the PHC
 // v= value.
 var keycloakArgon2Versions = map[string]string{"19": "1.3", "16": "1.0"}
@@ -148,7 +151,7 @@ func keycloakPBKDF2Provider(p cmf.Password) (string, error) {
 		digest = p.Hash.Digest
 	}
 	switch digest {
-	case "sha1":
+	case digestSHA1:
 		return keycloakPBKDF2, nil
 	case "sha256":
 		return keycloakPBKDF2SHA256, nil
@@ -184,7 +187,7 @@ func NormalizeKeycloakCredential(secretData, credentialData string) (cmf.Passwor
 
 	switch data.Algorithm {
 	case keycloakPBKDF2, keycloakPBKDF2SHA256, keycloakPBKDF2SHA512:
-		digest := "sha1"
+		digest := digestSHA1
 		if d, ok := strings.CutPrefix(data.Algorithm, keycloakPBKDF2+"-"); ok {
 			digest = d
 		}

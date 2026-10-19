@@ -50,7 +50,7 @@ func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, e
 	if len(u.Emails) == 0 {
 		return nil, flags, errEmailRequired
 	}
-	rec["email"] = u.Emails[0].Value
+	rec[keyEmail] = u.Emails[0].Value
 	rec["email_verified"] = u.Emails[0].Verified
 	if u.Username != "" {
 		rec["username"] = u.Username
@@ -108,11 +108,11 @@ func buildImportUser(u cmf.User, allowUpsert bool) (map[string]any, userFlags, e
 			})
 		case cmf.MFASMS:
 			mfaFactors = append(mfaFactors, map[string]any{
-				"phone": map[string]any{"value": f.Value, "verified": true},
+				"phone": map[string]any{"value": f.Value},
 			})
 		case cmf.MFAEmail:
 			mfaFactors = append(mfaFactors, map[string]any{
-				"email": map[string]any{"value": f.Value, "verified": true},
+				keyEmail: map[string]any{"value": f.Value},
 			})
 		case cmf.MFAWebAuthn:
 			flags.requiresReenrollment = true

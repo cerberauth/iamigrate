@@ -21,6 +21,7 @@ import (
 // JSON keys shared by the export, payload and role/organization code.
 const (
 	keyUserID       = "user_id"
+	keyEmail        = "email"
 	keyName         = "name"
 	keyGivenName    = "given_name"
 	keyFamilyName   = "family_name"
@@ -34,7 +35,7 @@ const (
 // the ones iamigrate knows how to turn into CMF. user_id is always
 // exported, as it becomes the CMF source_id.
 var ExportFields = []string{
-	"email", "email_verified",
+	keyEmail, "email_verified",
 	"username",
 	"phone_number", "phone_verified",
 	keyGivenName, keyFamilyName, keyName, keyNickname, keyPicture,

@@ -1,9 +1,11 @@
 package hash
 
 import (
+	"encoding/base64"
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -109,13 +111,16 @@ func translateScrypt(p cmf.Password) (Auth0Hash, error) {
 	if p.Params["variant"] == firebaseVariant {
 		return Auth0Hash{}, fmt.Errorf("hash: Firebase's modified scrypt is not one of Auth0's custom_password_hash algorithms")
 	}
+	if p.Hash.Encoding != cmf.EncodingHex && p.Hash.Encoding != cmf.EncodingBase64 {
+		return Auth0Hash{}, fmt.Errorf("hash: scrypt requires hash.encoding of hex or base64 for Auth0, got %q", p.Hash.Encoding)
+	}
 	keylen, _ := intParam(p.Params, "keylen")
-	if keylen == 0 {
-		return Auth0Hash{}, fmt.Errorf("hash: scrypt requires params.keylen for Auth0")
+	if keylen <= 0 {
+		return Auth0Hash{}, fmt.Errorf("hash: scrypt requires a positive params.keylen for Auth0")
 	}
 	cost, _ := intParam(p.Params, "cost")
-	if cost == 0 || cost&(cost-1) != 0 {
-		return Auth0Hash{}, fmt.Errorf("hash: scrypt params.cost must be a power of two, got %v", p.Params["cost"])
+	if cost <= 1 || cost&(cost-1) != 0 {
+		return Auth0Hash{}, fmt.Errorf("hash: scrypt params.cost must be a power of two greater than 1, got %v", p.Params["cost"])
 	}
 	payload := map[string]any{
 		payloadKeyAlgorithm: "scrypt",
@@ -130,9 +135,42 @@ func translateScrypt(p cmf.Password) (Auth0Hash, error) {
 		}
 	}
 	if p.Salt != nil {
-		payload["salt"] = map[string]any{payloadKeyValue: p.Salt.Value, payloadKeyEncoding: string(p.Salt.Encoding)}
+		payload["salt"] = saltPayload(p.Salt)
 	}
 	return Auth0Hash{Field: FieldCustomPasswordHash, Payload: payload}, nil
+}
+
+// saltPayload is a CMF salt as Auth0's salt object. position is left out
+// when CMF doesn't record one, so Auth0 applies its prefix default instead of
+// getting an empty string.
+func saltPayload(s *cmf.SaltValue) map[string]any {
+	out := map[string]any{payloadKeyValue: s.Value, payloadKeyEncoding: string(s.Encoding)}
+	if s.Position != "" {
+		out["position"] = string(s.Position)
+	}
+	return out
+}
+
+// auth0PBKDF2Digests are the digests Auth0 accepts in a PBKDF2 PHC string's
+// pbkdf2-<digest> identifier, spelled as Auth0 documents them.
+var auth0PBKDF2Digests = []string{
+	"RSA-MD4", "RSA-MD5", "RSA-MDC2", "RSA-RIPEMD160", "RSA-SHA1", "RSA-SHA1-2",
+	"RSA-SHA224", "RSA-SHA256", "RSA-SHA384", "RSA-SHA512",
+	"md4", "md4WithRSAEncryption", "md5", "md5WithRSAEncryption",
+	"mdc2", "mdc2WithRSA", "ripemd", "ripemd160", "ripemd160WithRSA", "rmd160",
+	digestSHA1, "sha1WithRSAEncryption", "sha224", "sha224WithRSAEncryption",
+	"sha256", "sha256WithRSAEncryption", "sha384", "sha384WithRSAEncryption",
+	"sha512", "sha512WithRSAEncryption", "ssl3-md5", "ssl3-sha1", "whirlpool",
+}
+
+// phcBase64 re-encodes a CMF value as the unpadded base64 a PHC string
+// carries, which Auth0 requires for the salt.
+func phcBase64(v string, enc cmf.Encoding) (string, error) {
+	b, err := DecodeBytes(v, enc)
+	if err != nil {
+		return "", err
+	}
+	return base64.RawStdEncoding.EncodeToString(b), nil
 }
 
 func translatePBKDF2(p cmf.Password) (Auth0Hash, error) {
@@ -148,7 +186,18 @@ func translatePBKDF2(p cmf.Password) (Auth0Hash, error) {
 		return Auth0Hash{}, fmt.Errorf("hash: pbkdf2 requires a salt for Auth0")
 	}
 	digest, _ := p.Params["digest"].(string)
-	phc := fmt.Sprintf("$pbkdf2-%s$i=%d,l=%d$%s$%s", digest, iterations, keylen, p.Salt.Value, p.Hash.Value)
+	if !slices.Contains(auth0PBKDF2Digests, digest) {
+		return Auth0Hash{}, fmt.Errorf("hash: pbkdf2 params.digest %q is not one of Auth0's supported digests", digest)
+	}
+	salt, err := phcBase64(p.Salt.Value, p.Salt.Encoding)
+	if err != nil {
+		return Auth0Hash{}, fmt.Errorf("hash: pbkdf2 salt isn't valid %s: %w", p.Salt.Encoding, err)
+	}
+	key, err := phcBase64(p.Hash.Value, p.Hash.Encoding)
+	if err != nil {
+		return Auth0Hash{}, fmt.Errorf("hash: pbkdf2 hash isn't valid %s: %w", p.Hash.Encoding, err)
+	}
+	phc := fmt.Sprintf("$pbkdf2-%s$i=%d,l=%d$%s$%s", digest, iterations, keylen, salt, key)
 	return Auth0Hash{
 		Field: FieldCustomPasswordHash,
 		Payload: map[string]any{
@@ -180,11 +229,7 @@ func translateDigest(p cmf.Password) (Auth0Hash, error) {
 		payloadKeyHash:      map[string]any{payloadKeyValue: p.Hash.Value, payloadKeyEncoding: string(p.Hash.Encoding)},
 	}
 	if p.Salt != nil {
-		payload["salt"] = map[string]any{
-			payloadKeyValue:    p.Salt.Value,
-			payloadKeyEncoding: string(p.Salt.Encoding),
-			"position":         string(p.Salt.Position),
-		}
+		payload["salt"] = saltPayload(p.Salt)
 	}
 	return Auth0Hash{Field: FieldCustomPasswordHash, Payload: payload}, nil
 }
@@ -208,11 +253,19 @@ func translateHMAC(p cmf.Password) (Auth0Hash, error) {
 	}, nil
 }
 
-var ldapCryptRE = regexp.MustCompile(`^\{CRYPT\}`)
+// ldapSchemeRE captures the {scheme} prefix of an RFC 2307 userPassword.
+var ldapSchemeRE = regexp.MustCompile(`^\{([^}]*)\}`)
+
+// auth0LDAPScheme matches the schemes Auth0 accepts: md5, smd5, sha* and ssha*.
+var auth0LDAPScheme = regexp.MustCompile(`(?i)^(md5|smd5|s?sha[0-9]*)$`)
 
 func translateLDAP(p cmf.Password) (Auth0Hash, error) {
-	if ldapCryptRE.MatchString(p.Hash.Value) {
-		return Auth0Hash{}, fmt.Errorf("hash: LDAP {CRYPT} scheme is not supported by Auth0")
+	m := ldapSchemeRE.FindStringSubmatch(p.Hash.Value)
+	if m == nil {
+		return Auth0Hash{}, fmt.Errorf("hash: LDAP value has no {scheme} prefix")
+	}
+	if !auth0LDAPScheme.MatchString(m[1]) {
+		return Auth0Hash{}, fmt.Errorf("hash: LDAP {%s} scheme is not supported by Auth0 (md5, smd5, sha* and ssha* only)", m[1])
 	}
 	return Auth0Hash{
 		Field: FieldCustomPasswordHash,

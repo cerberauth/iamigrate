@@ -106,3 +106,22 @@ func TestImportUserIDStripsAuth0Prefix(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "abc123", rec["user_id"])
 }
+
+func TestBuildImportUserMFAFactorsCarryOnlyTheirSchemaKeys(t *testing.T) {
+	u := cmf.User{
+		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "u1@example.com", Verified: true}},
+		MFAFactors: []cmf.MFAFactor{
+			{Type: cmf.MFATOTP, Value: "JBSWY3DPEHPK3PXP", Portable: true},
+			{Type: cmf.MFASMS, Value: "+12125550001", Portable: true},
+			{Type: cmf.MFAEmail, Value: "u1@example.com", Portable: true},
+		},
+	}
+	rec, _, err := buildImportUser(u, false)
+	require.NoError(t, err)
+	require.Equal(t, []map[string]any{
+		{"totp": map[string]any{"secret": "JBSWY3DPEHPK3PXP"}},
+		{"phone": map[string]any{"value": "+12125550001"}},
+		{"email": map[string]any{"value": "u1@example.com"}},
+	}, rec["mfa_factors"])
+}
