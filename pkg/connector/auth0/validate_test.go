@@ -3,6 +3,7 @@ package auth0
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -81,6 +82,44 @@ func TestConnectorValidateUser(t *testing.T) {
 			name:     "oversized user_metadata",
 			user:     cmf.User{SourceID: "u10", Emails: []cmf.Contact{{Value: "a@example.com"}}, UserMetadata: map[string]any{"bio": strings.Repeat("x", maxMetadataBytes)}},
 			wantRule: "exceeds 16384 bytes",
+		},
+		{
+			name:     "email with a display name",
+			user:     cmf.User{SourceID: "u11", Emails: []cmf.Contact{{Value: "Ann <a@example.com>"}}},
+			wantRule: "invalid email format",
+		},
+		{
+			name:     "reserved app_metadata key",
+			user:     cmf.User{SourceID: "u12", Emails: []cmf.Contact{{Value: "a@example.com"}}, AppMetadata: map[string]any{"blocked": true, "plan": "pro"}},
+			wantRule: "key is reserved by Auth0",
+		},
+		{
+			name: "valid MFA factors",
+			user: cmf.User{SourceID: "u13", Emails: []cmf.Contact{{Value: "a@example.com"}}, MFAFactors: []cmf.MFAFactor{
+				{Type: cmf.MFATOTP, Value: "JBSWY3DPEHPK3PXP", Portable: true},
+				{Type: cmf.MFASMS, Value: "+12125550001", Portable: true},
+				{Type: cmf.MFAEmail, Value: "a@example.com", Portable: true},
+			}},
+		},
+		{
+			name: "padded or lowercase TOTP secret",
+			user: cmf.User{SourceID: "u14", Emails: []cmf.Contact{{Value: "a@example.com"}}, MFAFactors: []cmf.MFAFactor{
+				{Type: cmf.MFATOTP, Value: "jbswy3dpehpk3pxp======", Portable: true},
+			}},
+			wantRule: "not an unpadded Base32 secret",
+		},
+		{
+			name: "SMS factor without +",
+			user: cmf.User{SourceID: "u15", Emails: []cmf.Contact{{Value: "a@example.com"}}, MFAFactors: []cmf.MFAFactor{
+				{Type: cmf.MFASMS, Value: "2125550001", Portable: true},
+			}},
+			wantRule: "not + followed by up to 15 digits",
+		},
+		{
+			name: "more than 10 MFA factors",
+			user: cmf.User{SourceID: "u16", Emails: []cmf.Contact{{Value: "a@example.com"}}, MFAFactors: slices.Repeat(
+				[]cmf.MFAFactor{{Type: cmf.MFATOTP, Value: "JBSWY3DPEHPK3PXP", Portable: true}}, 11)},
+			wantRule: "at most 10 factors can be imported",
 		},
 		{
 			name: "auth0| prefix doesn't count toward the user_id limit",

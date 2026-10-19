@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
@@ -205,4 +206,69 @@ func TestToAuth0HMACNestsKeyUnderHash(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, a0.Payload, "key")
 	require.Equal(t, map[string]any{"value": "a2V5", "encoding": "base64"}, a0.Payload["hash"].(map[string]any)["key"])
+}
+
+func TestToAuth0SaltPositionOmittedWhenUnset(t *testing.T) {
+	p := decodePassword(t, `{"algorithm":"sha256","hash":{"value":"abcd","encoding":"hex"},"salt":{"value":"c2FsdA","encoding":"base64"},"portable":true}`)
+	a0, err := iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{"value": "c2FsdA", "encoding": "base64"}, a0.Payload["salt"])
+
+	p.Salt.Position = cmf.SaltSuffix
+	a0, err = iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.Equal(t, "suffix", a0.Payload["salt"].(map[string]any)["position"])
+}
+
+func TestToAuth0ScryptRejectsInvalidParams(t *testing.T) {
+	const tmpl = `{"algorithm":"scrypt","hash":{"value":"aGVsbG8","encoding":%q},"params":{"cost":%d,"keylen":32},"portable":true}`
+	for name, raw := range map[string]string{
+		"utf8 encoding":  fmt.Sprintf(tmpl, "utf8", 16384),
+		"cost of 1":      fmt.Sprintf(tmpl, "base64", 1),
+		"cost of 0":      fmt.Sprintf(tmpl, "base64", 0),
+		"not power of 2": fmt.Sprintf(tmpl, "base64", 1000),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := iamhash.ToAuth0(decodePassword(t, raw), false)
+			require.Error(t, err)
+		})
+	}
+	_, err := iamhash.ToAuth0(decodePassword(t, fmt.Sprintf(tmpl, "hex", 2)), false)
+	require.NoError(t, err)
+}
+
+func TestToAuth0PBKDF2ReencodesAsUnpaddedBase64(t *testing.T) {
+	// Padded base64 salt and a hex hash both become unpadded base64.
+	p := decodePassword(t, `{"algorithm":"pbkdf2","hash":{"value":"68656c6c6f","encoding":"hex"},"salt":{"value":"c2FsdA==","encoding":"base64"},"params":{"digest":"sha256","iterations":10000,"keylen":5},"portable":true}`)
+	a0, err := iamhash.ToAuth0(p, false)
+	require.NoError(t, err)
+	require.Equal(t, "$pbkdf2-sha256$i=10000,l=5$c2FsdA$aGVsbG8", a0.Payload["hash"].(map[string]any)["value"])
+}
+
+func TestToAuth0PBKDF2RejectsBadInput(t *testing.T) {
+	for name, raw := range map[string]string{
+		"missing digest":     `{"algorithm":"pbkdf2","hash":{"value":"aGVsbG8","encoding":"base64"},"salt":{"value":"c2FsdA","encoding":"base64"},"portable":true}`,
+		"unsupported digest": `{"algorithm":"pbkdf2","hash":{"value":"aGVsbG8","encoding":"base64"},"salt":{"value":"c2FsdA","encoding":"base64"},"params":{"digest":"blake2"},"portable":true}`,
+		"salt not base64":    `{"algorithm":"pbkdf2","hash":{"value":"aGVsbG8","encoding":"base64"},"salt":{"value":"zz!","encoding":"base64"},"params":{"digest":"sha1"},"portable":true}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := iamhash.ToAuth0(decodePassword(t, raw), false)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestToAuth0LDAPSchemes(t *testing.T) {
+	ok := []string{"{SSHA}5en6G6MezRroT3XKqkdPOmY/BfQ=", "{ssha384}abc", "{SHA}abc", "{MD5}abc", "{SMD5}abc", "{SHA512}abc"}
+	for _, v := range ok {
+		p := cmf.Password{Algorithm: cmf.AlgLDAP, Hash: cmf.HashValue{Value: v, Encoding: cmf.EncodingUTF8}, Portable: true}
+		_, err := iamhash.ToAuth0(p, false)
+		require.NoError(t, err, v)
+	}
+	bad := []string{"{CRYPT}abc", "{crypt}abc", "{PBKDF2}abc", "{SHA512-CRYPT}abc", "abc"}
+	for _, v := range bad {
+		p := cmf.Password{Algorithm: cmf.AlgLDAP, Hash: cmf.HashValue{Value: v, Encoding: cmf.EncodingUTF8}, Portable: true}
+		_, err := iamhash.ToAuth0(p, false)
+		require.Error(t, err, v)
+	}
 }

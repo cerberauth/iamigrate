@@ -166,12 +166,13 @@ checked 200 users against auth0: 0 problem(s)
 `validate` checks every user against what Auth0 can import:
 
 - **Password algorithms:** all eleven `custom_password_hash` algorithms are supported: `bcrypt`, `scrypt`, `pbkdf2`, `argon2`, `md4`, `md5`, `sha1`, `sha256`, `sha512`, `hmac`, `ldap`. Any other algorithm is reported as a problem.
-- **MFA:** a portable factor Auth0 can't import is reported. For example, `push` enrollments fail with `unsupported MFA type "push"`.
+- **MFA:** a portable factor Auth0 can't import is reported. For example, `push` enrollments fail with `unsupported MFA type "push"`. A TOTP secret that isn't unpadded Base32, a phone or email factor value in the wrong format, or more than 10 importable factors are reported too.
+- **`app_metadata`:** a top-level key Auth0 reserves, such as `email` or `blocked`, is reported.
 
 Factors marked non-portable in CMF (`webauthn`, `recovery_codes`) are not validation errors. By definition they can't move to any provider, so the import skips them and lists the affected users in the report (see [Step 7](#7-handle-users-that-need-follow-up)).
 
 <Aside type="caution">
-  `validate` checks algorithms and factor types, not value formats. Auth0 requires SMS factor phone numbers to be `+` followed by up to 15 digits (for example `+12125550001`), and TOTP secrets to be unpadded Base32. iamigrate passes these values through unchanged, so normalize them in your export. Otherwise Auth0 rejects the user with `MFA_FACTORS_FAILED`.
+  Auth0 requires SMS factor phone numbers to be `+` followed by up to 15 digits (for example `+12125550001`), and TOTP secrets to be unpadded Base32. iamigrate passes these values through unchanged, so normalize them in your export. `validate` reports values that don't match. Otherwise Auth0 rejects the user with `MFA_FACTORS_FAILED`.
 </Aside>
 
 ### Check your source database
@@ -188,12 +189,12 @@ You don't configure anything in this step. It explains what ends up in Auth0, wh
 | --- | --- | --- |
 | `bcrypt` (`$2a$`/`$2b$`, cost 10) | `password_hash` | Only without `--upsert`. `password_hash` can be set once and never updated. |
 | `bcrypt` (any other cost, or `$2y$`) | `custom_password_hash` (`bcrypt`) | |
-| `scrypt` | `custom_password_hash` (`scrypt`) | Requires `params.keylen` and a power-of-two `params.cost` |
-| `pbkdf2` | `custom_password_hash` (`pbkdf2`) | Re-encoded as a PHC string. Requires a salt. |
+| `scrypt` | `custom_password_hash` (`scrypt`) | Requires `hex` or `base64` encoding, a positive `params.keylen`, and a power-of-two `params.cost` greater than 1 |
+| `pbkdf2` | `custom_password_hash` (`pbkdf2`) | Re-encoded as a PHC string with an unpadded base64 salt and hash. Requires a salt and a `params.digest` that Auth0 supports. |
 | `argon2` | `custom_password_hash` (`argon2`) | Requires the full PHC string (`$argon2id$v=19$...`) |
 | `md4`, `md5`, `sha1`, `sha256`, `sha512` | `custom_password_hash` | Hash (and salt) must be `hex` or `base64` encoded. The salt position is preserved. |
 | `hmac` | `custom_password_hash` (`hmac`) | Requires `hash.digest` and the HMAC `key` |
-| `ldap` | `custom_password_hash` (`ldap`) | `{CRYPT}` values are not supported by Auth0 |
+| `ldap` | `custom_password_hash` (`ldap`) | Only the `md5`, `smd5`, `sha*` and `ssha*` schemes. `{CRYPT}` and other schemes are not supported by Auth0. |
 | Any hash marked `portable: false` | none | The user is imported without a password and listed under `requires_password_reset` |
 
 A user whose hash is missing a required parameter isn't sent to Auth0. It is reported as `TRANSLATION_ERROR` in `failed`.
@@ -203,8 +204,8 @@ A user whose hash is missing a required parameter isn't sent to Auth0. It is rep
 | CMF factor | Auth0 result |
 | --- | --- |
 | `totp` | Imported as `{"totp": {"secret": ...}}`. The user keeps their existing authenticator app. |
-| `sms` | Imported as a verified `phone` factor |
-| `email` | Imported as a verified `email` factor |
+| `sms` | Imported as a `phone` factor |
+| `email` | Imported as an `email` factor |
 | `webauthn`, `push` | Not imported. The user is listed under `requires_reenrollment`. |
 | `recovery_codes` | Not imported. The user is listed under `requires_recovery_code_regen`. |
 

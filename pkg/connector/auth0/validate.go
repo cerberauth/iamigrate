@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/mail"
 	"regexp"
+	"slices"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -27,6 +28,25 @@ var usernameCharPattern = regexp.MustCompile("^[a-zA-Z0-9_+\\-.!#$'^`~@]+$")
 // phonePattern matches E.164: a leading +, then 2-15 digits, the first
 // non-zero.
 var phonePattern = regexp.MustCompile(`^\+[1-9]\d{1,14}$`)
+
+// totpSecretPattern and mfaPhonePattern are the formats Auth0's mfa_factors
+// schema requires: unpadded Base32 for a TOTP secret, and + followed by up
+// to 15 digits for a phone factor.
+var (
+	totpSecretPattern = regexp.MustCompile(`^[A-Z2-7]+$`)
+	mfaPhonePattern   = regexp.MustCompile(`^\+[0-9]{1,15}$`)
+)
+
+// maxMFAFactors is the most mfa_factors entries Auth0 takes for a user.
+const maxMFAFactors = 10
+
+// reservedAppMetadataKeys are the keys Auth0 rejects at the top level of
+// app_metadata.
+var reservedAppMetadataKeys = []string{
+	"__tenant", "_id", "blocked", "clientID", "created_at", "email_verified", keyEmail,
+	"globalClientID", "global_client_id", "identities", "lastIP", "lastLogin", "loginsCount",
+	"metadata", "multifactor_last_modified", "multifactor", "updated_at", "user_id",
+}
 
 // maxUserIDLen is Auth0's limit on the user_id field, which bulk import
 // sets from a CMF user's source_id without its auth0| prefix (see
@@ -102,7 +122,7 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		})
 	}
 	for _, e := range u.Emails {
-		if _, err := mail.ParseAddress(e.Value); err != nil {
+		if !validEmail(e.Value) {
 			problems = append(problems, connector.Problem{
 				SourceID: u.SourceID, Field: "emails", Rule: "invalid email format", Value: e.Value,
 			})
@@ -150,6 +170,16 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		})
 	}
 
+	for k := range u.AppMetadata {
+		if slices.Contains(reservedAppMetadataKeys, k) {
+			problems = append(problems, connector.Problem{
+				SourceID: u.SourceID, Field: keyAppMetadata,
+				Rule: "key is reserved by Auth0", Value: k,
+			})
+		}
+	}
+	problems = append(problems, mfaFactorProblems(u)...)
+
 	if p := metadataSizeProblem(u.SourceID, keyAppMetadata, u.AppMetadata); p != nil {
 		problems = append(problems, *p)
 	}
@@ -157,6 +187,51 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		problems = append(problems, *p)
 	}
 
+	return problems
+}
+
+// validEmail reports whether v is a bare address, as Auth0's email format
+// requires, not one with a display name such as "Ann <ann@example.com>".
+func validEmail(v string) bool {
+	a, err := mail.ParseAddress(v)
+	return err == nil && a.Address == v
+}
+
+// mfaFactorProblems checks the factors buildImportUser would send as
+// mfa_factors against the formats and count Auth0's schema allows.
+func mfaFactorProblems(u cmf.User) []connector.Problem {
+	var problems []connector.Problem
+	bad := func(f cmf.MFAFactor, rule string) {
+		problems = append(problems, connector.Problem{
+			SourceID: u.SourceID, Field: "mfa_factors." + string(f.Type), Rule: rule, Value: f.Value,
+		})
+	}
+	n := 0
+	for _, f := range u.MFAFactors {
+		switch f.Type {
+		case cmf.MFATOTP:
+			if !totpSecretPattern.MatchString(f.Value) {
+				bad(f, "not an unpadded Base32 secret")
+			}
+		case cmf.MFASMS:
+			if !mfaPhonePattern.MatchString(f.Value) {
+				bad(f, "not + followed by up to 15 digits")
+			}
+		case cmf.MFAEmail:
+			if !validEmail(f.Value) {
+				bad(f, "invalid email format")
+			}
+		default:
+			continue
+		}
+		n++
+	}
+	if n > maxMFAFactors {
+		problems = append(problems, connector.Problem{
+			SourceID: u.SourceID, Field: "mfa_factors",
+			Rule: fmt.Sprintf("at most %d factors can be imported", maxMFAFactors), Value: fmt.Sprintf("%d factors", n),
+		})
+	}
 	return problems
 }
 
