@@ -35,6 +35,7 @@ const (
 	VerifyLookup     = "verify.lookup"
 	VerifyCompare    = "verify.compare"
 	IdentityPrimary  = "identity.primary"
+	MetadataPlace    = "metadata.place"
 )
 
 // Built-in alternatives of identity.primary: which kind of identifier is
@@ -71,13 +72,13 @@ var configurable = map[string][]string{
 	VerifyLookup:     {LookupIdentifier, LookupTargetID},
 	VerifyCompare:    nil,
 	IdentityPrimary:  {PrimaryEmailFirst, PrimaryUsernameFirst, PrimaryPhoneFirst},
+	MetadataPlace:    nil,
 }
 
 // planned are strategy points designed but not built yet, so naming one
 // says so rather than that it doesn't exist.
 var planned = map[string]string{
 	"import.conflict": "per-user conflict decisions aren't supported yet: use the conflict section's on_duplicate",
-	"metadata.place":  "a handler isn't supported yet: route keys with the metadata section",
 }
 
 // Check checks m's `strategies`, `metadata` and `conflict` sections

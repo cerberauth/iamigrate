@@ -129,7 +129,6 @@ func TestValidator(t *testing.T) {
 func TestCheckExplainsPlannedStrategies(t *testing.T) {
 	for name, want := range map[string]string{
 		"import.conflict": "use the conflict section's on_duplicate",
-		"metadata.place":  "route keys with the metadata section",
 		"map.field":       "see the ids and transforms sections",
 	} {
 		err := strategy.Check(mapping.Mapping{Strategies: map[string]mapping.StrategyRef{name: {Handler: "h"}}})

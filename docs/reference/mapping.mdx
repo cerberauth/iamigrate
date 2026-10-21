@@ -98,6 +98,8 @@ metadata:
 
 Use it for a key that would collide with something the connector sets: the Kratos connector copies `user_metadata` into the identity's traits, so a `user_metadata.email` would otherwise overwrite the user's email trait.
 
+The routes are the same for every user. To place keys differently per user, delegate to a handler with [`metadata.place`](../hooks/strategies/#metadataplace): the keys it places are taken before the routes, which then apply to the rest.
+
 ## `conflict`
 
 What an import does with a user the target already has:
@@ -110,7 +112,7 @@ What an import does with a user the target already has:
 
 ## `strategies`
 
-The strategies handed to handlers, by name, and the built-in alternatives of `verify.lookup` and `identity.primary` (`email_first`, `username_first`, `phone_first`). See [Strategies](../hooks/strategies/) for each: `export.record`, `id.source`, `hash.detect`, `export.user`, `validate.user`, `validate.dedup_key`, `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, `import.payload`, `org.resolve`, `role.resolve`, `verify.lookup`, `verify.compare`.
+The strategies handed to handlers, by name, and the built-in alternatives of `verify.lookup` and `identity.primary` (`email_first`, `username_first`, `phone_first`). See [Strategies](../hooks/strategies/) for each: `export.record`, `id.source`, `hash.detect`, `export.user`, `validate.user`, `validate.dedup_key`, `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, `metadata.place`, `import.payload`, `org.resolve`, `role.resolve`, `verify.lookup`, `verify.compare`.
 
 ```yaml
 strategies:
