@@ -15,10 +15,17 @@ import (
 )
 
 // importStrategies are the strategies an Applier runs.
-var importStrategies = []string{strategy.ImportUser, strategy.IdentityPrimary, strategy.HashTranslate, strategy.MFATranslate, strategy.ImportPayload}
+var importStrategies = []string{strategy.ImportUser, strategy.IdentityPrimary, strategy.HashTranslate, strategy.MFATranslate, strategy.MetadataPlace, strategy.ImportPayload}
 
 // routeDrop is the metadata route destination that leaves a key out.
 const routeDrop = "drop"
+
+// metadataApp and metadataUser name the two metadata maps of a user a route or
+// a placement reads from.
+const (
+	metadataApp  = "app_metadata"
+	metadataUser = "user_metadata"
+)
 
 // keySourceID is the item data key holding a user's source ID.
 const keySourceID = "source_id"
@@ -26,9 +33,10 @@ const keySourceID = "source_id"
 // SkippedCode is the ImportError code of a user import.user skipped.
 const SkippedCode = reconcile.SkippedCode
 
-// prepare runs, over users, import.user, identity.primary, hash.translate, mfa.translate, the
-// metadata routes and the target fields, in that order, and returns the
-// users left with their fields, and those import.user skipped.
+// prepare runs, over users, import.user, identity.primary, hash.translate,
+// mfa.translate, metadata.place, the metadata routes and the target fields,
+// in that order, and returns the users left with their fields, and those
+// import.user skipped.
 func (a *Applier) prepare(ctx context.Context, users []cmf.User) ([]cmf.User, [][]Field, []connector.ImportError, error) {
 	users, skipped, err := a.importUser(ctx, users)
 	if err != nil {
@@ -43,14 +51,19 @@ func (a *Applier) prepare(ctx context.Context, users []cmf.User) ([]cmf.User, []
 	if err := a.mfaTranslate(ctx, users); err != nil {
 		return nil, nil, nil, err
 	}
+	placed, err := a.place(ctx, users)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	routed := a.route(users)
 	fields, err := a.Resolve(ctx, users)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	for i := range fields {
-		// Target fields come after the routes, so they win on a shared path.
-		fields[i] = append(routed[i], fields[i]...)
+		// Placed keys come first, then the routes, then the target fields,
+		// so each wins on a shared path over those before it.
+		fields[i] = append(append(placed[i], routed[i]...), fields[i]...)
 	}
 	return users, fields, skipped, nil
 }
@@ -171,7 +184,7 @@ func (a *Applier) route(users []cmf.User) [][]Field {
 		u.AppMetadata, u.UserMetadata = maps.Clone(u.AppMetadata), maps.Clone(u.UserMetadata)
 		for _, r := range a.routes {
 			from := u.UserMetadata
-			if r.From == "app_metadata" {
+			if r.From == metadataApp {
 				from = u.AppMetadata
 			}
 			v, ok := from[r.Key]

@@ -1,8 +1,8 @@
 // Package importprep prepares the CMF users an import reads, for the
 // target connector to build its payloads from: the import-side strategies
 // (import.user, identity.primary, hash.translate, mfa.translate) decide what is imported of
-// each user, the mapping's metadata routes move metadata keys away from
-// where the connector puts them, and its target_fields set fields of the
+// each user, metadata.place and the mapping's metadata routes move metadata
+// keys away from where the connector puts them, and its target_fields set fields of the
 // target's user from CMF fields, through the same transforms as the export
 // side (see package transform). import.payload, last, has the final say on
 // the payload the connector built.
@@ -42,6 +42,9 @@ type Applier struct {
 	routes []mapping.MetadataRoute
 	set    *strategy.Set
 	batch  int
+	// check is the target connector's word on whether it can set a path,
+	// for the destinations metadata.place's handler answers.
+	check func(path string) error
 	// identifiers are the kinds of identifier the target can make a user's
 	// primary one, for identity.primary.
 	identifiers []cmf.Identifier
@@ -89,7 +92,7 @@ func New(m mapping.Mapping, check func(path string) error, d *hooks.Dispatcher, 
 	if err != nil {
 		return nil, err
 	}
-	a := &Applier{set: set, routes: m.Metadata, batch: defaultBatch}
+	a := &Applier{set: set, routes: m.Metadata, batch: defaultBatch, check: check}
 	for _, o := range opts {
 		o(a)
 	}
@@ -136,7 +139,7 @@ func Check(m mapping.Mapping, target connector.TargetConnector) error {
 	if c := m.Conflict; c != nil && c.OnDuplicate == mapping.OnDuplicateUpsert && !target.Capabilities().SupportsUpsert {
 		return fmt.Errorf("mapping: conflict: %s can't update an existing user: on_duplicate can't be upsert", target.Name())
 	}
-	if len(m.TargetFields) == 0 && len(m.Metadata) == 0 {
+	if len(m.TargetFields) == 0 && len(m.Metadata) == 0 && !strategyConfigured(m, strategy.MetadataPlace) {
 		return nil
 	}
 	tc, ok := target.(connector.TargetFieldChecker)
@@ -152,6 +155,11 @@ func Check(m mapping.Mapping, target connector.TargetConnector) error {
 		}
 	}
 	return checkRoutes(m, tc)
+}
+
+func strategyConfigured(m mapping.Mapping, name string) bool {
+	_, ok := m.Strategies[name]
+	return ok
 }
 
 func checkRoutes(m mapping.Mapping, tc connector.TargetFieldChecker) error {

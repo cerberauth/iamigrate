@@ -116,7 +116,7 @@ More keys two users can't share, on top of the emails, usernames and phones vali
 
 ## Import
 
-The import-side strategies run on a batch of users before the target connector builds its payloads, in this order: `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, then the mapping's `metadata` routes and `target_fields`. `import.payload` runs last, on the payloads. They are asked again whenever the import runs again, so they must give the same answer every time (see [Hooks](../)).
+The import-side strategies run on a batch of users before the target connector builds its payloads, in this order: `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, `metadata.place`, then the mapping's `metadata` routes and `target_fields`. `import.payload` runs last, on the payloads. They are asked again whenever the import runs again, so they must give the same answer every time (see [Hooks](../)).
 
 ### `import.user`
 
@@ -152,6 +152,17 @@ Verify looks users up as the import saw them, replaying a built-in's choice and 
 
 - Item: the user.
 - Result: `{"identifier": "email"}` (or `"username"`, `"phone"`) to make that kind primary, `{"value": "ada@example.com"}` to name the identifier itself (which also picks the contact among several), or `{}` for no opinion: the connector picks the kind, with the contacts flagged `primary` first. Naming a kind the user lacks, a value that is none of their identifiers, or a kind the target doesn't accept fails the import, as does answering both `identifier` and `value`.
+
+### `metadata.place`
+
+Where each user's metadata keys go on the target, when it isn't the same for every user. The mapping's [`metadata`](../../mapping/#metadata) routes are static; this asks a handler, user by user, and the routes then apply to the keys it didn't place. Only users with `app_metadata` or `user_metadata` are sent.
+
+- Item: the user (their `app_metadata` and `user_metadata` among the rest, never their credentials).
+- Result: a list of placements, `[{"key": "plan", "from": "app_metadata", "destination": "metadata_admin.plan"}]`. `from` is `app_metadata` or `user_metadata`, and `destination` a target field path, or `drop` to leave the key out. `[]` places nothing.
+
+A placed key is taken out of the user's metadata, so the connector doesn't also put it where it does by default. When a placed key and a route (or a `target_fields` entry) set the same destination, the later one wins: placements, then routes, then `target_fields`.
+
+Every destination is checked as a route's is, by the target connector (for Kratos, `traits.email`, `traits.username` and `traits.phone` are refused). `validate` can't check a handler's answers, which depend on the user, so a destination the target can't set, a key the user doesn't have, or a key placed twice fails the import step. Unlike the static routes, a bad answer is found when the user is reached, not before the import starts.
 
 ### `hash.translate`
 
