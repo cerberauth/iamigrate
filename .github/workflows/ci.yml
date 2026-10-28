@@ -26,3 +26,35 @@ jobs:
       - uses: cerberauth/ci/actions/go-build-test@main
         with:
           codecov-token: ${{ secrets.CODECOV_TOKEN }}
+
+  sqlserver:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: Iamigrate-Passw0rd
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Iamigrate-Passw0rd -Q 'SELECT 1' -b"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test the SQL Server driver
+        env:
+          SQLSERVER_DSN: sqlserver://sa:Iamigrate-Passw0rd@127.0.0.1:1433?database=master&encrypt=true&TrustServerCertificate=true
+        run: go test ./pkg/connector/sql/... -run 'TestLive|TestUsesEntra' -v

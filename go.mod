@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/brianvoe/gofakeit/v7 v7.17.1
 	github.com/cerberauth/x v0.0.0-20260901215913-9d7750841dbb
+	github.com/microsoft/go-mssqldb v1.9.2
 	github.com/pquerna/otp v1.5.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
@@ -14,6 +15,7 @@ require (
 	golang.org/x/term v0.46.0
 	gopkg.in/dnaeon/go-vcr.v3 v3.2.0
 	gopkg.in/yaml.v3 v3.0.1
+	modernc.org/sqlite v1.38.2
 )
 
 require (

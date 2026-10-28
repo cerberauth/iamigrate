@@ -1,0 +1,119 @@
+---
+title: Export users from a SQL database
+description: Export users straight from an application's own database into CMF with iamigrate, with a query and a mapping, on SQLite or Microsoft SQL Server.
+---
+
+import { Aside } from '@/components/docs';
+
+When your users live in your application's own tables, you don't need to dump them to CSV first. `iamigrate export --source sql` runs a query on the database and turns each row into a record for the same [mapping](../../../reference/mapping/) a flat file goes through: the query's column names are the source fields, so transforms, hash detection and [`prepare`](../../../reference/cli/prepare/)'s checks apply unchanged.
+
+## How it works
+
+```sh
+export IAMIGRATE_SQL_DSN='...'
+
+iamigrate export --source sql --driver sqlite \
+  --query @users.sql --mapping mapping.yaml --out ./export/
+```
+
+- **`--driver`** picks the engine. It is required: none is assumed. The engines are `sqlite` and `sqlserver`.
+- **`--dsn`** is the engine's own connection string. Prefer `$IAMIGRATE_SQL_DSN`: a flag shows in the process list, and the DSN usually holds a password. It is never printed, not even in an error, and a job doesn't store it.
+- **`--query`** is the SQL, or `@file.sql` to read it from a file. It returns one row per user.
+- **`--mapping`** renames the columns into the ones iamigrate reads, as for a [flat file](../../../reference/cli/prepare/). A query that already names its columns `source_id`, `email`, `password`... needs none.
+
+Rows are read as they arrive and handed on in batches of 1,000, so memory doesn't grow with the number of users. The query runs in a transaction that is rolled back at the end: nothing is written.
+
+### Binary columns
+
+A `varbinary`, `BLOB` or `bytea` column is read as bytes. If the bytes are printable ASCII, they are kept as text: that is a hash an application stored as bytes, like a bcrypt string. Anything else is a raw digest or salt, and is written in hex. Tell the mapping so with a constant, as you would for a flat file:
+
+```yaml
+fields:
+  - { source: id, cmf: source_id }
+  - { source: pw_hash, cmf: password }
+  - { source: pw_salt, cmf: password_salt }
+  - { cmf: password_algorithm, default: sha256 }
+  - { cmf: password_encoding, default: hex }
+  - { cmf: password_salt_encoding, default: hex }
+  - { cmf: password_salt_position, default: suffix }
+```
+
+<Aside type="caution">
+  `password_encoding: hex` applies to every row. If the same column also holds text hashes such as bcrypt, select only the digest rows, or export them in two runs.
+</Aside>
+
+## SQL Server
+
+`--driver sqlserver` reads from Microsoft SQL Server and Azure SQL, through [go-mssqldb](https://github.com/microsoft/go-mssqldb). The DSN is the driver's standard one, in either form:
+
+```sh
+# a URL
+export IAMIGRATE_SQL_DSN='sqlserver://reader:S3cret@db.internal:1433?database=app'
+
+# or key=value pairs
+export IAMIGRATE_SQL_DSN='server=db.internal;user id=reader;password=S3cret;database=app'
+```
+
+### An example query
+
+```sql
+-- users.sql
+SELECT
+  CAST(u.UserId AS varchar(36)) AS id,
+  u.Email                       AS email,
+  u.FirstName                   AS given_name,
+  u.LastName                    AS family_name,
+  u.IsDisabled                  AS blocked,
+  u.PasswordHash                AS pw_hash,   -- varbinary(32)
+  u.PasswordSalt                AS pw_salt,   -- varbinary(16)
+  u.Plan                        AS [app_metadata.plan]
+FROM dbo.Users AS u
+WHERE u.DeletedAt IS NULL
+```
+
+`email`, `given_name`, `family_name` and `blocked` already use the names iamigrate reads, and the column named `app_metadata.plan` lands in the user's `app_metadata`. The mapping above covers the rest (`id`, `pw_hash` and `pw_salt`), with `{ source: id, cmf: source_id }` added. A `uniqueidentifier` column comes out as the usual lower-case UUID, so you can select it as it is.
+
+### TLS
+
+TLS is set in the DSN and nowhere else: `encrypt`, `TrustServerCertificate`, `certificate` (a CA file) and `hostNameInCertificate`.
+
+```sh
+export IAMIGRATE_SQL_DSN='sqlserver://reader:S3cret@db.internal?database=app&encrypt=true&certificate=/etc/ssl/corp-ca.pem'
+```
+
+A server whose certificate isn't trusted is refused. Don't set `TrustServerCertificate=true` outside a rehearsal.
+
+### Microsoft Entra authentication
+
+A DSN with a `fedauth` parameter signs in with Microsoft Entra instead of a SQL login, and needs no password in it for the methods that have none:
+
+```sh
+# the environment's credential (az login, a managed identity, environment variables...)
+export IAMIGRATE_SQL_DSN='sqlserver://myserver.database.windows.net?database=app&fedauth=ActiveDirectoryDefault'
+
+# a service principal: the user id is <client-id>@<tenant-id>, the password its secret
+export IAMIGRATE_SQL_DSN='server=myserver.database.windows.net;database=app;fedauth=ActiveDirectoryServicePrincipal;user id=<client-id>@<tenant-id>;password=<secret>'
+```
+
+The other methods the driver accepts work too, among them `ActiveDirectoryManagedIdentity`, `ActiveDirectoryAzCli` and `ActiveDirectoryInteractive`; see the [driver's documentation](https://github.com/microsoft/go-mssqldb#azure-active-directory-authentication) for each one's parameters.
+
+### A consistent export
+
+If the database has snapshot isolation on (`ALLOW_SNAPSHOT_ISOLATION`, which Azure SQL has by default), the export runs under it: it sees the data as it was when the query started, whatever the application writes meanwhile, and without blocking those writes. Otherwise it runs at the database's default isolation, and says so. To turn it on:
+
+```sql
+ALTER DATABASE app SET ALLOW_SNAPSHOT_ISOLATION ON;
+```
+
+<Aside type="caution">
+  SQL Server has no read-only transaction, so unlike SQLite the query isn't stopped from writing. Use a login that can only read, such as one in `db_datareader`.
+</Aside>
+
+## SQLite
+
+`--driver sqlite` takes a file path, or a `file:` URI, as the DSN. The connection refuses writes. SQLite is also what iamigrate's own tests run against.
+
+```sh
+iamigrate export --source sql --driver sqlite --dsn ./app.db \
+  --query "SELECT id AS source_id, email, password FROM users" --out ./export/
+```

@@ -15,6 +15,9 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	sqlsrc "github.com/cerberauth/iamigrate/pkg/connector/sql"
+	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlite"    // registers --driver sqlite
+	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlserver" // registers --driver sqlserver
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
@@ -29,6 +32,9 @@ func newExportCmd() *cobra.Command {
 		mapPath  string
 		outDir   string
 		adminURL string
+		sqlDrv   string
+		sqlDSN   string
+		sqlQuery string
 		noGzip   bool
 		fbAuth   firebaseFlags
 		fbHash   firebaseHashFlags
@@ -40,8 +46,8 @@ func newExportCmd() *cobra.Command {
 		Use:   "export",
 		Short: "Export identities from a source into CMF",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name {
-				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\"; use `iamigrate testdata generate` for the fixture source)", source)
+			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name && source != sqlsrc.Name {
+				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"sql\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\"; use `iamigrate testdata generate` for the fixture source)", source)
 			}
 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
 				return fmt.Errorf("--in is required for --source %s", source)
@@ -49,11 +55,21 @@ func newExportCmd() *cobra.Command {
 
 			var fileMapping mapping.Mapping
 			if mapPath != "" {
-				if source != flatfile.Name {
-					return fmt.Errorf("--mapping only applies to --source %s", flatfile.Name)
+				if source != flatfile.Name && source != sqlsrc.Name {
+					return fmt.Errorf("--mapping only applies to --source %s and --source %s", flatfile.Name, sqlsrc.Name)
 				}
 				var err error
 				if fileMapping, err = mapping.Load(mapPath); err != nil {
+					return err
+				}
+			}
+
+			// A SQL export's settings are checked, and its query read, before
+			// the output file is created, like the other sources'.
+			var sqlOpts sqlsrc.ExportOptions
+			if source == sqlsrc.Name {
+				var err error
+				if sqlOpts, err = sqlExportOptions(sqlDrv, sqlDSN, sqlQuery, fileMapping); err != nil {
 					return err
 				}
 			}
@@ -135,6 +151,9 @@ func newExportCmd() *cobra.Command {
 			case auth0.Name:
 				bar.Stage("exporting users", 0)
 				manifest, err = auth0.New(a0Client).Export(ctx, w, a0Export)
+			case sqlsrc.Name:
+				bar.Stage("exporting users", 0)
+				manifest, err = sqlsrc.New().Export(ctx, w, sqlOpts)
 			default:
 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format), Mapping: fileMapping}
 				bar.Stage("exporting users", 0)
@@ -186,13 +205,16 @@ func newExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0")
+	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|sql|kratos|keycloak|firebase|auth0")
 	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
-	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile source)")
+	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile and sql sources)")
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
+	cmd.Flags().StringVar(&sqlDrv, "driver", "", "database engine: "+strings.Join(sqlsrc.Drivers(), "|")+" (required, sql source)")
+	cmd.Flags().StringVar(&sqlDSN, "dsn", "", "the engine's connection string (or $"+envSQLDSN+"; prefer the variable, a flag shows in the process list; sql source)")
+	cmd.Flags().StringVar(&sqlQuery, "query", "", "SQL returning one row per user, or @file.sql to read it from a file (sql source)")
 	fbAuth.register(cmd)
 	fbHash.register(cmd)
 	a0Auth.register(cmd)

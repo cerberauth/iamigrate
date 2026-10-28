@@ -3,9 +3,9 @@ title: export
 description: Export identities from a source into CMF.
 ---
 
-Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Five sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable; and `auth0`, which runs a user export job on an Auth0 tenant and exports every user, with the attributes you choose, but **without passwords**, since Auth0 never returns password hashes through its API. A file with other column names, or nested JSON, needs a `--mapping` (or a [`prepare`](../prepare/) step first). Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
+Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Six sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `sql`, a query on an application's own database (SQLite or Microsoft SQL Server), whose rows go through the same mapping; `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable; and `auth0`, which runs a user export job on an Auth0 tenant and exports every user, with the attributes you choose, but **without passwords**, since Auth0 never returns password hashes through its API. A file with other column names, or nested JSON, needs a `--mapping` (or a [`prepare`](../prepare/) step first). Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
 
-For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/). For Auth0, including how to get the password hashes from Auth0 support, see [Export users from Auth0](../../../guides/export/auth0/).
+For a SQL database, including SQL Server's TLS and Microsoft Entra settings, see [Export users from a SQL database](../../../guides/export/sql/). For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/). For Auth0, including how to get the password hashes from Auth0 support, see [Export users from Auth0](../../../guides/export/auth0/).
 
 ## Usage
 
@@ -14,6 +14,10 @@ iamigrate export --source flatfile --in users.csv --format csv --out ./export/
 
 # or, from a file with other column names, described by a mapping
 iamigrate export --source flatfile --in users.json --format json --mapping mapping.yaml --out ./export/
+
+# or, from an application's database
+IAMIGRATE_SQL_DSN='sqlserver://reader:...@db.internal?database=app' iamigrate export --source sql \
+  --driver sqlserver --query @users.sql --mapping mapping.yaml --out ./export/
 
 # or, from a running Kratos instance
 KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate export --source kratos --out ./export/
@@ -34,10 +38,13 @@ AUTH0_DOMAIN=acme.us.auth0.com AUTH0_TOKEN=... iamigrate export --source auth0 \
 
 | Flag | Description |
 | --- | --- |
-| `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
+| `--source` | Source connector name: `flatfile` \| `sql` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
 | `--in` | Input file path (flatfile source), or `kc.sh export` realm file or directory (keycloak source) |
 | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
-| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `id.source`, `hash.detect`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile source) |
+| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `id.source`, `hash.detect`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile and sql sources) |
+| `--driver` | Database engine: `sqlite` \| `sqlserver` (required, sql source) |
+| `--dsn` | The engine's connection string, or `$IAMIGRATE_SQL_DSN` (preferred: a flag shows in the process list). Never logged (sql source) |
+| `--query` | SQL returning one row per user, or `@file.sql` to read it from a file (sql source) |
 | `--out` | Output directory (default `./export/`) |
 | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
 | `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project; firebase source) |

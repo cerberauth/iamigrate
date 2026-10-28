@@ -1,0 +1,1407 @@
+diff -ruN orig/iamigrate-main/.docker/sqlserver/docker-compose.yml iamigrate-main/.docker/sqlserver/docker-compose.yml
+--- orig/iamigrate-main/.docker/sqlserver/docker-compose.yml	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/.docker/sqlserver/docker-compose.yml	2026-10-28 08:38:57.121578158 +0000
+@@ -0,0 +1,27 @@
++# Spins up a disposable SQL Server for the gated tests in
++# pkg/connector/sql/sqlserver/live_test.go. The tests create (and drop) their
++# own database, so none is created here.
++#
++# The server uses a self-signed certificate, which is what the TLS test relies
++# on: it checks the DSN's encrypt and TrustServerCertificate settings are
++# honoured.
++#
++# Usage:
++#   docker compose -f .docker/sqlserver/docker-compose.yml up --wait
++#   SQLSERVER_DSN='sqlserver://sa:Iamigrate-Passw0rd@127.0.0.1:1433?database=master&encrypt=true&TrustServerCertificate=true' \
++#     go test ./pkg/connector/sql/sqlserver/... -run TestLive
++#   docker compose -f .docker/sqlserver/docker-compose.yml down -v
++services:
++  sqlserver:
++    image: mcr.microsoft.com/mssql/server:2022-latest
++    container_name: iamigrate-sqlserver
++    environment:
++      - ACCEPT_EULA=Y
++      - MSSQL_SA_PASSWORD=Iamigrate-Passw0rd
++    ports:
++      - "127.0.0.1:1433:1433"
++    healthcheck:
++      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b"]
++      interval: 3s
++      timeout: 3s
++      retries: 40
+diff -ruN orig/iamigrate-main/.github/workflows/ci.yml iamigrate-main/.github/workflows/ci.yml
+--- orig/iamigrate-main/.github/workflows/ci.yml	2026-10-21 22:24:21.000000000 +0000
++++ iamigrate-main/.github/workflows/ci.yml	2026-10-28 08:38:57.135233479 +0000
+@@ -26,3 +26,35 @@
+       - uses: cerberauth/ci/actions/go-build-test@main
+         with:
+           codecov-token: ${{ secrets.CODECOV_TOKEN }}
++
++  sqlserver:
++    runs-on: ubuntu-latest
++
++    permissions:
++      contents: read
++
++    services:
++      sqlserver:
++        image: mcr.microsoft.com/mssql/server:2022-latest
++        env:
++          ACCEPT_EULA: "Y"
++          MSSQL_SA_PASSWORD: Iamigrate-Passw0rd
++        ports:
++          - 1433:1433
++        options: >-
++          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P Iamigrate-Passw0rd -Q 'SELECT 1' -b"
++          --health-interval 5s
++          --health-timeout 5s
++          --health-retries 30
++
++    steps:
++      - uses: actions/checkout@v7
++
++      - uses: actions/setup-go@v6
++        with:
++          go-version-file: go.mod
++
++      - name: Test the SQL Server driver
++        env:
++          SQLSERVER_DSN: sqlserver://sa:Iamigrate-Passw0rd@127.0.0.1:1433?database=master&encrypt=true&TrustServerCertificate=true
++        run: go test ./pkg/connector/sql/... -run 'TestLive|TestUsesEntra' -v
+diff -ruN orig/iamigrate-main/cmd/export.go iamigrate-main/cmd/export.go
+--- orig/iamigrate-main/cmd/export.go	2026-10-21 22:24:21.000000000 +0000
++++ iamigrate-main/cmd/export.go	2026-10-28 08:37:26.224378671 +0000
+@@ -15,6 +15,9 @@
+ 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
+ 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
+ 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
++	sqlsrc "github.com/cerberauth/iamigrate/pkg/connector/sql"
++	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlite"    // registers --driver sqlite
++	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlserver" // registers --driver sqlserver
+ 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
+ 	"github.com/cerberauth/iamigrate/pkg/lifecycle"
+ 	"github.com/cerberauth/iamigrate/pkg/mapping"
+@@ -29,6 +32,9 @@
+ 		mapPath  string
+ 		outDir   string
+ 		adminURL string
++		sqlDrv   string
++		sqlDSN   string
++		sqlQuery string
+ 		noGzip   bool
+ 		fbAuth   firebaseFlags
+ 		fbHash   firebaseHashFlags
+@@ -40,8 +46,8 @@
+ 		Use:   "export",
+ 		Short: "Export identities from a source into CMF",
+ 		RunE: func(cmd *cobra.Command, args []string) error {
+-			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name {
+-				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\"; use `iamigrate testdata generate` for the fixture source)", source)
++			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name && source != sqlsrc.Name {
++				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"sql\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\"; use `iamigrate testdata generate` for the fixture source)", source)
+ 			}
+ 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
+ 				return fmt.Errorf("--in is required for --source %s", source)
+@@ -49,14 +55,24 @@
+ 
+ 			var fileMapping mapping.Mapping
+ 			if mapPath != "" {
+-				if source != flatfile.Name {
+-					return fmt.Errorf("--mapping only applies to --source %s", flatfile.Name)
++				if source != flatfile.Name && source != sqlsrc.Name {
++					return fmt.Errorf("--mapping only applies to --source %s and --source %s", flatfile.Name, sqlsrc.Name)
+ 				}
+ 				var err error
+ 				if fileMapping, err = mapping.Load(mapPath); err != nil {
+ 					return err
+ 				}
+ 			}
++
++			// A SQL export's settings are checked, and its query read, before
++			// the output file is created, like the other sources'.
++			var sqlOpts sqlsrc.ExportOptions
++			if source == sqlsrc.Name {
++				var err error
++				if sqlOpts, err = sqlExportOptions(sqlDrv, sqlDSN, sqlQuery, fileMapping); err != nil {
++					return err
++				}
++			}
+ 			pass, err := exportPass(cmd.Context(), fileMapping)
+ 			if err != nil {
+ 				return err
+@@ -135,6 +151,9 @@
+ 			case auth0.Name:
+ 				bar.Stage("exporting users", 0)
+ 				manifest, err = auth0.New(a0Client).Export(ctx, w, a0Export)
++			case sqlsrc.Name:
++				bar.Stage("exporting users", 0)
++				manifest, err = sqlsrc.New().Export(ctx, w, sqlOpts)
+ 			default:
+ 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format), Mapping: fileMapping}
+ 				bar.Stage("exporting users", 0)
+@@ -186,13 +205,16 @@
+ 		},
+ 	}
+ 
+-	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0")
++	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|sql|kratos|keycloak|firebase|auth0")
+ 	_ = cmd.MarkFlagRequired("source")
+ 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
+ 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
+-	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile source)")
++	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile and sql sources)")
+ 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
+ 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
++	cmd.Flags().StringVar(&sqlDrv, "driver", "", "database engine: "+strings.Join(sqlsrc.Drivers(), "|")+" (required, sql source)")
++	cmd.Flags().StringVar(&sqlDSN, "dsn", "", "the engine's connection string (or $"+envSQLDSN+"; prefer the variable, a flag shows in the process list; sql source)")
++	cmd.Flags().StringVar(&sqlQuery, "query", "", "SQL returning one row per user, or @file.sql to read it from a file (sql source)")
+ 	fbAuth.register(cmd)
+ 	fbHash.register(cmd)
+ 	a0Auth.register(cmd)
+diff -ruN orig/iamigrate-main/cmd/sql.go iamigrate-main/cmd/sql.go
+--- orig/iamigrate-main/cmd/sql.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/cmd/sql.go	2026-10-28 08:37:39.812194065 +0000
+@@ -0,0 +1,48 @@
++package cmd
++
++import (
++	"fmt"
++	"os"
++	"slices"
++	"strings"
++
++	sqlsrc "github.com/cerberauth/iamigrate/pkg/connector/sql"
++	"github.com/cerberauth/iamigrate/pkg/mapping"
++)
++
++// envSQLDSN is where a SQL export reads the connection string from when
++// --dsn isn't given. It is what to prefer: a flag is visible in the process
++// list and the shell history, and the DSN usually holds a password.
++const envSQLDSN = "IAMIGRATE_SQL_DSN"
++
++// sqlExportOptions checks the settings of a SQL export and reads its query,
++// so that a mistake stops the command before anything is written or any
++// connection is made.
++func sqlExportOptions(driver, dsn, query string, m mapping.Mapping) (sqlsrc.ExportOptions, error) {
++	if driver == "" {
++		return sqlsrc.ExportOptions{}, fmt.Errorf("--driver is required for --source %s (one of %s)", sqlsrc.Name, strings.Join(sqlsrc.Drivers(), ", "))
++	}
++	if !slices.Contains(sqlsrc.Drivers(), driver) {
++		return sqlsrc.ExportOptions{}, fmt.Errorf("unknown --driver %q (one of %s)", driver, strings.Join(sqlsrc.Drivers(), ", "))
++	}
++	if dsn == "" {
++		dsn = os.Getenv(envSQLDSN)
++	}
++	if dsn == "" {
++		return sqlsrc.ExportOptions{}, fmt.Errorf("--dsn (or $%s) is required for --source %s", envSQLDSN, sqlsrc.Name)
++	}
++	if query == "" {
++		return sqlsrc.ExportOptions{}, fmt.Errorf("--query is required for --source %s", sqlsrc.Name)
++	}
++	if path, ok := strings.CutPrefix(query, "@"); ok {
++		b, err := os.ReadFile(path)
++		if err != nil {
++			return sqlsrc.ExportOptions{}, fmt.Errorf("reading --query file: %w", err)
++		}
++		query = string(b)
++	}
++	if strings.TrimSpace(query) == "" {
++		return sqlsrc.ExportOptions{}, fmt.Errorf("--query is empty")
++	}
++	return sqlsrc.ExportOptions{Driver: driver, DSN: dsn, Query: query, Mapping: m}, nil
++}
+diff -ruN orig/iamigrate-main/cmd/sql_test.go iamigrate-main/cmd/sql_test.go
+--- orig/iamigrate-main/cmd/sql_test.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/cmd/sql_test.go	2026-10-28 08:39:46.795174928 +0000
+@@ -0,0 +1,49 @@
++package cmd
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/cerberauth/iamigrate/pkg/mapping"
++	"github.com/stretchr/testify/require"
++)
++
++func TestSQLExportOptionsRequireADriver(t *testing.T) {
++	t.Setenv(envSQLDSN, "")
++	_, err := sqlExportOptions("", "dsn", "SELECT 1", mapping.Mapping{})
++	require.ErrorContains(t, err, "--driver is required")
++	require.ErrorContains(t, err, "sqlserver", "the engines there are are listed")
++
++	_, err = sqlExportOptions("oracle", "dsn", "SELECT 1", mapping.Mapping{})
++	require.ErrorContains(t, err, `unknown --driver "oracle"`)
++}
++
++func TestSQLExportOptionsReadTheDSNFromTheEnvironment(t *testing.T) {
++	t.Setenv(envSQLDSN, "from-env")
++	o, err := sqlExportOptions("sqlite", "", "SELECT 1", mapping.Mapping{})
++	require.NoError(t, err)
++	require.Equal(t, "from-env", o.DSN)
++
++	o, err = sqlExportOptions("sqlite", "from-flag", "SELECT 1", mapping.Mapping{})
++	require.NoError(t, err)
++	require.Equal(t, "from-flag", o.DSN, "the flag wins")
++
++	t.Setenv(envSQLDSN, "")
++	_, err = sqlExportOptions("sqlite", "", "SELECT 1", mapping.Mapping{})
++	require.ErrorContains(t, err, envSQLDSN)
++}
++
++func TestSQLExportOptionsReadTheQueryFromAFile(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "users.sql")
++	require.NoError(t, os.WriteFile(path, []byte("SELECT id AS source_id FROM users"), 0o600))
++	o, err := sqlExportOptions("sqlite", "dsn", "@"+path, mapping.Mapping{})
++	require.NoError(t, err)
++	require.Equal(t, "SELECT id AS source_id FROM users", o.Query)
++
++	_, err = sqlExportOptions("sqlite", "dsn", "@"+filepath.Join(t.TempDir(), "missing.sql"), mapping.Mapping{})
++	require.ErrorContains(t, err, "reading --query file")
++
++	_, err = sqlExportOptions("sqlite", "dsn", "", mapping.Mapping{})
++	require.ErrorContains(t, err, "--query is required")
++}
+diff -ruN orig/iamigrate-main/docs/guides/export/sql.mdx iamigrate-main/docs/guides/export/sql.mdx
+--- orig/iamigrate-main/docs/guides/export/sql.mdx	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/docs/guides/export/sql.mdx	2026-10-28 08:39:28.577980572 +0000
+@@ -0,0 +1,119 @@
++---
++title: Export users from a SQL database
++description: Export users straight from an application's own database into CMF with iamigrate, with a query and a mapping, on SQLite or Microsoft SQL Server.
++---
++
++import { Aside } from '@/components/docs';
++
++When your users live in your application's own tables, you don't need to dump them to CSV first. `iamigrate export --source sql` runs a query on the database and turns each row into a record for the same [mapping](../../../reference/mapping/) a flat file goes through: the query's column names are the source fields, so transforms, hash detection and [`prepare`](../../../reference/cli/prepare/)'s checks apply unchanged.
++
++## How it works
++
++```sh
++export IAMIGRATE_SQL_DSN='...'
++
++iamigrate export --source sql --driver sqlite \
++  --query @users.sql --mapping mapping.yaml --out ./export/
++```
++
++- **`--driver`** picks the engine. It is required: none is assumed. The engines are `sqlite` and `sqlserver`.
++- **`--dsn`** is the engine's own connection string. Prefer `$IAMIGRATE_SQL_DSN`: a flag shows in the process list, and the DSN usually holds a password. It is never printed, not even in an error, and a job doesn't store it.
++- **`--query`** is the SQL, or `@file.sql` to read it from a file. It returns one row per user.
++- **`--mapping`** renames the columns into the ones iamigrate reads, as for a [flat file](../../../reference/cli/prepare/). A query that already names its columns `source_id`, `email`, `password`... needs none.
++
++Rows are read as they arrive and handed on in batches of 1,000, so memory doesn't grow with the number of users. The query runs in a transaction that is rolled back at the end: nothing is written.
++
++### Binary columns
++
++A `varbinary`, `BLOB` or `bytea` column is read as bytes. If the bytes are printable ASCII, they are kept as text: that is a hash an application stored as bytes, like a bcrypt string. Anything else is a raw digest or salt, and is written in hex. Tell the mapping so with a constant, as you would for a flat file:
++
++```yaml
++fields:
++  - { source: id, cmf: source_id }
++  - { source: pw_hash, cmf: password }
++  - { source: pw_salt, cmf: password_salt }
++  - { cmf: password_algorithm, default: sha256 }
++  - { cmf: password_encoding, default: hex }
++  - { cmf: password_salt_encoding, default: hex }
++  - { cmf: password_salt_position, default: suffix }
++```
++
++<Aside type="caution">
++  `password_encoding: hex` applies to every row. If the same column also holds text hashes such as bcrypt, select only the digest rows, or export them in two runs.
++</Aside>
++
++## SQL Server
++
++`--driver sqlserver` reads from Microsoft SQL Server and Azure SQL, through [go-mssqldb](https://github.com/microsoft/go-mssqldb). The DSN is the driver's standard one, in either form:
++
++```sh
++# a URL
++export IAMIGRATE_SQL_DSN='sqlserver://reader:S3cret@db.internal:1433?database=app'
++
++# or key=value pairs
++export IAMIGRATE_SQL_DSN='server=db.internal;user id=reader;password=S3cret;database=app'
++```
++
++### An example query
++
++```sql
++-- users.sql
++SELECT
++  CAST(u.UserId AS varchar(36)) AS id,
++  u.Email                       AS email,
++  u.FirstName                   AS given_name,
++  u.LastName                    AS family_name,
++  u.IsDisabled                  AS blocked,
++  u.PasswordHash                AS pw_hash,   -- varbinary(32)
++  u.PasswordSalt                AS pw_salt,   -- varbinary(16)
++  u.Plan                        AS [app_metadata.plan]
++FROM dbo.Users AS u
++WHERE u.DeletedAt IS NULL
++```
++
++`email`, `given_name`, `family_name` and `blocked` already use the names iamigrate reads, and the column named `app_metadata.plan` lands in the user's `app_metadata`. The mapping above covers the rest (`id`, `pw_hash` and `pw_salt`), with `{ source: id, cmf: source_id }` added. A `uniqueidentifier` column comes out as the usual lower-case UUID, so you can select it as it is.
++
++### TLS
++
++TLS is set in the DSN and nowhere else: `encrypt`, `TrustServerCertificate`, `certificate` (a CA file) and `hostNameInCertificate`.
++
++```sh
++export IAMIGRATE_SQL_DSN='sqlserver://reader:S3cret@db.internal?database=app&encrypt=true&certificate=/etc/ssl/corp-ca.pem'
++```
++
++A server whose certificate isn't trusted is refused. Don't set `TrustServerCertificate=true` outside a rehearsal.
++
++### Microsoft Entra authentication
++
++A DSN with a `fedauth` parameter signs in with Microsoft Entra instead of a SQL login, and needs no password in it for the methods that have none:
++
++```sh
++# the environment's credential (az login, a managed identity, environment variables...)
++export IAMIGRATE_SQL_DSN='sqlserver://myserver.database.windows.net?database=app&fedauth=ActiveDirectoryDefault'
++
++# a service principal: the user id is <client-id>@<tenant-id>, the password its secret
++export IAMIGRATE_SQL_DSN='server=myserver.database.windows.net;database=app;fedauth=ActiveDirectoryServicePrincipal;user id=<client-id>@<tenant-id>;password=<secret>'
++```
++
++The other methods the driver accepts work too, among them `ActiveDirectoryManagedIdentity`, `ActiveDirectoryAzCli` and `ActiveDirectoryInteractive`; see the [driver's documentation](https://github.com/microsoft/go-mssqldb#azure-active-directory-authentication) for each one's parameters.
++
++### A consistent export
++
++If the database has snapshot isolation on (`ALLOW_SNAPSHOT_ISOLATION`, which Azure SQL has by default), the export runs under it: it sees the data as it was when the query started, whatever the application writes meanwhile, and without blocking those writes. Otherwise it runs at the database's default isolation, and says so. To turn it on:
++
++```sql
++ALTER DATABASE app SET ALLOW_SNAPSHOT_ISOLATION ON;
++```
++
++<Aside type="caution">
++  SQL Server has no read-only transaction, so unlike SQLite the query isn't stopped from writing. Use a login that can only read, such as one in `db_datareader`.
++</Aside>
++
++## SQLite
++
++`--driver sqlite` takes a file path, or a `file:` URI, as the DSN. The connection refuses writes. SQLite is also what iamigrate's own tests run against.
++
++```sh
++iamigrate export --source sql --driver sqlite --dsn ./app.db \
++  --query "SELECT id AS source_id, email, password FROM users" --out ./export/
++```
+diff -ruN orig/iamigrate-main/docs/reference/cli/export.mdx iamigrate-main/docs/reference/cli/export.mdx
+--- orig/iamigrate-main/docs/reference/cli/export.mdx	2026-10-21 22:24:21.000000000 +0000
++++ iamigrate-main/docs/reference/cli/export.mdx	2026-10-28 08:39:18.783877470 +0000
+@@ -3,9 +3,9 @@
+ description: Export identities from a source into CMF.
+ ---
+ 
+-Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Five sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable; and `auth0`, which runs a user export job on an Auth0 tenant and exports every user, with the attributes you choose, but **without passwords**, since Auth0 never returns password hashes through its API. A file with other column names, or nested JSON, needs a `--mapping` (or a [`prepare`](../prepare/) step first). Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
++Runs a source connector and writes `users.cmf.jsonl.gz`, `manifest.json`, and a scaffolded `mapping.yaml` to the output directory. Six sources are supported: `flatfile`, a generic CSV/JSON file using a recognized column convention (`source_id`, `email`, `given_name`, `family_name`, `username`, `locale`, `blocked`, `password`, `password_algorithm`); `sql`, a query on an application's own database (SQLite or Microsoft SQL Server), whose rows go through the same mapping; `kratos`, which streams every identity out of a running Ory Kratos instance via its Admin API, including its bcrypt/argon2id password hash; `keycloak`, which reads a `kc.sh export` realm file or directory (the Admin API never returns password hashes, so a live-instance export isn't possible); `firebase`, which pages through a Firebase Authentication project's accounts via the Identity Toolkit API, and needs the project's password hash parameters from the Firebase console to make the exported scrypt hashes portable; and `auth0`, which runs a user export job on an Auth0 tenant and exports every user, with the attributes you choose, but **without passwords**, since Auth0 never returns password hashes through its API. A file with other column names, or nested JSON, needs a `--mapping` (or a [`prepare`](../prepare/) step first). Any other flat-file column, or Keycloak attribute, is passed through as `app_metadata`/`user_metadata` and flagged as a manual mapping step rather than silently dropped.
+ 
+-For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/). For Auth0, including how to get the password hashes from Auth0 support, see [Export users from Auth0](../../../guides/export/auth0/).
++For a SQL database, including SQL Server's TLS and Microsoft Entra settings, see [Export users from a SQL database](../../../guides/export/sql/). For what a Kratos export includes and leaves out, see [Export users from Ory Kratos](../../../guides/export/kratos/). For Keycloak, see [Export users from Keycloak](../../../guides/export/keycloak/). For Firebase, see [Export users from Firebase](../../../guides/export/firebase/). For Auth0, including how to get the password hashes from Auth0 support, see [Export users from Auth0](../../../guides/export/auth0/).
+ 
+ ## Usage
+ 
+@@ -15,6 +15,10 @@
+ # or, from a file with other column names, described by a mapping
+ iamigrate export --source flatfile --in users.json --format json --mapping mapping.yaml --out ./export/
+ 
++# or, from an application's database
++IAMIGRATE_SQL_DSN='sqlserver://reader:...@db.internal?database=app' iamigrate export --source sql \
++  --driver sqlserver --query @users.sql --mapping mapping.yaml --out ./export/
++
+ # or, from a running Kratos instance
+ KRATOS_ADMIN_URL=http://127.0.0.1:4434 iamigrate export --source kratos --out ./export/
+ 
+@@ -34,10 +38,13 @@
+ 
+ | Flag | Description |
+ | --- | --- |
+-| `--source` | Source connector name: `flatfile` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
++| `--source` | Source connector name: `flatfile` \| `sql` \| `kratos` \| `keycloak` \| `firebase` \| `auth0` (required) |
+ | `--in` | Input file path (flatfile source), or `kc.sh export` realm file or directory (keycloak source) |
+ | `--format` | Input format: `csv` \| `json` (default `csv`, flatfile source) |
+-| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `id.source`, `hash.detect`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile source) |
++| `--mapping` | `mapping.yaml` renaming and transforming the file's own columns into the recognized ones, for a file that doesn't follow the column convention; see [`prepare`](../prepare/) for its format. Its custom `transforms`, `export.record`, `id.source`, `hash.detect`, `export.user` and `ids.target` apply too: see [`mapping.yaml`](../../mapping/) (flatfile and sql sources) |
++| `--driver` | Database engine: `sqlite` \| `sqlserver` (required, sql source) |
++| `--dsn` | The engine's connection string, or `$IAMIGRATE_SQL_DSN` (preferred: a flag shows in the process list). Never logged (sql source) |
++| `--query` | SQL returning one row per user, or `@file.sql` to read it from a file (sql source) |
+ | `--out` | Output directory (default `./export/`) |
+ | `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`, kratos source) |
+ | `--project` | Firebase project ID (or `$FIREBASE_PROJECT_ID`; default: the service account's project; firebase source) |
+diff -ruN orig/iamigrate-main/go.mod iamigrate-main/go.mod
+--- orig/iamigrate-main/go.mod	2026-10-21 22:24:21.000000000 +0000
++++ iamigrate-main/go.mod	2026-10-28 08:37:35.905099743 +0000
+@@ -5,6 +5,7 @@
+ require (
+ 	github.com/brianvoe/gofakeit/v7 v7.17.1
+ 	github.com/cerberauth/x v0.0.0-20260901215913-9d7750841dbb
++	github.com/microsoft/go-mssqldb v1.9.2
+ 	github.com/pquerna/otp v1.5.0
+ 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
+ 	github.com/spf13/cobra v1.10.2
+@@ -14,6 +15,7 @@
+ 	golang.org/x/term v0.46.0
+ 	gopkg.in/dnaeon/go-vcr.v3 v3.2.0
+ 	gopkg.in/yaml.v3 v3.0.1
++	modernc.org/sqlite v1.38.2
+ )
+ 
+ require (
+diff -ruN orig/iamigrate-main/pkg/connector/flatfile/flatfile.go iamigrate-main/pkg/connector/flatfile/flatfile.go
+--- orig/iamigrate-main/pkg/connector/flatfile/flatfile.go	2026-10-21 22:24:21.000000000 +0000
++++ iamigrate-main/pkg/connector/flatfile/flatfile.go	2026-10-28 08:36:28.249764110 +0000
+@@ -8,6 +8,7 @@
+ 	"fmt"
+ 	"io"
+ 	"strconv"
++	"strings"
+ 
+ 	"github.com/cerberauth/iamigrate/pkg/cmf"
+ 	"github.com/cerberauth/iamigrate/pkg/connector"
+@@ -75,33 +76,65 @@
+ 	if err != nil {
+ 		return connector.Manifest{}, err
+ 	}
++
++	var manifest connector.Manifest
++	progress.FromContext(ctx).SetTotal(len(rows))
++	err = ExportRows(ctx, w, rows, opts, 0, &manifest)
++	return manifest, err
++}
++
++// ExportRows maps rows (string-keyed, as read from a file or a query) into
++// CMF per opts.Mapping and writes the users to w, adding what it did to
++// manifest. It is what Export does once it has read its rows, for a caller
++// that holds them in batches rather than all at once: offset is how many
++// rows came before this batch, so the "record N" a hook is sent, and a
++// dropped record is reported under, count from the first row, not from the
++// batch's. Only opts.HashHints and opts.Mapping are read.
++func ExportRows(ctx context.Context, w *cmf.Writer, rows []map[string]string, opts ExportOptions, offset int, manifest *connector.Manifest) error {
++	if manifest.HashAlgorithmCounts == nil {
++		manifest.HashAlgorithmCounts = map[cmf.Algorithm]int{}
++	}
++	if manifest.NonPortableMFACounts == nil {
++		manifest.NonPortableMFACounts = map[cmf.MFAType]int{}
++	}
++
+ 	rows, positions, dropped, err := exportRecord(ctx, rows, opts.Mapping)
+ 	if err != nil {
+-		return connector.Manifest{}, err
++		return err
++	}
++	if positions == nil {
++		positions = make([]int, len(rows))
++		for i := range positions {
++			positions[i] = i + 1
++		}
++	}
++	for i := range positions {
++		positions[i] += offset
+ 	}
++	for i, d := range dropped {
++		if n, ok := strings.CutPrefix(d.SourceID, "record "); ok {
++			if k, err := strconv.Atoi(n); err == nil {
++				dropped[i].SourceID = recordKey(k - 1 + offset)
++			}
++		}
++	}
++	manifest.SkippedRecords = append(manifest.SkippedRecords, dropped...)
+ 	if rows, err = idSource(ctx, rows, positions, opts.Mapping); err != nil {
+-		return connector.Manifest{}, err
++		return err
+ 	}
+ 	if rows, err = normalize(ctx, rows, opts.Mapping, hooks.FromContext(ctx)); err != nil {
+-		return connector.Manifest{}, err
++		return err
+ 	}
+ 	detected, err := detectHashes(ctx, rows, opts.HashHints, opts.Mapping)
+ 	if err != nil {
+-		return connector.Manifest{}, err
++		return err
+ 	}
+ 
+-	manifest := connector.Manifest{
+-		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
+-		NonPortableMFACounts: map[cmf.MFAType]int{},
+-		SkippedRecords:       dropped,
+-	}
+ 	bar := progress.FromContext(ctx)
+-	bar.SetTotal(len(rows))
+-
+ 	for i, row := range rows {
+ 		select {
+ 		case <-ctx.Done():
+-			return manifest, ctx.Err()
++			return ctx.Err()
+ 		default:
+ 		}
+ 
+@@ -116,7 +149,7 @@
+ 		}
+ 		u, skipReason, err := rowToUser(row, opts.HashHints, det.password)
+ 		if err != nil {
+-			return manifest, err
++			return err
+ 		}
+ 		if skipReason != "" {
+ 			manifest.SkippedRecords = append(manifest.SkippedRecords, connector.SkippedRecord{
+@@ -126,7 +159,7 @@
+ 			continue
+ 		}
+ 		if err := w.WriteUser(u); err != nil {
+-			return manifest, fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
++			return fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
+ 		}
+ 		manifest.RecordCount++
+ 		if u.Password != nil {
+@@ -138,8 +171,7 @@
+ 			}
+ 		}
+ 	}
+-
+-	return manifest, nil
++	return nil
+ }
+ 
+ // Capabilities reports what the flatfile target accepts: everything CMF
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sql.go iamigrate-main/pkg/connector/sql/sql.go
+--- orig/iamigrate-main/pkg/connector/sql/sql.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sql.go	2026-10-28 08:36:49.107571793 +0000
+@@ -0,0 +1,249 @@
++// Package sql implements a SourceConnector over a query on an application's
++// own user database. Each row of the query becomes a record for the same
++// mapping a flat file goes through, with the column names as source fields.
++//
++// No engine is built in: each one registers a Driver (see Register), by
++// being imported for its side effect, and is picked with ExportOptions.Driver.
++package sql
++
++import (
++	"context"
++	stdsql "database/sql"
++	"errors"
++	"fmt"
++	"sort"
++	"strings"
++	"sync"
++
++	"github.com/cerberauth/iamigrate/pkg/cmf"
++	"github.com/cerberauth/iamigrate/pkg/connector"
++	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
++	"github.com/cerberauth/iamigrate/pkg/mapping"
++	"github.com/cerberauth/iamigrate/pkg/progress"
++)
++
++// Name is the connector's identifier, as used for --source.
++const Name = "sql"
++
++// DefaultBatchSize is how many rows are read before they go through the
++// mapping and are written out. It bounds memory, and is the unit a custom
++// transform or strategy handler is called on.
++const DefaultBatchSize = 1000
++
++// Driver is what the connector needs to know about one engine.
++type Driver struct {
++	// Open returns the database for dsn. Nil: database/sql's Open with
++	// DriverName.
++	Open func(dsn string) (*stdsql.DB, error)
++	// DriverName is the database/sql driver registered by the engine's
++	// package, for the default Open.
++	DriverName string
++	// Begin starts the transaction the query runs in. Nil: a read-only
++	// one, at the engine's default isolation. notice reports a choice the
++	// person running the export should know about (e.g. a fallback).
++	Begin func(ctx context.Context, db *stdsql.DB, notice func(format string, args ...any)) (*stdsql.Tx, error)
++	// Value renders one column's value as text, or reports false to leave
++	// it to the generic conversion. typeName is the column's database type
++	// name, as the driver reports it.
++	Value func(typeName string, v any) (string, bool)
++}
++
++var (
++	mu      sync.RWMutex
++	drivers = map[string]Driver{}
++)
++
++// Register makes an engine usable as ExportOptions.Driver. It panics on a
++// duplicate name, like database/sql.Register.
++func Register(name string, d Driver) {
++	mu.Lock()
++	defer mu.Unlock()
++	if _, dup := drivers[name]; dup {
++		panic("sql: driver " + name + " registered twice")
++	}
++	drivers[name] = d
++}
++
++// Drivers lists the registered engines, sorted.
++func Drivers() []string {
++	mu.RLock()
++	defer mu.RUnlock()
++	names := make([]string, 0, len(drivers))
++	for n := range drivers {
++		names = append(names, n)
++	}
++	sort.Strings(names)
++	return names
++}
++
++// ExportOptions configures reading users out of a database.
++type ExportOptions struct {
++	connector.BaseExportOptions
++	// Driver is the engine, as registered. Required: none is assumed.
++	Driver string
++	// DSN is the engine's own connection string. It is handed to the
++	// driver untouched, and kept out of every error.
++	DSN string
++	// Query returns one row per user.
++	Query string
++	// Mapping renames and transforms the query's columns, as for a flat file.
++	Mapping mapping.Mapping
++	// HashHints is as for flatfile.ExportOptions.
++	HashHints map[string]cmf.Algorithm
++	// BatchSize is how many rows are held at once (default DefaultBatchSize).
++	BatchSize int
++}
++
++// Connector is a SourceConnector over a SQL query.
++type Connector struct{}
++
++// New returns a sql connector.
++func New() *Connector { return &Connector{} }
++
++func (*Connector) Name() string { return Name }
++
++// Export runs opts.Query and writes one CMF user per row to w. Rows are
++// read as they arrive and handed on in batches, so memory doesn't grow with
++// the size of the result.
++func (*Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.ExportOptions) (manifest connector.Manifest, err error) {
++	opts, ok := eo.(ExportOptions)
++	if !ok {
++		return manifest, fmt.Errorf("sql: Export requires sql.ExportOptions, got %T", eo)
++	}
++	if opts.Driver == "" {
++		return manifest, fmt.Errorf("sql: a driver is required (one of %s)", strings.Join(Drivers(), ", "))
++	}
++	if strings.TrimSpace(opts.Query) == "" {
++		return manifest, errors.New("sql: a query is required")
++	}
++	if opts.DSN == "" {
++		return manifest, errors.New("sql: a DSN is required")
++	}
++	mu.RLock()
++	drv, ok := drivers[opts.Driver]
++	mu.RUnlock()
++	if !ok {
++		return manifest, fmt.Errorf("sql: unknown driver %q (one of %s)", opts.Driver, strings.Join(Drivers(), ", "))
++	}
++	// Whatever a driver puts in an error, the DSN (it can hold a password)
++	// doesn't leave this function.
++	defer func() { err = redact(err, opts.DSN) }()
++
++	open := drv.Open
++	if open == nil {
++		open = func(dsn string) (*stdsql.DB, error) { return stdsql.Open(drv.DriverName, dsn) }
++	}
++	db, err := open(opts.DSN)
++	if err != nil {
++		return manifest, fmt.Errorf("sql: opening %s: %w", opts.Driver, err)
++	}
++	defer db.Close()
++
++	bar := progress.FromContext(ctx)
++	notice := func(format string, args ...any) { bar.Status(format, args...) }
++	begin := drv.Begin
++	if begin == nil {
++		begin = func(ctx context.Context, db *stdsql.DB, _ func(string, ...any)) (*stdsql.Tx, error) {
++			return db.BeginTx(ctx, &stdsql.TxOptions{ReadOnly: true})
++		}
++	}
++	tx, err := begin(ctx, db, notice)
++	if err != nil {
++		return manifest, fmt.Errorf("sql: starting the transaction: %w", err)
++	}
++	// Nothing is written: the transaction only gives the query a stable view.
++	defer func() { _ = tx.Rollback() }()
++
++	rs, err := tx.QueryContext(ctx, opts.Query)
++	if err != nil {
++		return manifest, fmt.Errorf("sql: running the query: %w", err)
++	}
++	defer rs.Close()
++
++	cols, err := rs.ColumnTypes()
++	if err != nil {
++		return manifest, fmt.Errorf("sql: reading the query's columns: %w", err)
++	}
++	names := make([]string, len(cols))
++	types := make([]string, len(cols))
++	for i, c := range cols {
++		if names[i] = c.Name(); names[i] == "" {
++			return manifest, fmt.Errorf("sql: column %d of the query has no name; give it one with AS", i+1)
++		}
++		types[i] = strings.ToUpper(c.DatabaseTypeName())
++	}
++	if dup := firstDuplicate(names); dup != "" {
++		return manifest, fmt.Errorf("sql: the query returns a column named %q more than once; rename one with AS", dup)
++	}
++
++	size := opts.BatchSize
++	if size <= 0 {
++		size = DefaultBatchSize
++	}
++	fopts := flatfile.ExportOptions{HashHints: opts.HashHints, Mapping: opts.Mapping}
++	batch := make([]map[string]string, 0, size)
++	offset := 0
++	flush := func() error {
++		if len(batch) == 0 {
++			return nil
++		}
++		if err := flatfile.ExportRows(ctx, w, batch, fopts, offset, &manifest); err != nil {
++			return err
++		}
++		offset += len(batch)
++		batch = batch[:0]
++		return nil
++	}
++
++	raw := make([]any, len(cols))
++	ptrs := make([]any, len(cols))
++	for i := range raw {
++		ptrs[i] = &raw[i]
++	}
++	for rs.Next() {
++		if err := ctx.Err(); err != nil {
++			return manifest, err
++		}
++		if err := rs.Scan(ptrs...); err != nil {
++			return manifest, fmt.Errorf("sql: reading row %d: %w", offset+len(batch)+1, err)
++		}
++		row := make(map[string]string, len(cols))
++		for i, v := range raw {
++			if s := text(drv, types[i], v); s != "" {
++				row[names[i]] = s
++			}
++		}
++		if batch = append(batch, row); len(batch) >= size {
++			if err := flush(); err != nil {
++				return manifest, err
++			}
++		}
++	}
++	if err := rs.Err(); err != nil {
++		return manifest, fmt.Errorf("sql: reading the result: %w", err)
++	}
++	if err := flush(); err != nil {
++		return manifest, err
++	}
++	return manifest, nil
++}
++
++func firstDuplicate(names []string) string {
++	seen := make(map[string]bool, len(names))
++	for _, n := range names {
++		if seen[n] {
++			return n
++		}
++		seen[n] = true
++	}
++	return ""
++}
++
++// redact removes dsn from err's message. The error's chain is dropped, as
++// it may carry the DSN in its own fields.
++func redact(err error, dsn string) error {
++	if err == nil || dsn == "" || !strings.Contains(err.Error(), dsn) {
++		return err
++	}
++	return errors.New(strings.ReplaceAll(err.Error(), dsn, "[dsn]"))
++}
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sql_test.go iamigrate-main/pkg/connector/sql/sql_test.go
+--- orig/iamigrate-main/pkg/connector/sql/sql_test.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sql_test.go	2026-10-28 08:38:31.718905260 +0000
+@@ -0,0 +1,160 @@
++package sql_test
++
++import (
++	"bytes"
++	"context"
++	stdsql "database/sql"
++	"encoding/base64"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"io"
++	"path/filepath"
++	"strings"
++	"testing"
++
++	"github.com/cerberauth/iamigrate/pkg/cmf"
++	"github.com/cerberauth/iamigrate/pkg/connector"
++	sqlsrc "github.com/cerberauth/iamigrate/pkg/connector/sql"
++	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlite"
++	"github.com/cerberauth/iamigrate/pkg/mapping"
++	"github.com/stretchr/testify/require"
++)
++
++// seed creates a SQLite database holding the given statements' effects and
++// returns its DSN.
++func seed(t *testing.T, stmts ...string) string {
++	t.Helper()
++	path := filepath.Join(t.TempDir(), "app.db")
++	db, err := stdsql.Open("sqlite", path)
++	require.NoError(t, err)
++	defer db.Close()
++	for _, s := range stmts {
++		_, err := db.Exec(s)
++		require.NoError(t, err, s)
++	}
++	return path
++}
++
++func export(t *testing.T, opts sqlsrc.ExportOptions) ([]cmf.User, connector.Manifest, error) {
++	t.Helper()
++	var buf bytes.Buffer
++	w := cmf.NewWriter(&buf)
++	manifest, err := sqlsrc.New().Export(context.Background(), w, opts)
++	if err != nil {
++		return nil, manifest, err
++	}
++	require.NoError(t, w.Close())
++	r, err := cmf.NewReader(&buf)
++	require.NoError(t, err)
++	defer r.Close()
++	var users []cmf.User
++	for {
++		u, err := r.ReadUser()
++		if err == io.EOF {
++			return users, manifest, nil
++		}
++		require.NoError(t, err)
++		users = append(users, u)
++	}
++}
++
++const bcryptHash = "$2a$10$jSTQjfDV/IlpY/Ix05MjZu48Y8D0QpllULBdx0U40N/VqKqjN91dW"
++
++func TestRowsBecomeUsers(t *testing.T) {
++	dsn := seed(t,
++		`CREATE TABLE users (source_id TEXT, email TEXT, given_name TEXT, password BLOB, password_algorithm TEXT, plan TEXT)`,
++		`INSERT INTO users VALUES ('u1', 'jane@example.com', 'Jane', CAST('`+bcryptHash+`' AS BLOB), 'bcrypt', 'gold')`,
++		`INSERT INTO users VALUES ('u2', NULL, 'Ann', NULL, NULL, NULL)`,
++	)
++	users, manifest, err := export(t, sqlsrc.ExportOptions{Driver: "sqlite", DSN: dsn, Query: "SELECT * FROM users ORDER BY source_id"})
++	require.NoError(t, err)
++	require.Equal(t, 2, manifest.RecordCount)
++	require.Equal(t, "jane@example.com", users[0].Emails[0].Value)
++	require.Equal(t, cmf.AlgBcrypt, users[0].Password.Algorithm, "a text hash stored as bytes is read as text")
++	require.Equal(t, "gold", users[0].AppMetadata["plan"], "other columns pass through, as for a flat file")
++	require.Empty(t, users[1].Emails, "NULL is an empty cell")
++	require.Nil(t, users[1].Password)
++}
++
++// Binary columns arrive as bytes: a raw digest and its salt are told to the
++// mapping in hex, exactly as the same file's columns would be.
++func TestBinaryDigestAndSaltApplyAsForFlatFiles(t *testing.T) {
++	digest := bytes.Repeat([]byte{0xAB}, 32)
++	salt := []byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77}
++	dsn := seed(t,
++		`CREATE TABLE users (id TEXT, pw BLOB, salt BLOB)`,
++		fmt.Sprintf(`INSERT INTO users VALUES ('u1', X'%x', X'%x')`, digest, salt),
++	)
++	m := mapping.Mapping{Fields: []mapping.FieldMapping{
++		{Source: "id", CMF: "source_id"},
++		{Source: "pw", CMF: "password"},
++		{Source: "salt", CMF: "password_salt"},
++		{CMF: "password_algorithm", Default: "sha256"},
++		{CMF: "password_encoding", Default: "hex"},
++		{CMF: "password_salt_encoding", Default: "hex"},
++		{CMF: "password_salt_position", Default: "suffix"},
++	}}
++	users, _, err := export(t, sqlsrc.ExportOptions{Driver: "sqlite", DSN: dsn, Query: "SELECT id, pw, salt FROM users", Mapping: m})
++	require.NoError(t, err)
++	require.Len(t, users, 1)
++	pw := users[0].Password
++	require.Equal(t, cmf.AlgSHA256, pw.Algorithm)
++	require.Equal(t, hex.EncodeToString(digest), pw.Hash.Value)
++	require.Equal(t, base64.StdEncoding.EncodeToString(salt), pw.Salt.Value)
++}
++
++func TestResultIsHandedOnInBatches(t *testing.T) {
++	stmts := []string{`CREATE TABLE users (source_id TEXT, email TEXT)`}
++	for i := 0; i < 1050; i++ {
++		stmts = append(stmts, fmt.Sprintf(`INSERT INTO users VALUES ('u%04d', 'u%04d@example.com')`, i, i))
++	}
++	dsn := seed(t, stmts...)
++	users, manifest, err := export(t, sqlsrc.ExportOptions{
++		Driver: "sqlite", DSN: dsn, BatchSize: 100,
++		Query: "SELECT * FROM users ORDER BY source_id",
++	})
++	require.NoError(t, err)
++	require.Equal(t, 1050, manifest.RecordCount, "the last, partial batch is written too")
++	for i, u := range users {
++		require.Equal(t, fmt.Sprintf("u%04d", i), u.SourceID, "rows keep their order across batches")
++	}
++}
++
++func TestQueryCannotWrite(t *testing.T) {
++	dsn := seed(t, `CREATE TABLE users (source_id TEXT)`, `INSERT INTO users VALUES ('u1')`)
++	_, _, err := export(t, sqlsrc.ExportOptions{Driver: "sqlite", DSN: dsn, Query: "DELETE FROM users RETURNING source_id"})
++	require.Error(t, err)
++
++	users, _, err := export(t, sqlsrc.ExportOptions{Driver: "sqlite", DSN: dsn, Query: "SELECT source_id FROM users"})
++	require.NoError(t, err)
++	require.Len(t, users, 1, "nothing was deleted")
++}
++
++func TestNoEngineIsAssumed(t *testing.T) {
++	_, _, err := export(t, sqlsrc.ExportOptions{DSN: "x", Query: "SELECT 1"})
++	require.ErrorContains(t, err, "driver is required")
++	require.ErrorContains(t, err, "sqlite", "it lists the engines there are")
++
++	_, _, err = export(t, sqlsrc.ExportOptions{Driver: "oracle", DSN: "x", Query: "SELECT 1"})
++	require.ErrorContains(t, err, `unknown driver "oracle"`)
++}
++
++func TestColumnsMustBeNamedOnce(t *testing.T) {
++	dsn := seed(t, `CREATE TABLE users (a TEXT)`)
++	_, _, err := export(t, sqlsrc.ExportOptions{Driver: "sqlite", DSN: dsn, Query: "SELECT a, a FROM users"})
++	require.ErrorContains(t, err, `named "a" more than once`)
++}
++
++func TestDSNNeverAppearsInAnError(t *testing.T) {
++	const dsn = "fake://sa:s3cret-passw0rd@host/db"
++	sqlsrc.Register("fake-failing", sqlsrc.Driver{
++		Open: func(dsn string) (*stdsql.DB, error) {
++			return nil, errors.New("cannot reach " + dsn)
++		},
++	})
++	_, _, err := export(t, sqlsrc.ExportOptions{Driver: "fake-failing", DSN: dsn, Query: "SELECT 1"})
++	require.Error(t, err)
++	require.NotContains(t, err.Error(), "s3cret-passw0rd")
++	require.True(t, strings.Contains(err.Error(), "cannot reach"), "the rest of the error is kept")
++}
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sqlite/sqlite.go iamigrate-main/pkg/connector/sql/sqlite/sqlite.go
+--- orig/iamigrate-main/pkg/connector/sql/sqlite/sqlite.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sqlite/sqlite.go	2026-10-28 08:37:14.099347071 +0000
+@@ -0,0 +1,42 @@
++// Package sqlite registers the SQLite engine for the sql source, through
++// modernc.org/sqlite: pure Go, so it needs no cgo, and doubles as the
++// database the connector's tests run against.
++//
++// Import it for its side effect:
++//
++//	import _ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlite"
++package sqlite
++
++import (
++	"context"
++	stdsql "database/sql"
++
++	"github.com/cerberauth/iamigrate/pkg/connector/sql"
++	_ "modernc.org/sqlite" // registers the "sqlite" database/sql driver
++)
++
++// Name is the engine's name, as used for --driver.
++const Name = "sqlite"
++
++func init() {
++	sql.Register(Name, sql.Driver{
++		Open: func(dsn string) (*stdsql.DB, error) {
++			db, err := stdsql.Open("sqlite", dsn)
++			if err != nil {
++				return nil, err
++			}
++			// query_only is a setting of the connection, so there must be
++			// only one for it to hold on the connection the query uses.
++			db.SetMaxOpenConns(1)
++			return db, nil
++		},
++		// SQLite's driver has no read-only transaction: query_only makes
++		// the connection refuse any write instead.
++		Begin: func(ctx context.Context, db *stdsql.DB, _ func(string, ...any)) (*stdsql.Tx, error) {
++			if _, err := db.ExecContext(ctx, "PRAGMA query_only = 1"); err != nil {
++				return nil, err
++			}
++			return db.BeginTx(ctx, nil)
++		},
++	})
++}
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sqlserver/live_test.go iamigrate-main/pkg/connector/sql/sqlserver/live_test.go
+--- orig/iamigrate-main/pkg/connector/sql/sqlserver/live_test.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sqlserver/live_test.go	2026-10-28 08:38:57.118885711 +0000
+@@ -0,0 +1,165 @@
++package sqlserver_test
++
++import (
++	"bytes"
++	"context"
++	stdsql "database/sql"
++	"encoding/base64"
++	"encoding/hex"
++	"io"
++	"net/url"
++	"os"
++	"testing"
++
++	"github.com/cerberauth/iamigrate/pkg/cmf"
++	sqlsrc "github.com/cerberauth/iamigrate/pkg/connector/sql"
++	_ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlserver"
++	"github.com/cerberauth/iamigrate/pkg/mapping"
++	"github.com/stretchr/testify/require"
++)
++
++// These tests run against a real SQL Server, and are skipped without one:
++//
++//	docker compose -f .docker/sqlserver/docker-compose.yml up --wait
++//	SQLSERVER_DSN='sqlserver://sa:Iamigrate-Passw0rd@127.0.0.1:1433?database=master&encrypt=true&TrustServerCertificate=true' \
++//	  go test ./pkg/connector/sql/sqlserver/... -run TestLive
++//	docker compose -f .docker/sqlserver/docker-compose.yml down -v
++//
++// The DSN must be in the URL form, and its login able to create a database.
++
++const testDB = "iamigrate_test"
++
++// liveDB creates (or empties) the test database and returns the DSN of it.
++func liveDB(t *testing.T) string {
++	t.Helper()
++	dsn := os.Getenv("SQLSERVER_DSN")
++	if dsn == "" {
++		t.Skip("SQLSERVER_DSN is not set")
++	}
++	admin, err := stdsql.Open("sqlserver", dsn)
++	require.NoError(t, err)
++	defer admin.Close()
++	_, err = admin.Exec(`IF DB_ID('` + testDB + `') IS NOT NULL BEGIN ALTER DATABASE ` + testDB + ` SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ` + testDB + ` END`)
++	require.NoError(t, err)
++	_, err = admin.Exec(`CREATE DATABASE ` + testDB)
++	require.NoError(t, err)
++	t.Cleanup(func() {
++		c, err := stdsql.Open("sqlserver", dsn)
++		if err == nil {
++			_, _ = c.Exec(`ALTER DATABASE ` + testDB + ` SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE ` + testDB)
++			c.Close()
++		}
++	})
++
++	u, err := url.Parse(dsn)
++	require.NoError(t, err)
++	q := u.Query()
++	q.Set("database", testDB)
++	u.RawQuery = q.Encode()
++	return u.String()
++}
++
++func setSnapshot(t *testing.T, dsn string, on bool) {
++	t.Helper()
++	db, err := stdsql.Open("sqlserver", dsn)
++	require.NoError(t, err)
++	defer db.Close()
++	state := "OFF"
++	if on {
++		state = "ON"
++	}
++	_, err = db.Exec(`ALTER DATABASE ` + testDB + ` SET ALLOW_SNAPSHOT_ISOLATION ` + state)
++	require.NoError(t, err)
++}
++
++func run(t *testing.T, opts sqlsrc.ExportOptions) ([]cmf.User, error) {
++	t.Helper()
++	opts.Driver = "sqlserver"
++	var buf bytes.Buffer
++	w := cmf.NewWriter(&buf)
++	if _, err := sqlsrc.New().Export(context.Background(), w, opts); err != nil {
++		return nil, err
++	}
++	require.NoError(t, w.Close())
++	r, err := cmf.NewReader(&buf)
++	require.NoError(t, err)
++	defer r.Close()
++	var users []cmf.User
++	for {
++		u, err := r.ReadUser()
++		if err == io.EOF {
++			return users, nil
++		}
++		require.NoError(t, err)
++		users = append(users, u)
++	}
++}
++
++func TestLiveVarbinaryColumnsAreRead(t *testing.T) {
++	dsn := liveDB(t)
++	db, err := stdsql.Open("sqlserver", dsn)
++	require.NoError(t, err)
++	defer db.Close()
++	digest := bytes.Repeat([]byte{0xCD}, 32)
++	salt := []byte{1, 2, 3, 4, 5, 6, 7, 8}
++	_, err = db.Exec(`CREATE TABLE users (id uniqueidentifier, email nvarchar(100), pw varbinary(64), salt varbinary(16))`)
++	require.NoError(t, err)
++	_, err = db.Exec(`INSERT INTO users VALUES ('6F9619FF-8B86-D011-B42D-00C04FC964FF', N'jane@example.com', @p1, @p2)`, digest, salt)
++	require.NoError(t, err)
++
++	m := mapping.Mapping{Fields: []mapping.FieldMapping{
++		{Source: "id", CMF: "source_id"}, {Source: "email", CMF: "email"},
++		{Source: "pw", CMF: "password"}, {Source: "salt", CMF: "password_salt"},
++		{CMF: "password_algorithm", Default: "sha256"}, {CMF: "password_encoding", Default: "hex"},
++		{CMF: "password_salt_encoding", Default: "hex"}, {CMF: "password_salt_position", Default: "prefix"},
++	}}
++	users, err := run(t, sqlsrc.ExportOptions{DSN: dsn, Query: "SELECT id, email, pw, salt FROM users", Mapping: m})
++	require.NoError(t, err)
++	require.Len(t, users, 1)
++	require.Equal(t, "6f9619ff-8b86-d011-b42d-00c04fc964ff", users[0].SourceID, "a GUID is the string SQL Server shows, not its bytes")
++	require.Equal(t, hex.EncodeToString(digest), users[0].Password.Hash.Value)
++	require.Equal(t, base64.StdEncoding.EncodeToString(salt), users[0].Password.Salt.Value)
++}
++
++// What the export ran under is asked of the server itself: 5 is snapshot,
++// 2 is read committed.
++const isolationQuery = `SELECT 'u1' AS source_id,
++	(SELECT transaction_isolation_level FROM sys.dm_exec_sessions WHERE session_id = @@SPID) AS [app_metadata.isolation]`
++
++func TestLiveSnapshotIsolationWhenTheDatabaseAllowsIt(t *testing.T) {
++	dsn := liveDB(t)
++
++	setSnapshot(t, dsn, true)
++	users, err := run(t, sqlsrc.ExportOptions{DSN: dsn, Query: isolationQuery})
++	require.NoError(t, err)
++	require.Equal(t, "5", users[0].AppMetadata["isolation"], "snapshot")
++
++	setSnapshot(t, dsn, false)
++	users, err = run(t, sqlsrc.ExportOptions{DSN: dsn, Query: isolationQuery})
++	require.NoError(t, err, "a database without snapshot isolation still exports")
++	require.Equal(t, "2", users[0].AppMetadata["isolation"], "read committed")
++}
++
++// TLS is whatever the DSN says: a server certificate the client doesn't
++// trust is refused, and trusting it is the DSN's to say. A refused
++// connection doesn't print the DSN, password included.
++func TestLiveTLSSettingsComeFromTheDSN(t *testing.T) {
++	dsn := liveDB(t)
++	u, err := url.Parse(dsn)
++	require.NoError(t, err)
++	password, _ := u.User.Password()
++
++	q := u.Query()
++	q.Set("encrypt", "true")
++	q.Set("TrustServerCertificate", "false")
++	u.RawQuery = q.Encode()
++	_, err = run(t, sqlsrc.ExportOptions{DSN: u.String(), Query: "SELECT 'u1' AS source_id"})
++	require.Error(t, err, "the container's self-signed certificate is not trusted")
++	require.NotContains(t, err.Error(), password)
++
++	q.Set("TrustServerCertificate", "true")
++	u.RawQuery = q.Encode()
++	users, err := run(t, sqlsrc.ExportOptions{DSN: u.String(), Query: "SELECT 'u1' AS source_id"})
++	require.NoError(t, err)
++	require.Len(t, users, 1)
++}
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sqlserver/sqlserver.go iamigrate-main/pkg/connector/sql/sqlserver/sqlserver.go
+--- orig/iamigrate-main/pkg/connector/sql/sqlserver/sqlserver.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sqlserver/sqlserver.go	2026-10-28 08:37:14.103305373 +0000
+@@ -0,0 +1,111 @@
++// Package sqlserver registers Microsoft SQL Server (and Azure SQL) for the
++// sql source, through github.com/microsoft/go-mssqldb.
++//
++// Import it for its side effect:
++//
++//	import _ "github.com/cerberauth/iamigrate/pkg/connector/sql/sqlserver"
++//
++// The DSN is the driver's standard one, handed over untouched, so TLS is set
++// in it (encrypt, TrustServerCertificate, certificate, hostNameInCertificate)
++// and so is the way to sign in. With no fedauth parameter that is a SQL
++// login (user id and password); with one, it is Microsoft Entra
++// authentication, e.g. fedauth=ActiveDirectoryDefault.
++package sqlserver
++
++import (
++	"context"
++	stdsql "database/sql"
++	"net/url"
++	"strings"
++
++	"github.com/cerberauth/iamigrate/pkg/connector/sql"
++	mssql "github.com/microsoft/go-mssqldb"
++	"github.com/microsoft/go-mssqldb/azuread"
++)
++
++// Name is the engine's name, as used for --driver.
++const Name = "sqlserver"
++
++func init() {
++	sql.Register(Name, sql.Driver{
++		Open: func(dsn string) (*stdsql.DB, error) {
++			// The azuread driver is the same one plus Entra token
++			// acquisition, but it pulls the Azure SDK in on each use, so
++			// it only serves a DSN that asks for it.
++			if usesEntra(dsn) {
++				return stdsql.Open(azuread.DriverName, dsn)
++			}
++			return stdsql.Open("sqlserver", dsn)
++		},
++		Begin: begin,
++		Value: value,
++	})
++}
++
++// usesEntra reports whether dsn selects Microsoft Entra authentication, by
++// a fedauth parameter, in either of the driver's DSN forms (a URL, or
++// ADO-style key=value pairs separated by semicolons).
++func usesEntra(dsn string) bool {
++	if strings.Contains(dsn, "://") {
++		u, err := url.Parse(dsn)
++		if err != nil {
++			return false
++		}
++		for k, v := range u.Query() {
++			if strings.EqualFold(k, "fedauth") && len(v) > 0 && v[0] != "" {
++				return true
++			}
++		}
++		return false
++	}
++	for _, kv := range strings.Split(dsn, ";") {
++		k, v, ok := strings.Cut(kv, "=")
++		if ok && strings.EqualFold(strings.TrimSpace(k), "fedauth") && strings.TrimSpace(v) != "" {
++			return true
++		}
++	}
++	return false
++}
++
++// begin runs the export under snapshot isolation when the database has it
++// turned on, so the export sees the data as it was when it started, whatever
++// the application writes meanwhile, without blocking those writes. When it
++// is off, the isolation level is left as the database has it (read committed,
++// or the row-versioned flavour of it if READ_COMMITTED_SNAPSHOT is on).
++//
++// SQL Server has no read-only transaction for the driver to ask for, so the
++// query is not stopped from writing: use a login that can only read.
++func begin(ctx context.Context, db *stdsql.DB, notice func(string, ...any)) (*stdsql.Tx, error) {
++	var state int
++	// 1 is ON; 2 is turning on, when it can't be relied on yet.
++	err := db.QueryRowContext(ctx, "SELECT snapshot_isolation_state FROM sys.databases WHERE name = DB_NAME()").Scan(&state)
++	switch {
++	case err != nil:
++		// Not being allowed to look isn't a reason not to export.
++		notice("could not check snapshot isolation (%v): exporting at the database's default isolation", err)
++	case state == 1:
++		return db.BeginTx(ctx, &stdsql.TxOptions{Isolation: stdsql.LevelSnapshot})
++	default:
++		notice("snapshot isolation is off on this database: exporting at the database's default isolation")
++	}
++	return db.BeginTx(ctx, nil)
++}
++
++// value renders the SQL Server types the driver doesn't give as text.
++func value(typeName string, v any) (string, bool) {
++	b, ok := v.([]byte)
++	if !ok {
++		return "", false
++	}
++	// uniqueidentifier comes as its 16 bytes in SQL Server's own order,
++	// not as the UUID string everything else shows.
++	if typeName == "UNIQUEIDENTIFIER" && len(b) == 16 {
++		var id mssql.UniqueIdentifier
++		if err := id.Scan(b); err != nil {
++			return "", false
++		}
++		return strings.ToLower(id.String()), true
++	}
++	return "", false
++}
++
+diff -ruN orig/iamigrate-main/pkg/connector/sql/sqlserver/sqlserver_test.go iamigrate-main/pkg/connector/sql/sqlserver/sqlserver_test.go
+--- orig/iamigrate-main/pkg/connector/sql/sqlserver/sqlserver_test.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/sqlserver/sqlserver_test.go	2026-10-28 08:38:31.719575207 +0000
+@@ -0,0 +1,27 @@
++package sqlserver
++
++import (
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++func TestUsesEntra(t *testing.T) {
++	for dsn, want := range map[string]bool{
++		// a SQL login
++		"sqlserver://sa:pw@host:1433?database=app":                                      false,
++		"server=host;user id=sa;password=pw;database=app":                              false,
++		"sqlserver://sa:pw@host?database=app&encrypt=true&TrustServerCertificate=false": false,
++		// Microsoft Entra, in the driver's two DSN forms
++		"sqlserver://host.database.windows.net?database=app&fedauth=ActiveDirectoryDefault":  true,
++		"sqlserver://host.database.windows.net?database=app&FedAuth=ActiveDirectoryAzCli":    true,
++		"server=host.database.windows.net;database=app;fedauth=ActiveDirectoryManagedIdentity": true,
++		"Server=host;Database=app; FedAuth = ActiveDirectoryServicePrincipal;":                true,
++		// an empty value selects nothing
++		"sqlserver://host?database=app&fedauth=": false,
++		// a password that merely contains the word is not a parameter
++		"sqlserver://sa:fedauth=1@host?database=app": false,
++	} {
++		require.Equal(t, want, usesEntra(dsn), dsn)
++	}
++}
+diff -ruN orig/iamigrate-main/pkg/connector/sql/values.go iamigrate-main/pkg/connector/sql/values.go
+--- orig/iamigrate-main/pkg/connector/sql/values.go	1970-01-01 00:00:00.000000000 +0000
++++ iamigrate-main/pkg/connector/sql/values.go	2026-10-28 08:36:56.767572048 +0000
+@@ -0,0 +1,59 @@
++package sql
++
++import (
++	"encoding/hex"
++	"fmt"
++	"strconv"
++	"time"
++)
++
++// text renders one column's value the way a flat file would carry it, so
++// the mapping, hash detection and the password columns apply unchanged.
++// NULL is the empty string, like an empty CSV cell.
++//
++// Binary columns (varbinary, BLOB, bytea...) come through as bytes. A value
++// that is plain printable ASCII is kept as it is: that is a text hash an
++// application stored as bytes (a bcrypt or PHC string). Anything else is a
++// raw digest or salt, and is written in hex, which is what the
++// password_encoding and password_salt_encoding columns (set with a mapping
++// field's default, e.g. `cmf: password_encoding, default: hex`) then name.
++func text(d Driver, typeName string, v any) string {
++	if v == nil {
++		return ""
++	}
++	if d.Value != nil {
++		if s, ok := d.Value(typeName, v); ok {
++			return s
++		}
++	}
++	switch t := v.(type) {
++	case string:
++		return t
++	case []byte:
++		return bytesText(t)
++	case bool:
++		return strconv.FormatBool(t)
++	case int64:
++		return strconv.FormatInt(t, 10)
++	case int:
++		return strconv.Itoa(t)
++	case float64:
++		return strconv.FormatFloat(t, 'f', -1, 64)
++	case time.Time:
++		return t.UTC().Format(time.RFC3339Nano)
++	default:
++		return fmt.Sprint(t)
++	}
++}
++
++func bytesText(b []byte) string {
++	if len(b) == 0 {
++		return ""
++	}
++	for _, c := range b {
++		if c < 0x20 || c > 0x7e {
++			return hex.EncodeToString(b)
++		}
++	}
++	return string(b)
++}
