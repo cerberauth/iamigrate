@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -75,33 +76,65 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	if err != nil {
 		return connector.Manifest{}, err
 	}
+
+	var manifest connector.Manifest
+	progress.FromContext(ctx).SetTotal(len(rows))
+	err = ExportRows(ctx, w, rows, opts, 0, &manifest)
+	return manifest, err
+}
+
+// ExportRows maps rows (string-keyed, as read from a file or a query) into
+// CMF per opts.Mapping and writes the users to w, adding what it did to
+// manifest. It is what Export does once it has read its rows, for a caller
+// that holds them in batches rather than all at once: offset is how many
+// rows came before this batch, so the "record N" a hook is sent, and a
+// dropped record is reported under, count from the first row, not from the
+// batch's. Only opts.HashHints and opts.Mapping are read.
+func ExportRows(ctx context.Context, w *cmf.Writer, rows []map[string]string, opts ExportOptions, offset int, manifest *connector.Manifest) error {
+	if manifest.HashAlgorithmCounts == nil {
+		manifest.HashAlgorithmCounts = map[cmf.Algorithm]int{}
+	}
+	if manifest.NonPortableMFACounts == nil {
+		manifest.NonPortableMFACounts = map[cmf.MFAType]int{}
+	}
+
 	rows, positions, dropped, err := exportRecord(ctx, rows, opts.Mapping)
 	if err != nil {
-		return connector.Manifest{}, err
+		return err
 	}
+	if positions == nil {
+		positions = make([]int, len(rows))
+		for i := range positions {
+			positions[i] = i + 1
+		}
+	}
+	for i := range positions {
+		positions[i] += offset
+	}
+	for i, d := range dropped {
+		if n, ok := strings.CutPrefix(d.SourceID, "record "); ok {
+			if k, err := strconv.Atoi(n); err == nil {
+				dropped[i].SourceID = recordKey(k - 1 + offset)
+			}
+		}
+	}
+	manifest.SkippedRecords = append(manifest.SkippedRecords, dropped...)
 	if rows, err = idSource(ctx, rows, positions, opts.Mapping); err != nil {
-		return connector.Manifest{}, err
+		return err
 	}
 	if rows, err = normalize(ctx, rows, opts.Mapping, hooks.FromContext(ctx)); err != nil {
-		return connector.Manifest{}, err
+		return err
 	}
 	detected, err := detectHashes(ctx, rows, opts.HashHints, opts.Mapping)
 	if err != nil {
-		return connector.Manifest{}, err
+		return err
 	}
 
-	manifest := connector.Manifest{
-		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
-		NonPortableMFACounts: map[cmf.MFAType]int{},
-		SkippedRecords:       dropped,
-	}
 	bar := progress.FromContext(ctx)
-	bar.SetTotal(len(rows))
-
 	for i, row := range rows {
 		select {
 		case <-ctx.Done():
-			return manifest, ctx.Err()
+			return ctx.Err()
 		default:
 		}
 
@@ -116,7 +149,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		}
 		u, skipReason, err := rowToUser(row, opts.HashHints, det.password)
 		if err != nil {
-			return manifest, err
+			return err
 		}
 		if skipReason != "" {
 			manifest.SkippedRecords = append(manifest.SkippedRecords, connector.SkippedRecord{
@@ -126,7 +159,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			continue
 		}
 		if err := w.WriteUser(u); err != nil {
-			return manifest, fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
+			return fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
 		}
 		manifest.RecordCount++
 		if u.Password != nil {
@@ -138,8 +171,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			}
 		}
 	}
-
-	return manifest, nil
+	return nil
 }
 
 // Capabilities reports what the flatfile target accepts: everything CMF

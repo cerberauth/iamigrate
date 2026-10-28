@@ -1,0 +1,27 @@
+# Spins up a disposable SQL Server for the gated tests in
+# pkg/connector/sql/sqlserver/live_test.go. The tests create (and drop) their
+# own database, so none is created here.
+#
+# The server uses a self-signed certificate, which is what the TLS test relies
+# on: it checks the DSN's encrypt and TrustServerCertificate settings are
+# honoured.
+#
+# Usage:
+#   docker compose -f .docker/sqlserver/docker-compose.yml up --wait
+#   SQLSERVER_DSN='sqlserver://sa:Iamigrate-Passw0rd@127.0.0.1:1433?database=master&encrypt=true&TrustServerCertificate=true' \
+#     go test ./pkg/connector/sql/sqlserver/... -run TestLive
+#   docker compose -f .docker/sqlserver/docker-compose.yml down -v
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: iamigrate-sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - MSSQL_SA_PASSWORD=Iamigrate-Passw0rd
+    ports:
+      - "127.0.0.1:1433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q 'SELECT 1' -b"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
