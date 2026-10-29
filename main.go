@@ -11,5 +11,5 @@ var version = "dev"
 
 func main() {
 	httpx.Version = version
-	cmd.Execute()
+	cmd.Execute(version)
 }
