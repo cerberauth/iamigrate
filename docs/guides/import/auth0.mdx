@@ -335,6 +335,20 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
   With `--upsert`, Auth0 **replaces** `app_metadata` and `user_metadata` instead of merging them, and matches users on email. Changing a user's email without also sending `email_verified` resets it to `false`.
 </Aside>
 
+## Other tools for importing into Auth0
+
+iamigrate sends users through Auth0's own import job, so Auth0's limits on that job apply to it too. Here is what else can do the import, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [Management API import job](https://auth0.com/docs/manage-users/user-migration/bulk-user-imports) (also the Dashboard) | Auth0 (official) | `POST /api/v2/jobs/users-imports`, which every other tool builds on. Takes `password_hash` (bcrypt `$2a$`/`$2b$`, cost 10) or `custom_password_hash` (argon2, bcrypt, hmac, ldap, md4, md5, sha1, sha256, sha512, pbkdf2, scrypt), `totp`, `phone` and `email` MFA, a chosen `user_id`, and `upsert`. | 500 KB per job, two concurrent jobs per tenant, a two-hour timeout, and results deleted after 24 hours. You write the import schema and split the files yourself. Schema errors show up once the job exists. Upsert overwrites metadata instead of merging it. |
+| [`auth0 users import`](https://auth0.github.io/auth0-cli/auth0_users_import.html) | Auth0 (official) | Starts the same job from the terminal, with `--upsert` and sample payload templates. | The same 500 KB cap per import. It doesn't convert users from another provider, and has no export counterpart. |
+| [User Import / Export extension](https://github.com/auth0-extensions/auth0-user-import-export-extension) | Auth0 (official, deprecated) | Imported and exported users from the Dashboard. | Deprecated, with its features moved to the Dashboard. The repository was archived in April 2026. |
+| [Auth0 Deploy CLI](https://github.com/auth0/auth0-deploy-cli) | Auth0 (official) | Manages tenant configuration: applications, APIs, connections, actions, roles and so on. | Its resource list doesn't include users. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Translates CMF from any source into Auth0's schema, chunks it under the size limit, polls every chunk, resumes after an interruption, and creates organizations, roles and memberships. `validate` checks the file offline, and `diff` checks the tenant afterwards. | Doesn't import WebAuthn, push or recovery codes, and can't give Auth0 users a password without a hash. |
+
+Use Auth0's own job directly for a one-off file that already matches its schema. Use iamigrate when the users come from another provider, when the file is too large for one job, or when you want a check before and after.
+
 ## See also
 
 - [`import auth0` reference](../../../reference/cli/import-auth0/)

@@ -9,6 +9,7 @@ import (
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/azureb2c"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
@@ -34,6 +35,9 @@ const (
 	paramExportLimit      = "export_limit"
 	paramHashRounds       = "hash_rounds"
 	paramHashMemCost      = "hash_mem_cost"
+	paramTenant           = "tenant"
+	paramExtensionAttrs   = "extension_attributes"
+	paramFilter           = "filter"
 )
 
 // jobConnectors builds the connectors of a job from its params.
@@ -108,8 +112,24 @@ func jobSource(j *jobs.Job) (connector.SourceConnector, connector.ExportOptions,
 			return nil, nil, err
 		}
 		return auth0.New(client), opts, nil
+	case azureb2c.Name:
+		client, err := (&azureB2CFlags{tenant: p[paramTenant]}).client()
+		if err != nil {
+			return nil, nil, err
+		}
+		opts := azureb2c.ExportOptions{Filter: p[paramFilter]}
+		if a := p[paramExtensionAttrs]; a != "" {
+			opts.ExtensionAttributes = strings.Split(a, ",")
+		}
+		if err := azureb2c.ValidateExtensionAttributes(opts.ExtensionAttributes); err != nil {
+			return nil, nil, err
+		}
+		if opts.Limit, err = intParam(p, paramExportLimit, 0); err != nil {
+			return nil, nil, err
+		}
+		return azureb2c.New(client), opts, nil
 	default:
-		return nil, nil, fmt.Errorf("unsupported source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\")", name)
+		return nil, nil, fmt.Errorf("unsupported source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", \"auth0\", and \"azure-ad-b2c\")", name)
 	}
 }
 

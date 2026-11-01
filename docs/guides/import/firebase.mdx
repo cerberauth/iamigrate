@@ -229,6 +229,19 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 | `--service-account (or GOOGLE_APPLICATION_CREDENTIALS), or --access-token ... is required` | Missing credentials | Set the environment variable, or pass the flag |
 | Sign-in fails with the right password | The hash parameters differ from the ones the CMF record carries, or the Email/Password sign-in method is disabled | Check the project's sign-in methods, then re-export with the right `--hash-*` values |
 
+## Other tools for importing into Firebase
+
+Firebase's own tools call the same Identity Toolkit import API as iamigrate. Here is what else can do the import, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`firebase auth:import`](https://firebase.google.com/docs/cli/auth) | Google (official) | Imports a JSON or CSV file. Hash algorithms: BCRYPT, SCRYPT, STANDARD_SCRYPT, HMAC, SHA, MD5 and PBKDF variants. The JSON can carry custom claims, second factors and linked sign-in providers from a fixed list of ten. | One hash algorithm and parameter set per run, so a source with mixed algorithms is split by hand. Without `--hash-algo` it only warns that password users cannot be imported. You prepare the file yourself. |
+| [Firebase Admin SDK](https://firebase.google.com/docs/auth/admin/import-users) `importUsers` | Google (official) | The same API from your own code: up to 1000 users per call, custom claims, phone second factors and provider data. | Per Google's documentation it skips duplicate checks: a matching uid replaces the existing user, and a duplicate email or phone number creates an additional one. The SDK refuses more than 1000 users in a call. Batching, retries and reporting are yours to write. |
+| [Identity Platform migration guide](https://docs.cloud.google.com/identity-platform/docs/migrating-users) | Google (official) | Documents the same import for the Google Cloud edition of the service. | Documentation only. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Translates CMF from any source, groups users by hash algorithm and parameters, retries throttled requests, and keeps the CMF `source_id` as the uid. `validate` checks the file offline, including duplicates, and `diff` checks the project afterwards. | Only `bcrypt` and `scrypt` hashes, SMS second factors only, and no linked sign-in providers. |
+
+If your source hashes with `md5`, `sha256` or `pbkdf2`, Firebase's own tools can import those hashes where iamigrate can't. Use iamigrate when the users come from another provider, mix several algorithms, or need a check before and after.
+
 ## See also
 
 - [Export users from Firebase](../../export/firebase/)

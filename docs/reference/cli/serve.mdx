@@ -32,7 +32,7 @@ curl -X POST http://127.0.0.1:8080/jobs -d '{
 }'
 ```
 
-The keys are `target`, `users`, `source`, `mapping`, `connection_id`, `upsert`, `in`, `format`, `source_mapping`, `admin_url`, `schema_id`, `schema_file`, `connection`, `connection_config`, `export_connection_id`, `export_fields`, `export_limit`, `hash_rounds` and `hash_mem_cost`, each matching the `job create` flag of the same name. The params are checked as `job create` checks them, and a mistake is a `400`. Poll `GET /jobs/{id}` until `state` is `done` or `failed`.
+The keys are `target`, `users`, `source`, `mapping`, `connection_id`, `upsert`, `in`, `format`, `source_mapping`, `admin_url`, `schema_id`, `schema_file`, `connection`, `connection_config`, `export_connection_id`, `export_fields`, `export_limit`, `tenant`, `filter`, `extension_attributes`, `hash_rounds` and `hash_mem_cost`, each matching the `job create` flag of the same name. The params are checked as `job create` checks them, and a mistake is a `400`. Poll `GET /jobs/{id}` until `state` is `done` or `failed`.
 
 Errors are `{"error": "..."}` with the matching status: `400` for a bad request, `401` for a missing or wrong token, `404` for an unknown job, `409` for a request the job's state doesn't allow.
 

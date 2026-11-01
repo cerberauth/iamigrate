@@ -166,6 +166,19 @@ iamigrate export --source keycloak --in ./realm-export --out ./export/
 
 Every fixture user comes back with the same identifiers and password hash, but with a Keycloak UUID as `source_id` and no group/role data. That's the data loss described in [Step 4](#4-understand-whats-exported).
 
+## Other tools for exporting from Keycloak
+
+Here is what else can export users from a realm, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`kc.sh export`](https://www.keycloak.org/server/importExport) | Keycloak (official) | Exports a realm and its users, credentials included, in separate files of 50 users by default. | Keycloak's docs say to stop the server first, because the export isn't consistent otherwise. Run next to a live server (26.7.4 on Postgres), it wrote complete files but exited 1 with "Address already in use" on the management port. The output is Keycloak's own format. |
+| Admin Console partial export | Keycloak (official) | Exports realm configuration while the server runs. | Never includes users, and masks credentials and secrets. |
+| Admin REST API | Keycloak (official) | Lists users and their attributes. | Never returns a credential's hash, so it can't read passwords. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Reads a `kc.sh export` and writes CMF, without contacting the server. | Only `pbkdf2` and `argon2` hashes (credentials from a custom hash provider are skipped), and no roles, groups or federated identities. HOTP credentials are skipped. |
+
+Keycloak's own export carries everything a realm holds, so use it for a move between two Keycloak servers. iamigrate reads that same export and converts the users into a file any target can take.
+
 ## See also
 
 - [`export` reference](../../../reference/cli/export/)

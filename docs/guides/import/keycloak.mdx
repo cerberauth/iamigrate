@@ -272,6 +272,21 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 | Sign-in fails with the right password | The client used for login doesn't have direct access grants enabled | Enable `directAccessGrantsEnabled` on the client (see [Prove that passwords work](#prove-that-passwords-work)) |
 | Attributes like `phoneNumber` or metadata keys missing after import | Unmanaged attributes aren't enabled on the realm's user profile | Set `unmanagedAttributePolicy: "ENABLED"` (see [Create the realm](#create-the-realm)) |
 
+## Other tools for importing into Keycloak
+
+Here is what else can import users into a realm, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`kc.sh import`](https://www.keycloak.org/server/importExport) and `start --import-realm` | Keycloak (official) | Restores a realm export, users and credentials included. | Offline. Overriding an existing realm needs every node stopped, and `--import-realm` skips a realm that already exists. |
+| Partial import (Admin Console, `kcadm.sh create partialImport`, REST) | Keycloak (official) | Imports resources from a realm export into a running realm, with Fail, Skip or Overwrite for what exists. Honors a user's `id` (tested on Keycloak 26.7.4). | Takes Keycloak's own representation, including `secretData` and `credentialData`. Reports about keeping IDs differ between versions, so test yours. |
+| Admin REST API | Keycloak (official) | Creates users with pre-hashed credentials, one request per user. | `POST /users` ignores a supplied `id`. |
+| [`keycloak-config-cli`](https://github.com/adorsys/keycloak-config-cli) | Community (adorsys) | Applies realm configuration from files in the realm-export format, and can import users on their own. | Built for configuration as code rather than for moving a user base. Updating a user's credentials runs the realm's password policy, and a password that breaks it fails the import with HTTP 400. |
+| [`keycloak-user-migration`](https://github.com/daniel-frak/keycloak-user-migration) | Community (Daniel Frak) | A user federation provider for lazy migration. At sign-in it fetches the user from your legacy system over REST and creates it in Keycloak, then asks the legacy system to verify the password. After a successful sign-in the user signs in without the legacy system (tested with 6.3.0 on Keycloak 26.7.4). | Needs the legacy system online for every user who hasn't signed in yet, and only migrates users who do. The user is created in Keycloak even when the first password is wrong. The legacy response must fill every required profile field, or sign-in fails with "Account is not fully set up". Inspired by Smartling's approach, whose own provider is archived. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Translates CMF from any source into Keycloak users through the Admin API, with no downtime. `validate` checks the file offline, and `diff` checks the realm afterwards. | Only `pbkdf2` and `argon2` hashes, only `totp` MFA, new user IDs, one `POST /users` per user, and no roles or groups. |
+
+Between two Keycloak servers, use Keycloak's own export and import: they carry roles, groups, clients and every credential type. Use iamigrate when the users come from another provider, or when the realm must stay online.
+
 ## See also
 
 - [Export users from Keycloak](../../export/keycloak/)

@@ -192,6 +192,20 @@ From there, follow the import guide for your target:
 | `429` | Management API rate limit | iamigrate retries by itself. If it keeps failing, wait and run it again |
 | `ended with status "failed"` | The export job failed on Auth0's side | Run it again, with `--connection-id` or `--limit` to make the job smaller |
 
+## Other tools for exporting from Auth0
+
+Here is what else can export users from a tenant, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [Bulk user export job](https://auth0.com/docs/manage-users/user-migration/bulk-user-exports) (also the Dashboard) | Auth0 (official) | `POST /api/v2/jobs/users-exports`: NDJSON or CSV, the fields you pick, optionally one connection. | No password hashes or MFA secrets. CSV is capped at 30 fields and can't take whole metadata objects. Not on the Free plan. The download link lasts 60 seconds, and job data is deleted after 24 hours. |
+| [Password hash export](https://auth0.com/docs/manage-users/user-migration/export-password-hashes-and-mfa-secrets) | Auth0 support (official, on request) | A PGP-encrypted file with password hashes and MFA secrets. | Auth0 reviews each request for eligibility ("not all requests qualify") and gives no delivery estimate. The download link expires after 3 days. |
+| Auth0 CLI | Auth0 (official) | Has `users import` but no matching user export command. | — |
+| Community scripts, such as [`djsd123/auth0-bulk-user-exports`](https://github.com/djsd123/auth0-bulk-user-exports) | Community | Drive the export job and convert the result. | They wrap the same job, so the same limits apply. This one is archived. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Runs the export job and writes CMF, with `--fields` and `--connection-id`, a scaffolded `mapping.yaml` for metadata keys, and a documented way to merge in the support file's hashes. | Runs the same job, so the same limits apply. Exports no password hashes, MFA, linked identities, roles or organizations. |
+
+Auth0's own job is the only way to reach everything the tenant exposes. iamigrate adds the canonical format, so what comes out can go straight to `validate` and an import into any supported target.
+
 ## See also
 
 - [`export` reference](../../../reference/cli/export/)

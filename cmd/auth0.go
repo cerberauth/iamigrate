@@ -22,8 +22,8 @@ type auth0Flags struct {
 func (f *auth0Flags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.domain, "domain", "", "Auth0 tenant domain (or $AUTH0_DOMAIN)")
 	cmd.Flags().StringVar(&f.token, "token", "", "Auth0 Management API token (or $AUTH0_TOKEN)")
-	cmd.Flags().StringVar(&f.clientID, "client-id", "", "Machine-to-Machine application client ID, to get a token via client_credentials (or $AUTH0_CLIENT_ID)")
-	cmd.Flags().StringVar(&f.clientSecret, "client-secret", "", "Machine-to-Machine application client secret (or $AUTH0_CLIENT_SECRET)")
+	cmd.Flags().StringVar(&f.clientID, "client-id", "", "Machine-to-Machine application client ID, to get a token via client_credentials (or $AUTH0_CLIENT_ID; azure-ad-b2c source: app registration client ID, or $AZURE_CLIENT_ID)")
+	cmd.Flags().StringVar(&f.clientSecret, "client-secret", "", "Machine-to-Machine application client secret (or $AUTH0_CLIENT_SECRET; azure-ad-b2c source: app registration client secret, or $AZURE_CLIENT_SECRET)")
 	cmd.MarkFlagsMutuallyExclusive("token", "client-id")
 	cmd.MarkFlagsMutuallyExclusive("token", "client-secret")
 }
