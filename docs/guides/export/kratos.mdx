@@ -139,6 +139,18 @@ iamigrate export --source kratos --out ./export/
 
 Every fixture user comes back with the same email and password hash, but with a Kratos UUID as `source_id` and an empty `profile`. That's the data loss described in [Step 3](#3-understand-whats-exported).
 
+## Other tools for exporting from Ory Kratos
+
+Here is what else can export identities, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`kratos list identities`](https://www.ory.com/docs/kratos/cli/kratos-list-identities) | Ory (official) | Pages through identities, with table, JSON or YAML output. | There is no dedicated export command, and the documented flags don't include credentials. |
+| Admin API `GET /admin/identities` | Ory (official) | Returns identities, with the credentials you request, such as the password hash. | You write the paging and the file. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Pages through the Admin API, 250 identities at a time, requests the password credential and writes CMF with a manifest of skipped identities. | Self-hosted instances only, since it calls the Admin API without credentials. Doesn't export MFA or social links, and skips identities without a password hash. |
+
+Ory's tools can return more of an identity than iamigrate exports. iamigrate adds the canonical format, the hash detection and the manifest, so the result can go straight to `validate` and an import into any supported target.
+
 ## See also
 
 - [`export` reference](../../../reference/cli/export/)

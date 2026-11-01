@@ -93,12 +93,13 @@ The server starts a job as soon as it is created, so `job run` only waits for it
 | --- | --- |
 | `--target` | Target connector: `auth0`, `kratos`, `keycloak` or `firebase` (required) |
 | `--users` | CMF users file, written by the export and read by the other steps; gzipped if it ends in `.gz` (required) |
-| `--source` | Source connector: `flatfile`, `kratos`, `keycloak`, `firebase` or `auth0`. Without it there's no export and `--users` must already exist |
+| `--source` | Source connector: `flatfile`, `kratos`, `keycloak`, `firebase`, `auth0` or `azure-ad-b2c`. Without it there's no export and `--users` must already exist |
 | `--mapping` | `mapping.yaml` path |
 | `--upsert` | Allow re-running the import against existing users |
 | `--connection-id`, `--connection` | Auth0 database connection, by ID or name (default: the tenant's only one). Mutually exclusive |
 | `--connection-config` | Auth0 connection JSON, to tighten `validate`'s username rules |
 | `--in`, `--format`, `--source-mapping` | Input of a `flatfile` (`--in`, `--format csv\|json`, `--source-mapping`) or `keycloak` (`--in`) source, as for [`export`](../export/) |
 | `--admin-url`, `--schema-id`, `--schema-file` | Kratos Admin API URL (or `$KRATOS_ADMIN_URL`), identity schema ID, and schema JSON for `validate` |
-| `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options, as for [`export`](../export/) |
+| `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options (`--export-limit` also applies to `azure-ad-b2c`), as for [`export`](../export/) |
+| `--tenant`, `--filter`, `--extension-attributes` | Azure AD B2C source options, as for [`export`](../export/); the client ID and secret come from the environment |
 | `--hash-rounds`, `--hash-mem-cost` | Firebase project's scrypt parameters; the signer key and salt separator come from the environment |

@@ -26,7 +26,7 @@ type firebaseFlags struct {
 func (f *firebaseFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.project, "project", "", "Firebase project ID (or $FIREBASE_PROJECT_ID; default: the service account's project)")
 	cmd.Flags().StringVar(&f.serviceAccount, "service-account", "", "service account key JSON path (or $GOOGLE_APPLICATION_CREDENTIALS)")
-	cmd.Flags().StringVar(&f.accessToken, "access-token", "", "OAuth2 access token, e.g. from gcloud auth print-access-token (or $FIREBASE_ACCESS_TOKEN)")
+	cmd.Flags().StringVar(&f.accessToken, "access-token", "", "OAuth2 access token, e.g. from gcloud auth print-access-token (or $FIREBASE_ACCESS_TOKEN; azure-ad-b2c source: Microsoft Graph access token, or $AZURE_ACCESS_TOKEN)")
 	cmd.MarkFlagsMutuallyExclusive("service-account", "access-token")
 }
 

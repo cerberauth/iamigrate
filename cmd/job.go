@@ -161,7 +161,7 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	}
 
 	fl := cmd.Flags()
-	fl.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0 (default: no export, start from the existing --users file)")
+	fl.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0|azure-ad-b2c (default: no export, start from the existing --users file)")
 	fl.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
 	fl.StringVar(&users, "users", "", "CMF users file: written by the export, read by the other steps (.gz is gzipped)")
 	fl.StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
@@ -181,7 +181,10 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	strParam(paramConnectionConfig, "connection-config", "Auth0 connection JSON path, to tighten username/identifier rules (auth0 target)")
 	strParam(paramExportConnection, "export-connection-id", "export only the users of this Auth0 connection (auth0 source)")
 	strParam(paramExportFields, "export-fields", "export only these Auth0 user attributes, comma-separated (auth0 source)")
-	strParam(paramExportLimit, "export-limit", "export at most this many Auth0 users (auth0 source)")
+	strParam(paramExportLimit, "export-limit", "export at most this many users (auth0 and azure-ad-b2c sources)")
+	strParam(paramTenant, "tenant", "Azure AD B2C tenant domain or directory ID (or $AZURE_TENANT_ID; azure-ad-b2c source)")
+	strParam(paramExtensionAttrs, "extension-attributes", "B2C custom attributes to export, by Graph name, comma-separated (azure-ad-b2c source)")
+	strParam(paramFilter, "filter", "OData $filter limiting the exported users (azure-ad-b2c source)")
 	strParam(paramHashRounds, "hash-rounds", "Firebase project's scrypt rounds (firebase source; default 8)")
 	strParam(paramHashMemCost, "hash-mem-cost", "Firebase project's scrypt memory cost (firebase source; default 14)")
 	_ = cmd.MarkFlagRequired("target")

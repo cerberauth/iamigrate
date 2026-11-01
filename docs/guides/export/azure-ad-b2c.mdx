@@ -1,0 +1,177 @@
+---
+title: Export users from Azure AD B2C
+description: Export the users of an Azure AD B2C tenant into CMF with iamigrate through Microsoft Graph, choose which users and custom attributes to export, and know what is left behind.
+---
+
+import { Aside } from '@/components/docs';
+
+<Aside type="caution">
+  **`iamigrate export --source azure-ad-b2c` can't export password hashes.** Microsoft Graph never returns them, and there is no other supported way to get them out of a B2C tenant, so every user is exported without a password. If you migrate with this export alone, your users will have to reset their password on the target.
+
+  If you don't want to ask your users to reset it, migrate their passwords as they sign in instead. See [Keeping your users' passwords](#keeping-your-users-passwords).
+</Aside>
+
+This guide walks through exporting the users of an Azure AD B2C tenant into the Canonical Migration Format (CMF), choosing which users and attributes to export, checking what came out, and preparing the result for import into another provider.
+
+Azure AD B2C is a source only. New B2C tenants can no longer be created, and a tenant's custom policies (Identity Experience Framework) don't port, so iamigrate has no import for it.
+
+## How iamigrate exports from Azure AD B2C
+
+`iamigrate export --source azure-ad-b2c` pages through the tenant's users with [Microsoft Graph](https://learn.microsoft.com/graph/api/user-list) (`GET /v1.0/users`), 999 at a time, and converts each one into a CMF record. Throttled (`429`) and failing (`5xx`) requests are retried, waiting as long as Graph asks.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- An app registration in the B2C tenant with the Microsoft Graph **application** permission `User.Read.All`, and admin consent granted for it. Follow Microsoft's [Manage Azure AD B2C with Microsoft Graph](https://learn.microsoft.com/azure/active-directory-b2c/microsoft-graph-get-started) guide, then create a client secret for the registration.
+- To export custom attributes, the name of each one (see [Step 2](#2-choose-what-to-export)).
+
+<Aside type="caution">
+  The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 1. Point iamigrate at the tenant
+
+```sh
+export AZURE_TENANT_ID=your-tenant.onmicrosoft.com   # the B2C tenant's domain or directory ID
+export AZURE_CLIENT_ID=...       # the app registration's Application (client) ID
+export AZURE_CLIENT_SECRET=...   # and its client secret
+```
+
+Or use a ready-made Microsoft Graph access token with `AZURE_ACCESS_TOKEN`. `--tenant`, `--client-id`, `--client-secret` and `--access-token` do the same.
+
+## 2. Choose what to export
+
+Every user is exported by default. Three options narrow the export down:
+
+| Flag | Effect |
+| --- | --- |
+| `--filter "creationType eq 'LocalAccount'"` | Only the users matching this [OData `$filter`](https://learn.microsoft.com/graph/filter-query-parameter). Use it to leave out the tenant's administrators and guests. |
+| `--extension-attributes extension_<app ID>_<name>,...` | Also export these custom attributes into `user_metadata`. |
+| `--limit 100` | At most that many users. Use it to try the export, and a trial import, on a small sample first. |
+
+Graph returns custom attributes only when asked for them, by a name of the form `extension_<app ID>_<name>`, where `<app ID>` is the client ID of the tenant's `b2c-extensions-app` without hyphens. Find the exact names with `GET /v1.0/applications/{b2c-extensions-app object ID}/extensionProperties`. Each attribute lands in `user_metadata` under its own name, without the `extension_<app ID>_` prefix. A name that doesn't have this form is refused before anything is requested or written.
+
+<Aside>
+  Every key found in `user_metadata` or `app_metadata` is listed in the scaffolded `mapping.yaml` as a manual step, so you can decide where it goes on the target.
+</Aside>
+
+## 3. Run the export
+
+```sh
+iamigrate export --source azure-ad-b2c --out ./export/
+```
+
+```
+iamigrate: Azure AD B2C doesn't return password hashes through Microsoft Graph: users are exported without a password, so they will have to reset it
+exported 1250 users -> export/users.cmf.jsonl.gz (3 skipped)
+```
+
+The command writes:
+
+```
+export/
+├── users.cmf.jsonl.gz   # one CMF user per exported account
+├── manifest.json        # record count, plus skipped accounts
+└── mapping.yaml         # scaffolded mapping, with no target set yet
+```
+
+The export is a snapshot. Users created, or changed, after it aren't in it, so plan a freeze or a final re-export before cutover.
+
+## 4. Review the manifest
+
+```sh
+cat export/manifest.json
+```
+
+`skipped_records` lists every user that couldn't be exported, with the reason. The command exits with status `0` even then, so check it. A user is skipped when it has no email, username or phone number, for example a user who signed up with a social account that shared no email.
+
+Because there are no passwords, there is no `hash_algorithm_counts`.
+
+## 5. Understand what's exported
+
+The `password` of every CMF record is `null`, and there is no `mfa_factors`.
+
+| Graph property | CMF field |
+| --- | --- |
+| `id` (the object ID) | `source_id` |
+| Sign-in identity `emailAddress`, then `mail`, then `otherMails` | `emails`, without duplicates; the first is primary |
+| Sign-in identity `userName` | `username` |
+| `mobilePhone` | `phones[0]`, marked primary |
+| `givenName`, `surname`, `displayName`, `preferredLanguage` | `profile.given_name`, `family_name`, `name`, `locale` |
+| `accountEnabled` | `blocked`, inverted |
+| Sign-in identities of type `federated` | `app_metadata.federated_identities`, a list of `{issuer, id}` |
+| Custom attributes you asked for | `user_metadata` |
+
+Email addresses and phone numbers are all exported as **not verified**, because Graph doesn't say whether they were.
+
+### Not exported
+
+- **Password hashes.** Graph doesn't return them.
+- **MFA enrollments.** Users will have to enroll again.
+- **Federated identity links.** The issuer and ID of each social or enterprise identity are kept in `app_metadata.federated_identities`, but nothing links them to an identity provider on the target. Set that provider up there, and re-link the users.
+- **Groups, directory roles and application role assignments.**
+- **Custom policies** and user flows.
+- **Timestamps**, such as creation and last sign-in.
+
+## Keeping your users' passwords
+
+A B2C tenant can't give up its password hashes, so a migration that keeps users' passwords has to check each password against B2C instead of exporting it. This is a lazy migration: the export above creates every user on the target as a profile without a usable password, and each user's password is verified against B2C the first time they sign in on the target. When it matches, the target stores it, and that user never has to reset anything. Once the share of users who have signed in levels off, the remaining ones get a password reset.
+
+The approach, including how to handle users with MFA and how to decide when to stop, is described in [Migrating from Azure AD B2C without password export](https://www.cerberauth.com/blog/migrating-from-azure-b2c-without-password-export/#a-reminder-about-azure-ad-b2c-deprecation). iamigrate doesn't do the password check itself: that part runs in the target, so it depends on what your target supports. Use this export for the profiles.
+
+If you'd rather not run a lazy migration, migrate with this export as is. Users are created without a password and have to reset it.
+
+## 6. Prepare for import
+
+`mapping.yaml` is scaffolded with `target: ""`. Set the target before you validate with it:
+
+```sh
+iamigrate map --target <target> --mapping ./export/mapping.yaml
+```
+
+Then check the export against the target's capabilities. No network calls are made:
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml --target <target>
+```
+
+From there, follow the import guide for your target:
+
+- [Import users into Auth0](../../import/auth0/)
+- [Import users into Ory Kratos](../../import/kratos/)
+- [Import users into Keycloak](../../import/keycloak/)
+- [Import users into Firebase](../../import/firebase/)
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `--tenant (or AZURE_TENANT_ID) is required` | Client credentials without a tenant | Set `AZURE_TENANT_ID` or pass `--tenant` |
+| `... is not a custom attribute name` | An `--extension-attributes` name isn't `extension_<app ID>_<name>` | Use the names Graph lists for the `b2c-extensions-app` |
+| `401` when requesting the token | Wrong client ID, secret or tenant, or an expired secret | Check them against the app registration |
+| `403` listing users | The app lacks `User.Read.All`, or admin consent wasn't granted | Grant the application permission, then consent |
+| `400` listing users | An invalid `--filter` | Check the expression against Graph's [filter syntax](https://learn.microsoft.com/graph/filter-query-parameter) |
+| `429` | Graph throttling | iamigrate retries by itself. If it keeps failing, wait and run it again |
+
+## Other tools for exporting from Azure AD B2C
+
+Here is what else can export users from a tenant, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [Microsoft Graph PowerShell](https://learn.microsoft.com/powershell/microsoftgraph/overview) `Get-MgUser` | Microsoft (official) | Lists users, which you pipe to `Export-Csv` or JSON. | `Get-MgUser` returns 100 users unless you pass `-All`. You choose the properties, map them to a target's format yourself, and ask for each custom attribute by name. No password hashes. |
+| [Microsoft Graph API](https://learn.microsoft.com/graph/api/user-list) | Microsoft (official) | The same data from your own code, with paging through `@odata.nextLink`. | You write the paging, the retries and the file. No password hashes. |
+| [`B2C-devdiv` export/import scripts](https://github.com/cljung/B2C-devdiv/tree/main/9-export-import) | Community | Export a tenant's users to JSON through Graph, and import them into another B2C tenant. | Written for moving between B2C tenants, and old. |
+| [`AzureADExporter`](https://github.com/noblevarghese/azureadexporter) | Community | A PowerShell module that exports a tenant's configuration, and its users with `-Type "Users"`, to JSON files. | A backup of the tenant's settings, not a migration format. |
+| [Skycloak's guide](https://skycloak.io/blog/migrate-azure-ad-b2c-to-keycloak/) | Skycloak (third party) | Walks through a Graph export and a Keycloak import, with a custom authenticator to check passwords against B2C. | Written for that one target. |
+| [Auth0's ROPC login script](https://community.auth0.com/t/migrating-azure-b2c-aad-users-into-auth0/95564) | Auth0 community | A custom database login script that checks a password against B2C as users sign in. | Auth0 only. It needs a B2C user flow, and it covers the password, not the profile export. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Pages through Graph with retries and writes CMF, with `--filter`, `--extension-attributes` and `--limit`, and a scaffolded `mapping.yaml` for metadata keys. | Exports no password hashes, MFA, groups or roles. Email addresses and phone numbers are marked unverified. |
+
+None of these exports a password, because Graph doesn't return one. iamigrate adds the canonical format, so what comes out can go straight to `validate` and an import into any supported target, and the lazy migration above can then run on that target.
+
+## See also
+
+- [`export` reference](../../../reference/cli/export/)
+- [`map` reference](../../../reference/cli/map/)
+- [`validate` reference](../../../reference/cli/validate/)
+- [`set-passwords` reference](../../../reference/cli/set-passwords/)

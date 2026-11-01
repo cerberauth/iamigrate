@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/azureb2c"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
@@ -34,14 +35,16 @@ func newExportCmd() *cobra.Command {
 		fbHash   firebaseHashFlags
 		a0Auth   auth0Flags
 		a0Export auth0.ExportOptions
+		azAuth   azureB2CFlags
+		azExport azureb2c.ExportOptions
 	)
 
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Export identities from a source into CMF",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name {
-				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", and \"auth0\"; use `iamigrate testdata generate` for the fixture source)", source)
+			if source != flatfile.Name && source != kratos.Name && source != keycloak.Name && source != firebase.Name && source != auth0.Name && source != azureb2c.Name {
+				return fmt.Errorf("unsupported --source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", \"auth0\", and \"azure-ad-b2c\"; use `iamigrate testdata generate` for the fixture source)", source)
 			}
 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
 				return fmt.Errorf("--in is required for --source %s", source)
@@ -93,6 +96,20 @@ func newExportCmd() *cobra.Command {
 				fmt.Fprintln(cmd.ErrOrStderr(), "iamigrate: Auth0 doesn't return password hashes through its API: users are exported without a password, so they will have to reset it (see the Auth0 export guide to get the hashes from Auth0 support)")
 			}
 
+			// And for Azure AD B2C.
+			var azClient *azureb2c.Client
+			if source == azureb2c.Name {
+				var err error
+				if azClient, err = azAuth.withCredentials(fbAuth.accessToken, a0Auth.clientID, a0Auth.clientSecret).client(); err != nil {
+					return err
+				}
+				if err := azureb2c.ValidateExtensionAttributes(azExport.ExtensionAttributes); err != nil {
+					return err
+				}
+				azExport.Limit = a0Export.Limit
+				fmt.Fprintln(cmd.ErrOrStderr(), "iamigrate: Azure AD B2C doesn't return password hashes through Microsoft Graph: users are exported without a password, so they will have to reset it")
+			}
+
 			if err := os.MkdirAll(outDir, 0o755); err != nil {
 				return err
 			}
@@ -135,6 +152,9 @@ func newExportCmd() *cobra.Command {
 			case auth0.Name:
 				bar.Stage("exporting users", 0)
 				manifest, err = auth0.New(a0Client).Export(ctx, w, a0Export)
+			case azureb2c.Name:
+				bar.Stage("exporting users", 0)
+				manifest, err = azureb2c.New(azClient).Export(ctx, w, azExport)
 			default:
 				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format), Mapping: fileMapping}
 				bar.Stage("exporting users", 0)
@@ -186,7 +206,7 @@ func newExportCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0")
+	cmd.Flags().StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0|azure-ad-b2c")
 	_ = cmd.MarkFlagRequired("source")
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
@@ -196,9 +216,12 @@ func newExportCmd() *cobra.Command {
 	fbAuth.register(cmd)
 	fbHash.register(cmd)
 	a0Auth.register(cmd)
+	azAuth.register(cmd)
+	cmd.Flags().StringSliceVar(&azExport.ExtensionAttributes, "extension-attributes", nil, "B2C custom attributes to export into user_metadata, by Graph name, comma-separated: extension_<app ID>_<name> (azure-ad-b2c source)")
+	cmd.Flags().StringVar(&azExport.Filter, "filter", "", "OData $filter limiting the exported users, e.g. \"creationType eq 'LocalAccount'\" (default: every user; azure-ad-b2c source)")
 	cmd.Flags().StringVar(&a0Export.ConnectionID, "connection-id", "", "export only the users of this connection, e.g. con_xxx (default: every connection; auth0 source)")
 	cmd.Flags().StringSliceVar(&a0Export.Fields, "fields", nil, "export only these user attributes, comma-separated; user_id is always exported (default: all of "+strings.Join(auth0.ExportFields, ",")+"; auth0 source)")
-	cmd.Flags().IntVar(&a0Export.Limit, "limit", 0, "export at most this many users, to try an export on a sample (default: no limit; auth0 source)")
+	cmd.Flags().IntVar(&a0Export.Limit, "limit", 0, "export at most this many users, to try an export on a sample (default: no limit; auth0 and azure-ad-b2c sources)")
 	addHooksFlag(cmd)
 	cmd.Flags().BoolVar(&noGzip, "no-gzip", false, "write users.cmf.jsonl uncompressed instead of users.cmf.jsonl.gz")
 	return cmd

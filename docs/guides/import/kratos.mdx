@@ -300,6 +300,20 @@ Once the rehearsal passes, repeat steps 3–8 with your real data:
 | `--admin-url (or $KRATOS_ADMIN_URL) is required` | No Admin API URL set | `export KRATOS_ADMIN_URL=http://127.0.0.1:4434` |
 | Sign-in fails with the right password | Password method disabled, or `email` isn't a password identifier in the schema | Check `selfservice.methods.password` and the schema (see [Step 1](#check-the-identity-schema)) |
 
+## Other tools for importing into Ory Kratos
+
+Here is what else can import identities, who maintains it, and where it stops. Ory's importer is the most capable of the four providers.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`kratos import identities`](https://www.ory.com/docs/kratos/cli/kratos-import-identities) | Ory (official) | Imports identity JSON files or stdin through the Admin API, with `kratos identities validate` to check them first. | You write the identity JSON for your schema yourself. It sends one request per identity, prints each failure and exits non-zero, and stops at the first identity it can't parse. |
+| [Admin API](https://www.ory.com/docs/kratos/manage-identities/import-user-accounts-identities) (`POST` and batch `PATCH /admin/identities`) | Ory (official) | Hashes: bcrypt, Argon2, MD5, SHA, SSHA, PBKDF2, scrypt, Firebase scrypt, crypt(3) and HMAC, plus cleartext passwords (all accepted by v1.3.1 and v26.2.0). Also OIDC links, and SAML links from v26.2.0. | Ory's docs also list TOTP, passkey and WebAuthn import, but v1.3.1 and v26.2.0 reject `totp`, `lookup_secret`, `webauthn` and `passkey` as unknown fields. Those are on the main branch only, and v1.3.1 rejects `saml` too. Ory's docs describe a `with_partial_inserts` option for batches, which both versions reject as an unknown field. A conflicting identity in a batch fails alone on v26.2.0, but on v1.3.1 it leaves the whole batch unsaved while the response still reports the others as created. Neither version accepts a chosen `id`, and v26.2.0 accepts an `external_id`. Ory advises pre-hashing above 20 cleartext passwords to avoid timeouts. |
+| [Password migration webhook](https://www.ory.com/docs/kratos/manage-identities/import-user-accounts-identities) | Ory (official) | Imports identities without a hash, then asks your endpoint to verify the password at first sign-in. A wrong password is refused. A right one stores the hash, and the endpoint isn't called again for that identity (tested on v26.2.0). | Needs an endpoint that can check the legacy passwords until every user has signed in, and that endpoint receives the cleartext password. |
+| [Migrate from Auth0](https://www.ory.com/docs/migrate-to-ory/migrate-from-auth0) | Ory (official) | A script that turns an Auth0 export and the hash file from Auth0 support into identities. | Auth0 as the only source. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Translates CMF from any source into identities for a schema you name. `validate` checks the file offline, and `diff` checks the instance afterwards. | Only `bcrypt` and `argon2id` hashes, no second factors (v1.3.1 and v26.2.0 both reject the TOTP and recovery code payloads, so those users aren't created), no social links, no cleartext passwords, and one `POST` per identity. |
+
+If you can write the identity JSON yourself, Ory's tools import more than iamigrate does. Use iamigrate when the users come from another provider and you want the conversion, the check before and the reconciliation after done for you.
+
 ## See also
 
 - [Export users from Ory Kratos](../../export/kratos/)

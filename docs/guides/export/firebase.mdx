@@ -162,6 +162,20 @@ From there, follow the import guide for your target:
 - [Import users into Keycloak](../../import/keycloak/)
 - [Import users into Firebase](../../import/firebase/), for example to move between Firebase projects
 
+## Other tools for exporting from Firebase
+
+Here is what else can export users from a project, who maintains it, and where it stops.
+
+| Tool | Maintained by | What it does | Limits |
+| --- | --- | --- | --- |
+| [`firebase auth:export`](https://firebase.google.com/docs/cli/auth) | Google (official) | Exports to JSON or CSV, with custom claims, timestamps and linked providers from a fixed list of ten. | Writes the hash and salt only for accounts hashed with Firebase's scrypt. CSV leaves out `mfaInfo`. It doesn't output the project's hash parameters, which you read in the console. |
+| [Firebase Admin SDK](https://firebase.google.com/docs/auth/admin/import-users) `listUsers` | Google (official) | The same data from your own code, with all linked providers and second factors. | You write the paging and the file. The hash and salt are returned only for accounts hashed with Firebase's scrypt, and are empty for the others. The project's hash parameters aren't returned. |
+| [`firebase-to-supabase`](https://github.com/supabase-community/firebase-to-supabase/tree/main/auth) | Supabase (community) | Exports users to JSON, then imports them into Supabase. | One direction: Supabase is the only target. |
+| [Skycloak's Firebase export](https://skycloak.io/blog/migrate-firebase-auth-to-keycloak/) | Skycloak (third party) | A Node.js export script written for a Keycloak migration. | Written for that one target. |
+| iamigrate | [Cerberauth](https://www.cerberauth.com) | Exports into CMF, and keeps the project's hash parameters with each hash so another provider can verify it. Without the signer key, every hash is marked non-portable. | Doesn't export linked providers or timestamps. TOTP enrollments are flagged non-portable, since Firebase never returns the secret. Only the default tenant. |
+
+Firebase's own tools cover more of the account, such as linked providers and timestamps. iamigrate is the one that carries the hash parameters with the hash, so the export can move to any provider that supports the algorithm.
+
 ## See also
 
 - [`export` reference](../../../reference/cli/export/)

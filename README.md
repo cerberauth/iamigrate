@@ -169,6 +169,21 @@ export AUTH0_TOKEN=...
 iamigrate export --source auth0 --fields email,email_verified,given_name,family_name --out ./export/
 ```
 
+## Exporting from Azure AD B2C
+
+Azure AD B2C is a source only: `export --source azure-ad-b2c` pages through a
+tenant's users with Microsoft Graph and writes them into CMF. Graph never
+returns password hashes, so users come out without a password and will have to
+reset it (see the [export guide](docs/guides/export/azure-ad-b2c.mdx)). The app
+registration needs the `User.Read.All` application permission.
+
+```sh
+export AZURE_TENANT_ID=your-tenant.onmicrosoft.com
+export AZURE_CLIENT_ID=...
+export AZURE_CLIENT_SECRET=...
+iamigrate export --source azure-ad-b2c --filter "creationType eq 'LocalAccount'" --out ./export/
+```
+
 ## Resumable jobs
 
 `iamigrate job` runs export, validate, import and verify as one job whose
