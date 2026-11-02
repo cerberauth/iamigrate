@@ -162,3 +162,26 @@ func TestValidateUserUsernameRulesWithoutSchema(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateUserMetadataIdentifierKeys(t *testing.T) {
+	c := &Connector{}
+
+	require.Empty(t, c.ValidateUser(cmf.User{SourceID: "u1", UserMetadata: map[string]any{"plan": "pro"}}))
+
+	problems := c.ValidateUser(cmf.User{
+		SourceID:     "u2",
+		UserMetadata: map[string]any{"email": "a@example.com", "phone": "1", "plan": "pro"},
+	})
+	require.Len(t, problems, 2)
+	var values []string
+	for _, p := range problems {
+		require.Equal(t, "u2", p.SourceID)
+		require.Equal(t, "user_metadata", p.Field)
+		require.Contains(t, p.Rule, "metadata:")
+		values = append(values, p.Value)
+	}
+	require.ElementsMatch(t, []string{"email", "phone"}, values)
+
+	// app_metadata goes to metadata_admin, not the traits.
+	require.Empty(t, c.ValidateUser(cmf.User{SourceID: "u3", AppMetadata: map[string]any{"email": "x"}}))
+}

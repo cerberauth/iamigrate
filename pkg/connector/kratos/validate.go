@@ -113,7 +113,8 @@ func digMap(m map[string]any, keys ...string) (map[string]any, bool) {
 	return cur, true
 }
 
-// ValidateUser checks u offline. The username rules apply on their own;
+// ValidateUser checks u offline. The username and user_metadata rules apply
+// on their own;
 // the rest checks u's traits against c.IdentitySchema (--schema-file):
 // required fields, formats, and additionalProperties come from the schema
 // itself, and ValidateUser also flags a user with no value set for any
@@ -121,7 +122,7 @@ func digMap(m map[string]any, keys ...string) (map[string]any, bool) {
 // create a usable identity without one. Without a --schema-file, only the
 // username rules are checked.
 func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
-	problems := usernameProblems(u)
+	problems := append(usernameProblems(u), metadataProblems(u)...)
 	if c.IdentitySchema == nil {
 		return problems
 	}
@@ -149,6 +150,24 @@ func (c *Connector) ValidateUser(u cmf.User) []connector.Problem {
 		})
 	}
 
+	return problems
+}
+
+// metadataProblems reports a user_metadata key named like an identifier
+// trait: the connector copies user_metadata into the traits, so the key
+// would collide with the trait set from the user's identifiers (which
+// wins; the value is kept in metadata_public only).
+func metadataProblems(u cmf.User) []connector.Problem {
+	var problems []connector.Problem
+	for _, k := range identifierTraitNames {
+		if _, ok := u.UserMetadata[k]; ok {
+			problems = append(problems, connector.Problem{
+				SourceID: u.SourceID, Field: "user_metadata",
+				Rule:  "key collides with an identifier trait and would not be written to the traits; move or drop it with a `metadata:` route in the mapping",
+				Value: k,
+			})
+		}
+	}
 	return problems
 }
 

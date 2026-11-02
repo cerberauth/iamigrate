@@ -97,7 +97,7 @@ metadata:
   - {key: internal_notes, from: app_metadata, destination: drop}
 ```
 
-Use it for a key that would collide with something the connector sets: the Kratos connector copies `user_metadata` into the identity's traits, so a `user_metadata.email` would otherwise overwrite the user's email trait.
+Use it for a key that would collide with something the connector sets: the Kratos connector copies `user_metadata` into the identity's traits, so a `user_metadata.email` collides with the user's email trait. The user's own identifier wins and the key stays in `metadata_public` only, and `validate` reports the collision.
 
 The routes are the same for every user. To place keys differently per user, delegate to a handler with [`metadata.place`](../hooks/strategies/#metadataplace): the keys it places are taken before the routes, which then apply to the rest.
 

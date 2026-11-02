@@ -55,11 +55,20 @@ type userFlags struct {
 	requiresRecoveryCodeRegen bool
 }
 
+// identifierTraitNames are the traits iamigrate sets from the user's
+// identifiers.
+var identifierTraitNames = []string{traitEmail, traitUsername, traitPhone}
+
 // buildTraits maps a CMF user's identifiers and user_metadata onto the
 // Kratos traits object, shared by buildIdentity (Import) and ValidateUser
-// (an offline check against a --schema-file identity schema).
+// (an offline check against a --schema-file identity schema). The user's
+// own identifiers win over a user_metadata key of the same name, which
+// stays available in metadata_public.
 func buildTraits(u cmf.User) map[string]any {
 	traits := map[string]any{}
+	for k, v := range u.UserMetadata {
+		traits[k] = v
+	}
 	if len(u.Emails) > 0 {
 		traits[traitEmail] = u.Emails[0].Value
 	}
@@ -68,9 +77,6 @@ func buildTraits(u cmf.User) map[string]any {
 	}
 	if len(u.Phones) > 0 {
 		traits[traitPhone] = u.Phones[0].Value
-	}
-	for k, v := range u.UserMetadata {
-		traits[k] = v
 	}
 	return traits
 }
