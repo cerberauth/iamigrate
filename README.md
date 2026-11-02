@@ -155,6 +155,29 @@ disposable Firebase Auth emulator for trying this locally is in
 [`.docker/firebase`](.docker/firebase); it stores imported password hashes
 but doesn't verify them, so checking that logins work needs a real project.
 
+## Migrating into AWS Cognito
+
+AWS Cognito is a destination only: it has no API that returns a password
+hash, and none that takes one. `import cognito` creates the users of a CMF
+file in a user pool with the admin API, without their password. Each gets a
+random one nobody knows, so that it can use "Forgot password"; the import
+report lists them under `requires_password_reset`.
+
+```sh
+# Import a CMF file as new users into a user pool (AWS credentials from the
+# environment, the region from the pool ID)
+iamigrate import cognito --in ./fixtures/users.cmf.jsonl.gz \
+  --user-pool-id eu-west-1_AbCdEfGhI
+
+# Reconcile a CMF file against the live pool after import
+iamigrate diff cognito --in ./fixtures/users.cmf.jsonl.gz \
+  --user-pool-id eu-west-1_AbCdEfGhI
+```
+
+Users that must keep their password can instead be migrated on their first
+sign-in by a Migrate user Lambda trigger, which iamigrate doesn't deploy. See
+[Import users into AWS Cognito](docs/guides/import/cognito.mdx).
+
 ## Exporting from Auth0
 
 Auth0 can also be a source: `export --source auth0` runs a user export job and

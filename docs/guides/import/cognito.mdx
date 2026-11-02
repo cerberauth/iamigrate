@@ -1,0 +1,118 @@
+---
+title: Import users into AWS Cognito
+description: Step-by-step guide to importing users into an AWS Cognito user pool with iamigrate, including how users get their password back.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through an import into an AWS Cognito user pool: preparing the pool and credentials, rehearsing with synthetic users, validating, importing, verifying, and getting users their password back.
+
+Cognito is a **destination only**. It has no API that returns a password hash, and none that takes one, so a migration into Cognito can't carry passwords over. Users are created without theirs and set a new one with "Forgot password", or keep using the old one through a Lambda trigger (see [Keep passwords with a Lambda trigger](#keep-passwords-with-a-lambda-trigger)).
+
+## How iamigrate imports into Cognito
+
+`iamigrate import cognito` creates users one by one with the admin API:
+
+1. `AdminCreateUser` creates the user with its attributes and **no invitation message**.
+2. `AdminSetUserPassword` gives it a random permanent password nobody knows. A user left without one stays in `FORCE_CHANGE_PASSWORD`, a state "Forgot password" does not work in; with a password it is `CONFIRMED` and can reset it.
+3. `AdminDisableUser` disables a user whose CMF record is `blocked`.
+
+The pool's admin API is rate limited. A throttled request is retried up to six times, doubling the delay, before the user is reported as failed.
+
+Cognito has no organizations or roles, so `organizations.cmf.jsonl` and `roles.cmf.jsonl` are ignored.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A user pool. **Use a disposable pool for the rehearsal**: imported users stay until you delete them.
+- AWS credentials allowed `cognito-idp:AdminCreateUser`, `AdminSetUserPassword`, `AdminGetUser`, `AdminUpdateUserAttributes`, `AdminEnableUser`, `AdminDisableUser` and `ListUsers` on the pool.
+- For users to reset their password, the pool must be able to deliver a code: a verified email or phone number on the user, and email or SMS delivery configured on the pool.
+
+## 1. Point iamigrate at the pool
+
+```sh
+export COGNITO_USER_POOL_ID=eu-west-1_AbCdEfGhI
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+```
+
+`import cognito` and `diff cognito` read these (you can pass `--user-pool-id`, `--region`, `--access-key-id`, `--secret-access-key` and `--session-token` instead). The region is taken from the pool ID unless `$AWS_REGION` or `--region` says otherwise. For an AWS CLI profile, export its credentials first:
+
+```sh
+eval "$(aws configure export-credentials --format env)"
+```
+
+## 2. Choose the identifier users are created under
+
+A Cognito pool signs users in in one of two ways, and `AdminCreateUser` needs the matching identifier:
+
+- **Email or phone number as the username** (the pool's "sign-in options"). Users are created under their email, or phone number. This is iamigrate's default: the first email, else the username, else the first phone number.
+- **A username**, optionally with email or phone number as an alias. Users are created under their username. Set the `identity.primary` strategy in a `mapping.yaml`:
+
+```yaml
+strategies:
+  identity.primary: {strategy: username_first}
+```
+
+A username that isn't the one a user is created under is kept in `preferred_username`. A pool whose usernames can't be an email address refuses a user created under one: use `username_first` there.
+
+## 3. Generate a representative test export
+
+```sh
+iamigrate testdata generate --count 50 --hash bcrypt:cost=10 --identifier email+phone --out ./fixtures
+```
+
+## 4. Validate against Cognito (no network calls)
+
+```sh
+iamigrate validate --in ./fixtures/users.cmf.jsonl.gz --target cognito --mapping mapping.yaml
+```
+
+A password is not a problem for Cognito: whatever the algorithm, it can't be imported and the user is reported under `requires_password_reset` instead. `validate` checks that every user has an identifier to be created under, that a username is at most 128 characters without whitespace, that emails are valid, that phone numbers are in E.164 format (`+14155550123`), and no email, username or phone number appears twice. Cognito's `AliasExistsException` and a custom attribute missing from the pool's schema can only be found by running the import.
+
+## 5. Run the import
+
+```sh
+iamigrate import cognito --in ./fixtures/users.cmf.jsonl.gz --mapping mapping.yaml
+```
+
+The summary counts users imported and failed, with a line per failure code. A rerun fails the users already imported with `UsernameExistsException`; pass `--upsert` to update their attributes instead (only those that differ are sent), or `conflict: {on_duplicate: skip}` in the mapping to skip them.
+
+## 6. Handle users that need follow-up
+
+`import-report.json` lists:
+
+- `requires_password_reset`: users that had a password. They sign in by "Forgot password". Tell them, or trigger the reset yourself with `AdminResetUserPassword`, which puts the user in `RESET_REQUIRED` and, if they have a verified email or phone number, sends them a code.
+- `requires_reenrollment`: users that had a second factor. Cognito can't import any, so they enroll again.
+- `target_ids`: each user's `source_id` mapped to its Cognito `sub`.
+
+## 7. Verify the import
+
+```sh
+iamigrate diff cognito --in ./fixtures/users.cmf.jsonl.gz --mapping mapping.yaml
+```
+
+This looks every user up and reports those missing, and drift in the blocked state and the email's verified flag. Pass the same `--mapping` as the import, so the lookup uses the identifier users were created under.
+
+## Keep passwords with a Lambda trigger
+
+When users must keep their current password, Cognito's own mechanism is the **Migrate user Lambda trigger**: a user signs in against the pool, Cognito finds nobody, and calls your Lambda, which checks the credentials against the old system and returns the user's attributes for Cognito to create it with the password they typed. That Lambda is deployed in your AWS account; iamigrate does not create it.
+
+Use the two together: import with iamigrate the users that can reset by email, or all of them to have their attributes, and leave the trigger to migrate the rest on their first sign-in. A user the trigger creates first can't be created again by the import: it fails with `UsernameExistsException`, so run the import first.
+
+## Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| `InvalidParameterException` saying the username should be an email | The pool signs users in by email: use `email_first`. |
+| `InvalidParameterException` saying the username cannot be in email format | The pool signs users in by username, with email as an alias: use `username_first`. |
+| `InvalidParameterException` about the attributes not conforming to the schema | A `custom:<name>` attribute is not in the pool's schema, or a value is out of its range. |
+| `AliasExistsException` | The email or phone number is already another user's alias in the pool. |
+| `UsernameExistsException` | The user exists: rerun with `--upsert`, or skip it. |
+| `NotAuthorizedException` / `AccessDeniedException` | The credentials lack one of the permissions listed above. |
+| "Forgot password" doesn't send a code | The user has no verified email or phone number, or the pool has no delivery configured. |
+
+## See also
+
+- [`import cognito`](../../../reference/cli/import-cognito/) and [`diff cognito`](../../../reference/cli/diff-cognito/)
+- [`mapping.yaml`](../../../reference/mapping/)

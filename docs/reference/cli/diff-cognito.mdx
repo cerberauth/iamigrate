@@ -1,0 +1,29 @@
+---
+title: diff cognito
+description: Reconcile a CMF file against a live AWS Cognito user pool.
+---
+
+Looks up every CMF user in the pool with `AdminGetUser`, by the identifier the import creates it under (the first email, else the username, else the first phone number), and reports anyone missing, plus any drift between CMF `blocked` and the user being disabled, or between the email's `verified` state and `email_verified`. A user with no identifier can't be looked up and is listed as `no identifier`.
+
+Pass the same `--mapping` as the import when it sets `identity.primary`, so the lookup uses the identifier the users were created under. Or look them up by `sub`, with an import report and a `verify.lookup: {strategy: target_id}` strategy.
+
+## Usage
+
+```sh
+iamigrate diff cognito --in users.cmf.jsonl.gz --user-pool-id eu-west-1_AbCdEfGhI
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--user-pool-id` | Cognito user pool ID (or `$COGNITO_USER_POOL_ID`) (required) |
+| `--region` | AWS region (or `$AWS_REGION`; default: the user pool ID's) |
+| `--access-key-id` | AWS access key ID (or `$AWS_ACCESS_KEY_ID`) |
+| `--secret-access-key` | AWS secret access key (or `$AWS_SECRET_ACCESS_KEY`) |
+| `--session-token` | AWS session token, for temporary credentials (or `$AWS_SESSION_TOKEN`) |
+| `--endpoint-url` | Cognito API URL, to reach an emulator (or `$AWS_ENDPOINT_URL_COGNITO_IDP`, `$AWS_ENDPOINT_URL`) |
+| `--mapping` | `mapping.yaml` path: `identity.primary`, and the `verify.lookup` and `verify.compare` [strategies](../../hooks/strategies/) (optional) |
+| `--report` | `import-report.json` of the import verified: its target IDs (the `sub`s), for `verify.lookup: {strategy: target_id}`, and the users it skipped on purpose, which aren't looked for (optional) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |

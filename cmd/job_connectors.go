@@ -10,6 +10,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
 	"github.com/cerberauth/iamigrate/pkg/connector/azureb2c"
+	"github.com/cerberauth/iamigrate/pkg/connector/cognito"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
@@ -38,6 +39,9 @@ const (
 	paramTenant           = "tenant"
 	paramExtensionAttrs   = "extension_attributes"
 	paramFilter           = "filter"
+	paramUserPoolID       = "user_pool_id"
+	paramRegion           = "region"
+	paramEndpointURL      = "endpoint_url"
 )
 
 // jobConnectors builds the connectors of a job from its params.
@@ -177,10 +181,16 @@ func jobTarget(j *jobs.Job) (connector.TargetConnector, error) {
 			return nil, err
 		}
 		return firebase.New(client), nil
+	case cognito.Name:
+		client, err := (&cognitoFlags{userPoolID: p[paramUserPoolID], region: p[paramRegion], endpointURL: p[paramEndpointURL]}).client()
+		if err != nil {
+			return nil, err
+		}
+		return cognito.New(client), nil
 	case "":
 		return nil, fmt.Errorf("param %q is required", jobs.ParamTarget)
 	default:
-		return nil, fmt.Errorf("unsupported target %q (supports \"auth0\", \"kratos\", \"keycloak\", and \"firebase\")", name)
+		return nil, fmt.Errorf("unsupported target %q (supports \"auth0\", \"kratos\", \"keycloak\", \"firebase\", and \"cognito\")", name)
 	}
 }
 

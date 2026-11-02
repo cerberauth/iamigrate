@@ -102,7 +102,7 @@ func newIDsAssignCmd() *cobra.Command {
 	cmd.Flags().StringVar(&in, "in", "", "CMF users file to read (gzip detected automatically)")
 	cmd.Flags().StringVar(&out, "out", "", "CMF users file to write (gzipped when it ends in .gz)")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path holding the ids.target strategy")
-	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|firebase (kratos and keycloak generate their own IDs)")
+	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|firebase (kratos, keycloak and cognito generate their own IDs)")
 	cmd.Flags().StringVar(&hooksPath, "hooks", "", "hooks.yaml path declaring the handler an ids.target delegates to")
 	for _, f := range []string{"in", "out", "mapping", "target"} {
 		_ = cmd.MarkFlagRequired(f)

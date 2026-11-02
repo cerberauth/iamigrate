@@ -7,7 +7,7 @@ Writes a copy of a CMF users file in which every user has an ID for `--target` u
 
 The IDs are assigned once, into the file, so every import of it, a resumed one included, sends the same IDs, and `diff` and the Auth0 organizations/roles phase address the same users. A [`job`](../job/) with a `--source` does this itself during its export; use `ids assign` for a users file that didn't come from one. `validate --mapping` reports the users of a file `ids.target` hasn't been applied to.
 
-Only targets that accept a chosen user ID can be given one: `auth0` (the `user_id`, behind its `auth0|` prefix) and `firebase` (the uid). Ory Kratos and Keycloak generate their own; their import records the IDs they gave under the report's `target_ids`.
+Only targets that accept a chosen user ID can be given one: `auth0` (the `user_id`, behind its `auth0|` prefix) and `firebase` (the uid). Ory Kratos, Keycloak and Cognito generate their own; their import records the IDs they gave under the report's `target_ids`.
 
 ## Usage
 

@@ -94,3 +94,10 @@ func TestDupTracker(t *testing.T) {
 		Phones:   []cmf.Contact{{Value: "+14155552672"}},
 	}))
 }
+
+func TestCheckUserAcceptsAPasswordWhenTheTargetTakesNone(t *testing.T) {
+	u := cmf.User{SourceID: "u1", Password: &cmf.Password{Algorithm: cmf.AlgBcrypt, Portable: true}}
+
+	require.Len(t, CheckUser(u, connector.Capabilities{}), 1)
+	require.Empty(t, CheckUser(u, connector.Capabilities{NoPasswords: true}))
+}

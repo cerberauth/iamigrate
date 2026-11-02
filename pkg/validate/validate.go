@@ -16,7 +16,7 @@ import (
 // import.
 func CheckUser(u cmf.User, caps connector.Capabilities) []connector.Problem {
 	var problems []connector.Problem
-	if u.Password != nil && !caps.SupportsAlgorithm(u.Password.Algorithm) {
+	if u.Password != nil && !caps.NoPasswords && !caps.SupportsAlgorithm(u.Password.Algorithm) {
 		problems = append(problems, connector.Problem{
 			SourceID: u.SourceID, Field: "password.algorithm",
 			Rule: "unsupported by target", Value: string(u.Password.Algorithm),

@@ -7,6 +7,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/cognito"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
@@ -23,6 +24,7 @@ func newDiffCmd() *cobra.Command {
 	cmd.AddCommand(newDiffKratosCmd())
 	cmd.AddCommand(newDiffKeycloakCmd())
 	cmd.AddCommand(newDiffFirebaseCmd())
+	cmd.AddCommand(newDiffCognitoCmd())
 	return cmd
 }
 
@@ -213,6 +215,58 @@ func newDiffFirebaseCmd() *cobra.Command {
 				return err
 			}
 			report, err := firebase.New(client).Verify(ctx, r)
+			bar.Done()
+			if err != nil {
+				return err
+			}
+			printDiffReport(cmd, report)
+			// Unlike a job's verify, diff only reports drift: it fails on it
+			// only when a verify.after hook says so.
+			fail, err := lifecycle.VerifyAfter(ctx, report, false)
+			if err != nil {
+				return err
+			}
+			if fail {
+				return fmt.Errorf("diff failed: the %s hook failed it", hooks.VerifyAfter)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
+	auth.register(cmd)
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newDiffCognitoCmd() *cobra.Command {
+	var (
+		in   string
+		auth cognitoFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   cognito.Name,
+		Short: "Reconcile a CMF file against a live Cognito user pool",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			r, closeFn, err := openReader(in)
+			if err != nil {
+				return err
+			}
+			defer closeFn()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("checking users", countUsers(bar, in))
+			if ctx, err = verifyOptions(cmd, ctx); err != nil {
+				return err
+			}
+			report, err := cognito.New(client).Verify(ctx, r)
 			bar.Done()
 			if err != nil {
 				return err

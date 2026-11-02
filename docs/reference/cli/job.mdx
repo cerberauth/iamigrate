@@ -23,11 +23,11 @@ If the process dies or is interrupted (Ctrl-C and `SIGTERM` stop it cleanly), th
 
 For an Auth0 target the import is chunked, and every chunk is checkpointed as the job goes: the Auth0 job ID as soon as the job exists, the outcome once it finishes. After a restart a finished chunk isn't submitted again, and a chunk whose Auth0 job is still running is waited for rather than resubmitted (which would report every user in it as a duplicate). A chunk whose Auth0 job ended as `failed` is submitted again. If `--users` changed since the import started, the job fails instead of matching the old checkpoints to different users.
 
-Kratos, Keycloak and Firebase targets don't checkpoint. A job interrupted during their import runs the whole import again on resume: users created before the interruption are reported as already existing, and the rest are created.
+Kratos, Keycloak, Firebase and Cognito targets don't checkpoint. A job interrupted during their import runs the whole import again on resume: users created before the interruption are reported as already existing, and the rest are created.
 
 ## Credentials
 
-Credentials are never stored with a job. Each step reads them from the environment, so the same variables must be set for `job run` as for the other commands (`AUTH0_DOMAIN`, `AUTH0_TOKEN` or `AUTH0_CLIENT_ID`/`AUTH0_CLIENT_SECRET`, `KRATOS_ADMIN_URL`, `KEYCLOAK_URL`/`KEYCLOAK_REALM` and a username/password or client ID/secret, `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_ACCESS_TOKEN`, and `FIREBASE_HASH_SIGNER_KEY`/`FIREBASE_HASH_SALT_SEPARATOR`). `job create` checks that they are there, so a mistake shows up before a long export rather than after.
+Credentials are never stored with a job. Each step reads them from the environment, so the same variables must be set for `job run` as for the other commands (`AUTH0_DOMAIN`, `AUTH0_TOKEN` or `AUTH0_CLIENT_ID`/`AUTH0_CLIENT_SECRET`, `KRATOS_ADMIN_URL`, `KEYCLOAK_URL`/`KEYCLOAK_REALM` and a username/password or client ID/secret, `FIREBASE_PROJECT_ID` and `GOOGLE_APPLICATION_CREDENTIALS` or `FIREBASE_ACCESS_TOKEN`, and `FIREBASE_HASH_SIGNER_KEY`/`FIREBASE_HASH_SALT_SEPARATOR`, `COGNITO_USER_POOL_ID`, `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` and optionally `AWS_SESSION_TOKEN`). `job create` checks that they are there, so a mistake shows up before a long export rather than after.
 
 ## Usage
 
@@ -91,7 +91,7 @@ The server starts a job as soon as it is created, so `job run` only waits for it
 
 | Flag | Description |
 | --- | --- |
-| `--target` | Target connector: `auth0`, `kratos`, `keycloak` or `firebase` (required) |
+| `--target` | Target connector: `auth0`, `kratos`, `keycloak`, `firebase` or `cognito` (required) |
 | `--users` | CMF users file, written by the export and read by the other steps; gzipped if it ends in `.gz` (required) |
 | `--source` | Source connector: `flatfile`, `kratos`, `keycloak`, `firebase`, `auth0` or `azure-ad-b2c`. Without it there's no export and `--users` must already exist |
 | `--mapping` | `mapping.yaml` path |
@@ -103,3 +103,4 @@ The server starts a job as soon as it is created, so `job run` only waits for it
 | `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options (`--export-limit` also applies to `azure-ad-b2c`), as for [`export`](../export/) |
 | `--tenant`, `--filter`, `--extension-attributes` | Azure AD B2C source options, as for [`export`](../export/); the client ID and secret come from the environment |
 | `--hash-rounds`, `--hash-mem-cost` | Firebase project's scrypt parameters; the signer key and salt separator come from the environment |
+| `--user-pool-id`, `--region`, `--endpoint-url` | Cognito user pool ID (or `$COGNITO_USER_POOL_ID`), AWS region (default: the pool ID's) and API URL for an emulator; the AWS keys come from the environment |
