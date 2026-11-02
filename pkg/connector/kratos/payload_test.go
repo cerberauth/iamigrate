@@ -138,3 +138,22 @@ func TestUserFromIdentityPhone(t *testing.T) {
 	require.Empty(t, u.Emails)
 	require.Equal(t, []cmf.Contact{{Value: "+12025550142", Verified: true, Primary: true}}, u.Phones)
 }
+
+func TestBuildIdentityIdentifiersWinOverMetadata(t *testing.T) {
+	u := cmf.User{
+		SourceID: "u1",
+		Emails:   []cmf.Contact{{Value: "real@example.com"}},
+		Username: "real",
+		Phones:   []cmf.Contact{{Value: "+12025550142"}},
+		UserMetadata: map[string]any{
+			"email": "legacy@example.com", "username": "legacy", "phone": "+10000000000", "plan": "pro",
+		},
+	}
+	id, _, err := buildIdentity(u, "default")
+	require.NoError(t, err)
+	require.Equal(t, map[string]any{
+		"email": "real@example.com", "username": "real", "phone": "+12025550142", "plan": "pro",
+	}, id.Traits)
+	// The colliding values are not lost: metadata_public keeps them.
+	require.Equal(t, "legacy@example.com", id.MetadataPublic["email"])
+}
