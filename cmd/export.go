@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -167,7 +168,7 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			telemetryx.Duration(ctx, "export.run", time.Since(exportStart), telemetryx.Vocab(source, flatfile.Name, kratos.Name, keycloak.Name, firebase.Name, auth0.Name, azureb2c.Name))
+			recordExport(ctx, source, time.Since(exportStart), manifest)
 			if err := w.Close(); err != nil {
 				return err
 			}
@@ -273,4 +274,30 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Export metrics, declared in argvio.metrics.yaml. Hash algorithms are the
+// CMF's own identifiers; anything else is "other".
+var (
+	exportDuration      = telemetryx.NewDuration("export.run", "source")
+	exportUsers         = telemetryx.NewValue("export.users", telemetryx.UnitCount, "source")
+	exportSkipped       = telemetryx.NewValue("export.skipped", telemetryx.UnitCount, "source")
+	exportHashAlgorithm = telemetryx.NewCounter("export.hash-algorithm", "source", "algorithm")
+
+	exportSources  = []string{flatfile.Name, kratos.Name, keycloak.Name, firebase.Name, auth0.Name, azureb2c.Name}
+	hashAlgorithms = []string{
+		string(cmf.AlgBcrypt), string(cmf.AlgScrypt), string(cmf.AlgPBKDF2), string(cmf.AlgArgon2),
+		string(cmf.AlgMD5), string(cmf.AlgSHA1), string(cmf.AlgSHA256), string(cmf.AlgSHA512),
+		string(cmf.AlgMD4), string(cmf.AlgHMAC), string(cmf.AlgLDAP),
+	}
+)
+
+func recordExport(ctx context.Context, source string, d time.Duration, m connector.Manifest) {
+	source = telemetryx.Vocab(source, exportSources...)
+	exportDuration.Record(ctx, d, source)
+	exportUsers.Record(ctx, float64(m.RecordCount), source)
+	exportSkipped.Record(ctx, float64(len(m.SkippedRecords)), source)
+	for alg, n := range m.HashAlgorithmCounts {
+		exportHashAlgorithm.Add(ctx, int64(n), source, telemetryx.Vocab(string(alg), hashAlgorithms...))
+	}
 }

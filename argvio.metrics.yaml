@@ -1,0 +1,51 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/getargvio/argvio/main/schema/metrics/v1.schema.json
+#
+# iamigrate's product metrics, as shown on the Argvio Product dashboard.
+# Synced to Argvio on release (.github/workflows/argvio-metrics.yml); see
+# https://github.com/getargvio/argvio/blob/main/docs/metric-catalog.md.
+# Every dimension value is a fixed identifier chosen in code: never a user,
+# a tenant, a domain or a target's error message.
+version: 1
+service: iamigrate
+metrics:
+  - name: export.run
+    kind: duration
+    title: Export time
+    description: Time to export users from a source into CMF, by source.
+    dims: [source]
+    dim_order:
+      source: [auth0, azure-ad-b2c, firebase, keycloak, kratos, flatfile]
+    direction: down_is_good
+  - name: export.users
+    kind: value
+    title: Users per export
+    description: Users written by one export run, by source.
+    dims: [source]
+  - name: export.skipped
+    kind: value
+    title: Skipped users per export
+    description: Source records one export run could not convert, by source.
+    dims: [source]
+    direction: down_is_good
+  - name: export.hash-algorithm
+    kind: counter
+    title: Exported password hashes by algorithm
+    description: Exported users' password hashes, by source and CMF hash algorithm; how often each migration path has to carry legacy hashes.
+    dims: [source, algorithm]
+    dim_order:
+      algorithm: [bcrypt, argon2, scrypt, pbkdf2, sha512, sha256, sha1, md5, md4, hmac, ldap, other]
+  - name: import.users
+    kind: value
+    title: Users per import
+    description: Users one import run handled, by target and result (zeros included). Duplicated means the user already existed in the target.
+    dims: [target, result]
+    dim_order:
+      result: [succeeded, duplicated, failed]
+  - name: job.run
+    kind: counter
+    title: Job runs
+    description: How job run ended, by final state, the step a failed job stopped in, and whether it ran locally or on an iamigrate server.
+    dims: [state, failed_in, runner]
+    dim_order:
+      state: [done, failed, queued, exporting, validating, importing, verifying]
+      failed_in: [none, exporting, validating, importing, verifying]

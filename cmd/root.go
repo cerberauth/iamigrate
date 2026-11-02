@@ -36,7 +36,7 @@ func newRootCmd() *cobra.Command {
 		newServeCmd(),
 		newIDsCmd(),
 	)
-	root.PersistentFlags().Bool("sqa-opt-out", false, "Opt out of sending anonymous usage statistics to help improve the tool")
+	root.PersistentFlags().Bool("sqa-opt-out", false, "Opt out of sending anonymous usage statistics and crash reports to help improve the tool")
 	return root
 }
 
