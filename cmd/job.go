@@ -15,6 +15,7 @@ import (
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
 	"github.com/cerberauth/iamigrate/pkg/progress"
+	"github.com/cerberauth/x/telemetryx"
 	"github.com/spf13/cobra"
 )
 
@@ -245,6 +246,7 @@ func newJobRunCmd(f *jobFlags) *cobra.Command {
 			bar.Done()
 			if j != nil {
 				printJob(cmd.OutOrStdout(), j)
+				recordJobRun(cmd.Context(), j, f.client() != nil)
 			}
 			if err != nil {
 				if ctx.Err() != nil {
@@ -432,4 +434,23 @@ func printJob(w io.Writer, j *jobs.Job) {
 			fmt.Fprintf(w, "   - %s in %s: %s: %s\n", h.Hook, h.State, h.Outcome, h.Reason)
 		}
 	}
+}
+
+// jobRuns counts how `job run` ended, by final state, the step a failed job
+// stopped in ("none" otherwise) and whether a server ran it
+// (argvio.metrics.yaml). States and steps are jobs' own fixed set.
+var jobRuns = telemetryx.NewCounter("job.run", "state", "failed_in", "runner")
+
+func recordJobRun(ctx context.Context, j *jobs.Job, remote bool) {
+	states := []string{string(jobs.Queued), string(jobs.Exporting), string(jobs.Validating),
+		string(jobs.Importing), string(jobs.Verifying), string(jobs.Done), string(jobs.Failed)}
+	failedIn := "none"
+	if j.State == jobs.Failed {
+		failedIn = telemetryx.Vocab(string(j.FailedIn), states...)
+	}
+	runner := "local"
+	if remote {
+		runner = "server"
+	}
+	jobRuns.Add(ctx, 1, telemetryx.Vocab(string(j.State), states...), failedIn, runner)
 }

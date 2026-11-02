@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 	"github.com/cerberauth/x/fsx"
+	"github.com/cerberauth/x/telemetryx"
 	"github.com/spf13/cobra"
 )
 
@@ -130,6 +132,7 @@ func newImportAuth0Cmd() *cobra.Command {
 				return err
 			}
 
+			recordImport(ctx, auth0.Name, report)
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
 			return lifecycle.ImportAfter(ctx, report)
 		},
@@ -217,6 +220,7 @@ func newImportKratosCmd() *cobra.Command {
 				return err
 			}
 
+			recordImport(ctx, kratos.Name, report)
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
 			return lifecycle.ImportAfter(ctx, report)
 		},
@@ -295,6 +299,7 @@ func newImportKeycloakCmd() *cobra.Command {
 				return err
 			}
 
+			recordImport(ctx, keycloak.Name, report)
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, false)
 			return lifecycle.ImportAfter(ctx, report)
 		},
@@ -374,6 +379,7 @@ func newImportFirebaseCmd() *cobra.Command {
 				return err
 			}
 
+			recordImport(ctx, firebase.Name, report)
 			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
 			return lifecycle.ImportAfter(ctx, report)
 		},
@@ -524,4 +530,21 @@ func loadRoles(dir string) ([]cmf.Role, error) {
 	}
 	defer f.Close()
 	return cmf.ReadRoles(f)
+}
+
+// Import metrics, declared in argvio.metrics.yaml: how many users each import
+// run handled, by target and result, zeros included. Failure codes come from
+// the target's API, so they are reduced to "duplicated" or "failed".
+var importUsers = telemetryx.NewValue("import.users", telemetryx.UnitCount, "target", "result")
+
+func recordImport(ctx context.Context, target string, report connector.ImportReport) {
+	duplicated := 0
+	for _, f := range report.Failed {
+		if f.Code == auth0.DuplicatedUserCode {
+			duplicated++
+		}
+	}
+	importUsers.Record(ctx, float64(len(report.Succeeded)), target, "succeeded")
+	importUsers.Record(ctx, float64(duplicated), target, "duplicated")
+	importUsers.Record(ctx, float64(len(report.Failed)-duplicated), target, "failed")
 }

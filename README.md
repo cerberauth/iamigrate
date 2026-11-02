@@ -258,6 +258,10 @@ With no hooks configured, nothing changes. See the [hooks reference](docs/refere
 for every event and strategy, the request format and how to verify its
 signature, and the [`mapping.yaml` reference](docs/reference/mapping.mdx).
 
+## Telemetry
+
+The CLI collects anonymous usage data to help improve the tool: which command ran, the names (never the values) of the flags used, how the command exited and how long it took, the CLI version, OS and architecture, and basic resource usage, how often a command was mistyped (never what you typed), whether it crashed (never the crash message), plus a few counts and timings that never contain your data: how long an export took and how many users it wrote and skipped, by source, how many exported password hashes use each hash algorithm, how many users an import run created, found already existing or failed, by target, and how `job run` ended (final state and failing step). Interactive runs also include a random install and session identifier, the shell and terminal emulator you run it in (from a fixed list) and whether its output is piped; runs in CI are fully anonymous. Users, identifiers, hashes, credentials, domains and error messages are never collected. You can opt out of telemetry by passing the `--sqa-opt-out` flag, or by setting `DO_NOT_TRACK=1` (or `ARGVIO_DISABLED=1`).
+
 ## Learn more
 
 - [Documentation](https://www.cerberauth.com/docs/iamigrate/)
