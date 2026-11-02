@@ -162,7 +162,7 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 
 	fl := cmd.Flags()
 	fl.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0|azure-ad-b2c (default: no export, start from the existing --users file)")
-	fl.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
+	fl.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase|cognito")
 	fl.StringVar(&users, "users", "", "CMF users file: written by the export, read by the other steps (.gz is gzipped)")
 	fl.StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
 	fl.BoolVar(&upsert, "upsert", false, "allow re-running the import against existing users")
@@ -185,6 +185,9 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	strParam(paramTenant, "tenant", "Azure AD B2C tenant domain or directory ID (or $AZURE_TENANT_ID; azure-ad-b2c source)")
 	strParam(paramExtensionAttrs, "extension-attributes", "B2C custom attributes to export, by Graph name, comma-separated (azure-ad-b2c source)")
 	strParam(paramFilter, "filter", "OData $filter limiting the exported users (azure-ad-b2c source)")
+	strParam(paramUserPoolID, "user-pool-id", "Cognito user pool ID (or $COGNITO_USER_POOL_ID; cognito target)")
+	strParam(paramRegion, "region", "AWS region (or $AWS_REGION; default: the user pool ID's; cognito target)")
+	strParam(paramEndpointURL, "endpoint-url", "Cognito API URL, to reach an emulator (or $AWS_ENDPOINT_URL_COGNITO_IDP; cognito target)")
 	strParam(paramHashRounds, "hash-rounds", "Firebase project's scrypt rounds (firebase source; default 8)")
 	strParam(paramHashMemCost, "hash-mem-cost", "Firebase project's scrypt memory cost (firebase source; default 14)")
 	_ = cmd.MarkFlagRequired("target")

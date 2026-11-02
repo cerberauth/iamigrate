@@ -10,6 +10,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/cognito"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
@@ -65,8 +66,10 @@ func offlineTarget(name string) (connector.TargetConnector, error) {
 		return &keycloak.Connector{}, nil
 	case firebase.Name:
 		return &firebase.Connector{}, nil
+	case cognito.Name:
+		return &cognito.Connector{}, nil
 	}
-	return nil, fmt.Errorf("unsupported --target %q (supports \"auth0\", \"kratos\", \"keycloak\", and \"firebase\")", name)
+	return nil, fmt.Errorf("unsupported --target %q (supports \"auth0\", \"kratos\", \"keycloak\", \"firebase\", and \"cognito\")", name)
 }
 
 // exportPass returns the export-side strategies of m (export.user,

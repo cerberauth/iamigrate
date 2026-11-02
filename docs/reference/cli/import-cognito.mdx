@@ -1,0 +1,58 @@
+---
+title: import cognito
+description: Create AWS Cognito user pool users from a CMF file via the admin API.
+---
+
+import { Aside } from '@/components/docs';
+
+Streams a CMF file and creates one user per CMF user with `AdminCreateUser`, without Cognito's invitation message. Cognito takes no password hash, so users arrive **without their password**: each is given a random permanent password nobody knows, which makes it `CONFIRMED` and lets it use "Forgot password" to set a new one. A user that had a password in the CMF file is listed under the report's `requires_password_reset`. A blocked user is disabled.
+
+A failed user is recorded in `import-report.json` without stopping the run, and a throttled request is retried up to six times with a doubling delay. The report's `target_ids` maps each imported user's `source_id` to its Cognito `sub`.
+
+With a `--mapping`, the import applies its `target_fields`, `metadata` routes, `conflict` and import [strategies](../../hooks/strategies/). Users skipped on purpose, by an `import.user` hook or `conflict: {on_duplicate: skip}`, are listed under the report's `skipped` rather than `failed`.
+
+For a step-by-step walkthrough, see [Import users into AWS Cognito](../../../guides/import/cognito/).
+
+## Usage
+
+```sh
+iamigrate import cognito --in users.cmf.jsonl.gz --user-pool-id eu-west-1_AbCdEfGhI
+```
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--user-pool-id` | Cognito user pool ID (or `$COGNITO_USER_POOL_ID`) (required) |
+| `--region` | AWS region (or `$AWS_REGION`; default: the user pool ID's) |
+| `--access-key-id` | AWS access key ID (or `$AWS_ACCESS_KEY_ID`) |
+| `--secret-access-key` | AWS secret access key (or `$AWS_SECRET_ACCESS_KEY`) |
+| `--session-token` | AWS session token, for temporary credentials (or `$AWS_SESSION_TOKEN`) |
+| `--endpoint-url` | Cognito API URL, to reach an emulator (or `$AWS_ENDPOINT_URL_COGNITO_IDP`, `$AWS_ENDPOINT_URL`) |
+| `--upsert` | Update users the pool already has instead of failing them |
+| `--report` | `import-report.json` output path (default: alongside `--in`) |
+| `--mapping` | `mapping.yaml` path: its `target_fields`, `metadata`, `conflict`, `transforms` and import strategies (optional; see [`mapping.yaml`](../../mapping/)) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |
+
+An access key and its secret are required, and the identity needs `cognito-idp:AdminCreateUser`, `AdminSetUserPassword`, `AdminGetUser`, `AdminUpdateUserAttributes`, `AdminEnableUser`, `AdminDisableUser` and `ListUsers` on the pool. To use an AWS CLI profile, export its credentials first: `eval "$(aws configure export-credentials --format env)"`.
+
+## How a user is translated
+
+A user is created under one identifier. By default it is the first email, else the username, else the first phone number; the `identity.primary` strategy (`email_first`, `username_first` or `phone_first`) picks another. Use it to match how the pool signs users in: a pool configured with email or phone number as the username needs that identifier, a pool of usernames needs `username_first`.
+
+| CMF | Cognito attribute |
+| --- | --- |
+| first email | `email`, `email_verified` |
+| first phone number | `phone_number`, `phone_number_verified` |
+| `username`, when the user is created under another identifier | `preferred_username` |
+| `profile.given_name`, `family_name`, `name`, `nickname`, `picture`, `locale` | `given_name`, `family_name`, `name`, `nickname`, `picture`, `locale` |
+| `blocked: true` | the user is disabled |
+
+With `--upsert`, a user the pool already has gets only the attributes that differ updated, and a password if it has none yet (a user left in `FORCE_CHANGE_PASSWORD` by an interrupted run). A user that already has a password keeps it.
+
+`target_fields` can set the standard attributes `name`, `given_name`, `family_name`, `middle_name`, `nickname`, `preferred_username`, `profile`, `picture`, `website`, `gender`, `birthdate`, `zoneinfo`, `locale`, `address` and `updated_at`, and custom attributes as `custom:<name>`. A custom attribute has to be in the pool's schema; Cognito rejects the user otherwise.
+
+<Aside type="caution">
+  Not imported: extra emails and phone numbers, `user_metadata` and `app_metadata` (set them with `target_fields` or `metadata` routes to `custom:<name>` attributes), organizations and roles, and every MFA factor (the user is listed under `requires_reenrollment`). Cognito can't take a user ID, so `ids assign` doesn't apply: the `sub` is always generated. A user with no email, username or phone number fails with `TRANSLATION_ERROR`; other failures carry Cognito's exception name as their code, such as `UsernameExistsException` or `AliasExistsException` (the email or phone number is another user's alias). Run `iamigrate validate --target cognito` first to catch what can be seen offline.
+</Aside>

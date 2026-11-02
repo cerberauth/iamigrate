@@ -46,9 +46,13 @@ type ImportOptions struct {
 // algorithm or MFA type the target can't import.
 type Capabilities struct {
 	HashAlgorithms []cmf.Algorithm
-	MFATypes       []cmf.MFAType
-	SupportsOrgs   bool
-	SupportsRoles  bool
+	// NoPasswords is whether the target takes no password hash at all, of
+	// any algorithm: a user's password is then no validation problem, but
+	// something the import reports as needing a reset.
+	NoPasswords   bool
+	MFATypes      []cmf.MFAType
+	SupportsOrgs  bool
+	SupportsRoles bool
 	// SupportsCustomID is whether the target creates a user with the ID it
 	// is given (a CMF user's TargetIDs), rather than generating its own.
 	SupportsCustomID bool

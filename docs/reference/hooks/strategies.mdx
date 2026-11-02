@@ -96,7 +96,7 @@ The user ID each user gets in the target, assigned once into the users file's `t
 - Item: the user, plus `"target": "<connector>"`.
 - Result: `{"id": "..."}`.
 
-Only Auth0 and Firebase accept a chosen user ID. Ory Kratos and Keycloak generate their own, so `validate` rejects an `ids.target` for them; their import records the generated IDs instead (`target_ids` in the import report). An ID already assigned is kept. `on_failure: ignore` isn't accepted: some users would get the handler's ID and others their source ID, with no way to tell which.
+Only Auth0 and Firebase accept a chosen user ID. Ory Kratos, Keycloak and Cognito generate their own, so `validate` rejects an `ids.target` for them; their import records the generated IDs instead (`target_ids` in the import report). An ID already assigned is kept. `on_failure: ignore` isn't accepted: some users would get the handler's ID and others their source ID, with no way to tell which.
 
 ## Validate
 
@@ -131,6 +131,7 @@ Which of a user's identifiers is their primary one: the kind (email, username or
 | --- | --- | --- |
 | Keycloak | Which value becomes the Keycloak `username`: the username, the email or the phone | `email`, `username`, `phone` |
 | Kratos | Nothing about the kind: the email, username and phone traits are always all set, and the identity schema decides which one logs in. Only the contact choice below applies | `email`, `username`, `phone` |
+| Cognito | Which identifier the user is created under (its username in the pool): email, username or phone number. The others become attributes | `email`, `username`, `phone` |
 | Firebase | Nothing about the kind: the account takes an email and a phone number, and has no username. Only the contact choice below applies | `email`, `phone` |
 | Auth0 | Nothing about the kind: the bulk import requires an email. Only the contact choice below applies | `email` |
 

@@ -11,6 +11,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/cognito"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
@@ -28,6 +29,7 @@ func newImportCmd() *cobra.Command {
 	cmd.AddCommand(newImportKratosCmd())
 	cmd.AddCommand(newImportKeycloakCmd())
 	cmd.AddCommand(newImportFirebaseCmd())
+	cmd.AddCommand(newImportCognitoCmd())
 	return cmd
 }
 
@@ -379,6 +381,86 @@ func newImportFirebaseCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().BoolVar(&upsert, "upsert", false, "overwrite existing users with the same uid instead of failing them")
+	auth.register(cmd)
+	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
+	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path: its target_fields and transforms (optional)")
+	_ = cmd.MarkFlagRequired("in")
+	return cmd
+}
+
+func newImportCognitoCmd() *cobra.Command {
+	var (
+		mappingPath string
+		in          string
+		upsert      bool
+		reportPath  string
+		auth        cognitoFlags
+	)
+
+	cmd := &cobra.Command{
+		Use:   cognito.Name,
+		Short: "Create AWS Cognito user pool users from a CMF file via the admin API (no passwords: users reset theirs)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var m mapping.Mapping
+			if mappingPath != "" {
+				var err error
+				if m, err = mapping.Load(mappingPath); err != nil {
+					return err
+				}
+			}
+			client, err := auth.client()
+			if err != nil {
+				return err
+			}
+
+			f, err := os.Open(in)
+			if err != nil {
+				return err
+			}
+			defer f.Close()
+			r, err := cmf.NewReader(f)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+
+			ctx, bar := startProgress(cmd)
+			defer bar.Done()
+			bar.Stage("importing users", countUsers(bar, in))
+			if err := checkImportMapping(m, cognito.Name); err != nil {
+				return err
+			}
+			if _, err := lifecycle.ImportBefore(ctx, cognito.Name, "", upsert); err != nil {
+				return err
+			}
+			upsert = importprep.Upsert(m, upsert)
+			report, err := cognito.New(client).Import(ctx, r, m, connector.ImportOptions{Upsert: upsert})
+			bar.Done()
+			if err != nil {
+				return err
+			}
+
+			if err := conflicts(m, cognito.Name, &report); err != nil {
+				return err
+			}
+			b, err := json.MarshalIndent(report, "", "  ")
+			if err != nil {
+				return err
+			}
+			if reportPath == "" {
+				reportPath = filepath.Join(filepath.Dir(in), "import-report.json")
+			}
+			if err := fsx.WriteFile(reportPath, b, 0o600); err != nil {
+				return err
+			}
+
+			printImportSummary(cmd.OutOrStdout(), report, reportPath, upsert)
+			return lifecycle.ImportAfter(ctx, report)
+		},
+	}
+
+	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
+	cmd.Flags().BoolVar(&upsert, "upsert", false, "update users the pool already has instead of failing them")
 	auth.register(cmd)
 	cmd.Flags().StringVar(&reportPath, "report", "", "import-report.json output path (default: alongside --in)")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path: its target_fields and transforms (optional)")

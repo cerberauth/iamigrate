@@ -41,7 +41,7 @@ Handlers are declared in `hooks.yaml` and selected here by name; a mapping can't
 
 ## `target`, `connection_id`
 
-The target connector the mapping is for (`auth0`, `kratos`, `keycloak`, `firebase`), required by `validate --mapping` and by `ids.target`, and the Auth0 database connection to import into (`--connection-id` wins over it).
+The target connector the mapping is for (`auth0`, `kratos`, `keycloak`, `firebase`, `cognito`), required by `validate --mapping` and by `ids.target`, and the Auth0 database connection to import into (`--connection-id` wins over it).
 
 ## `fields`, `records_path`
 
@@ -82,6 +82,7 @@ target_fields:
 | `auth0` | `given_name`, `family_name`, `name`, `nickname`, `picture`, `user_metadata.<key>`, `app_metadata.<key>` |
 | `kratos` | `traits.<key>` (not `email`, `username` or `phone`, which iamigrate sets from the user's identifiers), `metadata_public.<key>`, `metadata_admin.<key>` |
 | `keycloak` | `firstName`, `lastName`, `attributes.<key>` (a one-element list; a non-string value in JSON) |
+| `cognito` | Standard attributes (`name`, `given_name`, `family_name`, `birthdate`, `locale`, ...) by name, and `custom:<name>` (the attribute has to be in the pool's schema) |
 | `firebase` | `displayName`, `photoUrl`, `custom_claims.<key>` (not a reserved claim name; merged with the claims from `app_metadata`, within Firebase's 1000 bytes) |
 
 `validate --mapping` rejects a path the target doesn't accept.
@@ -108,7 +109,7 @@ What an import does with a user the target already has:
 | --- | --- |
 | `fail` (the default) | The user is reported as failed, as without the section |
 | `skip` | The user is reported under the report's `skipped` instead of `failed`, and still verified |
-| `upsert` | The user is updated, as with `--upsert`. Only Auth0 and Firebase can; `validate` rejects it for Kratos and Keycloak |
+| `upsert` | The user is updated, as with `--upsert`. Only Auth0, Firebase and Cognito can; `validate` rejects it for Kratos and Keycloak |
 
 ## `strategies`
 

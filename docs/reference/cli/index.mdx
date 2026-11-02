@@ -16,10 +16,12 @@ description: All iamigrate commands and flags.
 | [`import kratos`](./import-kratos/) | Create Ory Kratos identities from a CMF file via the Admin API |
 | [`import keycloak`](./import-keycloak/) | Create Keycloak users from a CMF file via the Admin API |
 | [`import firebase`](./import-firebase/) | Create Firebase Authentication users from a CMF file via the Identity Toolkit API |
+| [`import cognito`](./import-cognito/) | Create AWS Cognito user pool users from a CMF file via the admin API |
 | [`diff auth0`](./diff-auth0/) | Reconcile a CMF file against a live Auth0 tenant |
 | [`diff kratos`](./diff-kratos/) | Reconcile a CMF file against a live Ory Kratos instance |
 | [`diff keycloak`](./diff-keycloak/) | Reconcile a CMF file against a live Keycloak realm |
 | [`diff firebase`](./diff-firebase/) | Reconcile a CMF file against a live Firebase project |
+| [`diff cognito`](./diff-cognito/) | Reconcile a CMF file against a live AWS Cognito user pool |
 | [`job`](./job/) | Run export, validate, import, and verify as one job that resumes after a crash or restart |
 | [`serve`](./serve/) | Serve those jobs over a REST API, for `job --api-url` to drive |
 
@@ -27,7 +29,7 @@ description: All iamigrate commands and flags.
 
 ```
 testdata generate ─┐
-                    ├─▶ validate ─▶ import auth0/kratos/keycloak/firebase ─▶ diff auth0/kratos/keycloak/firebase
+                    ├─▶ validate ─▶ import auth0/kratos/keycloak/firebase/cognito ─▶ diff auth0/kratos/keycloak/firebase/cognito
 export ─▶ map ──────┘
 ```
 

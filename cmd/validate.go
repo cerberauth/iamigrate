@@ -8,6 +8,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
+	"github.com/cerberauth/iamigrate/pkg/connector/cognito"
 	"github.com/cerberauth/iamigrate/pkg/connector/firebase"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
@@ -67,8 +68,10 @@ func newValidateCmd() *cobra.Command {
 				tc = &keycloak.Connector{}
 			case firebase.Name:
 				tc = &firebase.Connector{}
+			case cognito.Name:
+				tc = &cognito.Connector{}
 			default:
-				return fmt.Errorf("unsupported --target %q (supports \"auth0\", \"kratos\", \"keycloak\", and \"firebase\")", target)
+				return fmt.Errorf("unsupported --target %q (supports \"auth0\", \"kratos\", \"keycloak\", \"firebase\", and \"cognito\")", target)
 			}
 			caps := tc.Capabilities()
 
@@ -167,7 +170,7 @@ func newValidateCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&in, "in", "", "CMF users.cmf.jsonl[.gz] path (gzip detected automatically)")
 	cmd.Flags().StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
-	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase")
+	cmd.Flags().StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase|cognito")
 	cmd.Flags().StringVar(&schemaFile, "schema-file", "", "Kratos identity schema JSON path, to check traits against (only with --target kratos)")
 	cmd.Flags().StringVar(&connectionConfig, "connection-config", "", "Auth0 connection JSON path, to tighten username/identifier rules (only with --target auth0)")
 	addHooksFlag(cmd)
