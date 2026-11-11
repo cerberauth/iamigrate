@@ -136,17 +136,17 @@ func TestLockIsPerJob(t *testing.T) {
 	require.NoError(t, err)
 	unlockA, err := store.Lock("a")
 	require.NoError(t, err)
-	defer unlockA()
+	defer unlockA.Release()
 	unlockB, err := store.Lock("b")
 	require.NoError(t, err)
-	unlockB()
+	unlockB.Release()
 
 	_, err = store.Lock("a")
 	require.ErrorIs(t, err, jobs.ErrLocked)
-	unlockA()
+	unlockA.Release()
 	unlockAgain, err := store.Lock("a")
 	require.NoError(t, err)
-	unlockAgain()
+	unlockAgain.Release()
 }
 
 func TestRetryFromAnEarlierStateDiscardsLaterResults(t *testing.T) {
@@ -243,7 +243,7 @@ func TestFileStoreListReturnsSavedJobsOnly(t *testing.T) {
 	// Leftovers of a lock and of an interrupted save are not jobs.
 	unlock, err := store.Lock(a.ID)
 	require.NoError(t, err)
-	unlock()
+	unlock.Release()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, b.ID+".json.tmp"), []byte("{"), 0o600))
 
 	ids, err := store.List()

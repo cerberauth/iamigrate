@@ -93,7 +93,7 @@ func startServe(t *testing.T, dir string) string {
 	root := newRootCmd()
 	root.SetOut(out)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"serve", "--listen", "127.0.0.1:0", "--dir", dir})
+	root.SetArgs([]string{"serve", "--listen", "127.0.0.1:0", "--store", dir})
 	served := make(chan error, 1)
 	go func() { served <- root.ExecuteContext(ctx) }()
 	t.Cleanup(func() {
@@ -161,7 +161,7 @@ func TestServeRefusesNonLoopbackWithoutToken(t *testing.T) {
 	root := newRootCmd()
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"serve", "--listen", "0.0.0.0:0", "--dir", t.TempDir()})
+	root.SetArgs([]string{"serve", "--listen", "0.0.0.0:0", "--store", t.TempDir()})
 	require.ErrorContains(t, root.Execute(), envAPIToken)
 }
 

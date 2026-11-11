@@ -18,6 +18,7 @@ import (
 	"github.com/cerberauth/x/telemetryx"
 	"github.com/getargvio/argvio-go"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 // Environment variables the job commands read when --api-url is used, and
@@ -31,10 +32,10 @@ const (
 // is doing.
 const pollInterval = time.Second
 
-// jobFlags say which jobs the job commands act on: the jobs kept in dir and run in process, or
+// jobFlags say which jobs the job commands act on: the jobs kept in store and run in process, or
 // those of the `iamigrate serve` instance at apiURL.
 type jobFlags struct {
-	dir, apiURL, hooks string
+	store, apiURL, hooks string
 }
 
 // client returns the client of the server --api-url names, or nil if the
@@ -47,7 +48,7 @@ func (f *jobFlags) client() *api.Client {
 }
 
 func (f *jobFlags) runner() (*jobs.Runner, error) {
-	r, err := openJobRunner(f.dir)
+	r, err := openJobRunner(f.store)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +65,7 @@ func newJobCmd() *cobra.Command {
 		Use:   "job",
 		Short: "Run export, validate, import, and verify as one resumable job",
 	}
-	cmd.PersistentFlags().StringVar(&f.dir, "dir", "./jobs/", "directory the jobs' state is kept in")
+	addStoreFlag(cmd.PersistentFlags(), &f.store)
 	cmd.PersistentFlags().StringVar(&f.apiURL, "api-url", os.Getenv(envAPIURL),
 		"drive the jobs of a running `iamigrate serve` at this URL instead of running them in process (or $"+envAPIURL+"; its bearer token is $"+envAPIToken+")")
 	cmd.PersistentFlags().StringVar(&f.hooks, "hooks", "",
@@ -79,8 +80,18 @@ func newJobCmd() *cobra.Command {
 	return cmd
 }
 
-func openJobRunner(dir string) (*jobs.Runner, error) {
-	store, err := jobs.NewFileStore(dir)
+// storeHelp describes --store.
+const storeHelp = "where the jobs' state is kept: a local directory, or a URI of a remote store, shared by several processes"
+
+// addStoreFlag adds --store, and --dir, its deprecated former name.
+func addStoreFlag(flags *pflag.FlagSet, store *string) {
+	flags.StringVar(store, "store", "./jobs/", storeHelp)
+	flags.StringVar(store, "dir", "./jobs/", storeHelp)
+	_ = flags.MarkDeprecated("dir", "use --store")
+}
+
+func openJobRunner(location string) (*jobs.Runner, error) {
+	store, err := jobs.OpenStore(context.Background(), location)
 	if err != nil {
 		return nil, err
 	}

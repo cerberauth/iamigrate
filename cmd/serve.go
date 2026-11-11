@@ -21,7 +21,10 @@ import (
 const shutdownTimeout = 10 * time.Second
 
 func newServeCmd() *cobra.Command {
-	var listen, dir, hooksPath string
+	var (
+		listen, store, hooksPath string
+		rescan                   time.Duration
+	)
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -38,7 +41,7 @@ func newServeCmd() *cobra.Command {
 			if token == "" && !isLoopback(listen) {
 				return fmt.Errorf("--listen %s is not a loopback address: set $%s to require a bearer token", listen, envAPIToken)
 			}
-			runner, err := openJobRunner(dir)
+			runner, err := openJobRunner(store)
 			if err != nil {
 				return err
 			}
@@ -70,6 +73,9 @@ func newServeCmd() *cobra.Command {
 			} else if n > 0 {
 				fmt.Fprintf(cmd.OutOrStdout(), "resuming %d unfinished job(s)\n", n)
 			}
+			if rescan > 0 {
+				srv.Rescan(rescan)
+			}
 
 			select {
 			case err := <-serveErr:
@@ -89,7 +95,9 @@ func newServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
-	cmd.Flags().StringVar(&dir, "dir", "./jobs/", "directory the jobs' state is kept in")
+	addStoreFlag(cmd.Flags(), &store)
+	cmd.Flags().DurationVar(&rescan, "rescan", 30*time.Second,
+		"how often to look for unfinished jobs nobody runs, such as those of a replica that stopped (0 to only look at start)")
 	cmd.Flags().StringVar(&hooksPath, "hooks", "", "hooks.yaml path: the hooks every job fires, and the handlers job mappings can delegate strategies to")
 	return cmd
 }

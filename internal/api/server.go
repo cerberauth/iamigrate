@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -93,6 +94,10 @@ type Server struct {
 	// them, leaving their jobs in the state they were in, to be resumed.
 	ctx context.Context
 	wg  sync.WaitGroup
+
+	// running are the jobs this server is running, not to start twice.
+	mu      sync.Mutex
+	running map[string]bool
 }
 
 // New returns a Server driving jobs with runner. Background runs stop when
@@ -102,7 +107,7 @@ func New(ctx context.Context, runner *jobs.Runner, opts Options) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Server{runner: runner, opts: opts, log: log, ctx: ctx}
+	return &Server{runner: runner, opts: opts, log: log, ctx: ctx, running: map[string]bool{}}
 }
 
 // Wait blocks until the background runs have returned, which they do soon
@@ -111,7 +116,8 @@ func (s *Server) Wait() { s.wg.Wait() }
 
 // Resume starts running every job found unfinished in the store, the ones a
 // crash or a restart of the server interrupted, and returns how many it
-// started. A job another process is running is left to it.
+// started. A job another process (another replica of the server) is running
+// is left to it.
 func (s *Server) Resume() (int, error) {
 	ids, err := s.runner.Store.List()
 	if err != nil {
@@ -124,12 +130,33 @@ func (s *Server) Resume() (int, error) {
 			s.log.Error("job not resumed", "job", id, "error", err)
 			continue
 		}
-		if !j.State.Terminal() {
-			s.start(id)
+		if !j.State.Terminal() && s.start(id) {
 			n++
 		}
 	}
 	return n, nil
+}
+
+// Rescan calls Resume every interval until the context given to New is
+// cancelled, so jobs queued by another replica, or left by one that
+// crashed once their lease expires, are picked up.
+func (s *Server) Rescan(interval time.Duration) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			if _, err := s.Resume(); err != nil {
+				s.log.Error("listing jobs to resume", "error", err)
+			}
+		}
+	}()
 }
 
 // Handler returns the HTTP handler of the API.
@@ -183,17 +210,39 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, j)
 }
 
-// start runs the job id in the background.
-func (s *Server) start(id string) {
+// start runs the job id in the background, unless this server already
+// is, and reports whether it started it.
+func (s *Server) start(id string) bool {
+	s.mu.Lock()
+	if s.running[id] {
+		s.mu.Unlock()
+		return false
+	}
+	s.running[id] = true
+	s.mu.Unlock()
+
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			delete(s.running, id)
+			s.mu.Unlock()
+		}()
 		// A step's failure is the job's outcome, recorded on it; what Run
 		// returns is only that it couldn't carry on.
-		if _, err := s.runner.Run(s.ctx, id); err != nil && s.ctx.Err() == nil {
+		_, err := s.runner.Run(s.ctx, id)
+		switch {
+		case err == nil || s.ctx.Err() != nil:
+		case errors.Is(err, jobs.ErrLocked):
+			s.log.Debug("job run by another process", "job", id)
+		case errors.Is(err, jobs.ErrLeaseLost):
+			s.log.Warn("job taken over by another process", "job", id)
+		default:
 			s.log.Error("job run failed", "job", id, "error", err)
 		}
 	}()
+	return true
 }
 
 func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
