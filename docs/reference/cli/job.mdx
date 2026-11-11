@@ -69,6 +69,22 @@ All take `--store` (default `./jobs/`), where the jobs' state is kept, one `<id>
 
 Only one run drives a job at a time: the one holding its lock. In a local directory it is a file lock, which the system releases if the process dies. In a remote store it is a lease the run renews while it goes; one that crashes stops renewing, and the job can be resumed elsewhere 60 seconds later. A run that loses its lease (it stalled past it, and another took the job over) stops before its next save. Every save is also conditional on the version the run last read, so two writers never overwrite each other.
 
+| Store | `--store` |
+| --- | --- |
+| Local directory | `./jobs/`, `file:///srv/jobs` |
+| [Google Cloud Storage](#google-cloud-storage) | `gs://bucket/prefix` |
+
+### Google Cloud Storage
+
+`gs://bucket/prefix` keeps each job as the object `prefix/<id>.json`, and its lease as `prefix/<id>.lease`. Saves and leases are conditional on the object's generation (`ifGenerationMatch`, `0` to create an object).
+
+Credentials are a service account key file at `$GOOGLE_APPLICATION_CREDENTIALS`, or an access token in `$GOOGLE_OAUTH_ACCESS_TOKEN` (from `gcloud auth print-access-token`, which expires after an hour). The account needs `storage.objects.get`, `create`, `delete` and `list` on the bucket, as in the Storage Object User role. With `$STORAGE_EMULATOR_HOST` set, requests go to that emulator (such as fake-gcs-server) instead, with no credentials.
+
+```sh
+iamigrate job --store gs://acme-migrations/jobs create --target kratos --users /srv/work/users.cmf.jsonl
+iamigrate job --store gs://acme-migrations/jobs run "$id"
+```
+
 ## Hooks
 
 With `--hooks hooks.yaml`, the jobs run in this process fire [hooks](../../hooks/): `job.before_run` and the state events around every step, the export, validate, import and verify events of the steps, and the handlers of the `--mapping`'s [strategies](../../hooks/strategies/).
