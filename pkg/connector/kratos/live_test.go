@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -115,6 +116,44 @@ func runLiveKratosLogin(t *testing.T, schemaID string, identifiers []fixture.Ide
 	require.NoError(t, err)
 	require.Empty(t, diff.MissingInTarget)
 	require.Empty(t, diff.NoIdentifier)
+
+	// 5. rollback: a dry run deletes nothing, then the users go, half by the
+	// report's target IDs and half by identifier lookup, and diff finds
+	// none of them anymore.
+	var reqs []connector.DeleteRequest
+	rr, err := cmf.NewReader(bytes.NewReader(users))
+	require.NoError(t, err)
+	defer rr.Close()
+	for i := 0; ; i++ {
+		u, err := rr.ReadUser()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		req := connector.DeleteRequest{User: u}
+		if i%2 == 0 {
+			req.TargetID = report.TargetIDs[u.SourceID]
+		}
+		reqs = append(reqs, req)
+	}
+	dry, err := target.DeleteUsers(ctx, reqs, true)
+	require.NoError(t, err)
+	require.Len(t, dry.Deleted, len(reqs))
+	rollback, err := target.DeleteUsers(ctx, reqs, false)
+	require.NoError(t, err)
+	require.Empty(t, rollback.Failed)
+	require.Empty(t, rollback.NotFound)
+	require.Len(t, rollback.Deleted, len(reqs))
+	again, err := target.DeleteUsers(ctx, reqs, false)
+	require.NoError(t, err)
+	require.Len(t, again.NotFound, len(reqs))
+
+	gr, err := cmf.NewReader(bytes.NewReader(users))
+	require.NoError(t, err)
+	defer gr.Close()
+	gone, err := target.Verify(ctx, gr)
+	require.NoError(t, err)
+	require.Len(t, gone.MissingInTarget, len(reqs))
 }
 
 // kratosLoginClient drives Kratos' API-style (no-browser) self-service

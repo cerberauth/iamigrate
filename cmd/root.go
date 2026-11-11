@@ -33,6 +33,7 @@ func newRootCmd() *cobra.Command {
 		newSetPasswordsCmd(),
 		newImportCmd(),
 		newDiffCmd(),
+		newRollbackCmd(),
 		newJobCmd(),
 		newServeCmd(),
 		newIDsCmd(),

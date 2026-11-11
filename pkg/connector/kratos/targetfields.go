@@ -52,5 +52,5 @@ func applyFields(id *identity, fields []importprep.Field) {
 // IsConflict reports an identity Kratos already has: it answers its
 // creation with a 409.
 func (*Connector) IsConflict(e connector.ImportError) bool {
-	return e.Code == "REQUEST_ERROR" && strings.Contains(e.Message, "status 409")
+	return e.Code == requestErrorCode && strings.Contains(e.Message, "status 409")
 }

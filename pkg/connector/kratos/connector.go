@@ -249,7 +249,7 @@ func (c *Connector) Import(ctx context.Context, r *cmf.Reader, m mapping.Mapping
 			var created identity
 			if _, err := c.Client.doJSON(ctx, http.MethodPost, "/admin/identities", bodies[i], &created); err != nil {
 				report.Failed = append(report.Failed, connector.ImportError{
-					SourceID: source, Code: "REQUEST_ERROR", Message: err.Error(),
+					SourceID: source, Code: requestErrorCode, Message: err.Error(),
 				})
 				continue
 			}
