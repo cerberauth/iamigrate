@@ -23,7 +23,7 @@ Kratos has no built-in organizations or roles (those live in Ory Permissions), s
 ## Prerequisites
 
 - iamigrate installed (see [Installation](../../../installation/)).
-- A self-hosted Kratos instance whose **Admin API** you can reach, usually on port `4434`. **Use a disposable instance for the rehearsal.** Imported identities stay until you delete them.
+- A self-hosted Kratos instance whose **Admin API** you can reach, usually on port `4434`. **Use a disposable instance for the rehearsal.** Imported identities stay until you delete them, for example with [`rollback kratos`](../../../reference/cli/rollback-kratos/).
 
 <Aside type="caution">
   iamigrate calls the Admin API without credentials. Kratos doesn't authenticate its Admin API itself, so this works for a self-hosted instance reached over a private network or a port-forward. Ory Network projects, whose Admin API requires an API key, aren't supported yet.

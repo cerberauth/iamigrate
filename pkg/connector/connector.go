@@ -199,6 +199,39 @@ type ConflictDetector interface {
 	IsConflict(e ImportError) bool
 }
 
+// DeleteRequest is one user rollback asks a target to delete: a CMF user,
+// with the target ID an import report recorded for it, if any.
+type DeleteRequest struct {
+	User     cmf.User
+	TargetID string
+}
+
+// DeletedUser is a user rollback deleted (or, on a dry run, would delete).
+type DeletedUser struct {
+	SourceID string `json:"source_id"`
+	TargetID string `json:"target_id"`
+}
+
+// RollbackReport summarizes a rollback run.
+type RollbackReport struct {
+	DryRun bool `json:"dry_run,omitempty"`
+	// Deleted are the users deleted, or on a dry run the ones that would be.
+	Deleted []DeletedUser `json:"deleted"`
+	// NotFound are the users the target has no match for, by source ID.
+	NotFound []string `json:"not_found"`
+	// NoIdentifier are the users with no target ID nor identifier to look
+	// them up by, by source ID.
+	NoIdentifier []string      `json:"no_identifier,omitempty"`
+	Failed       []ImportError `json:"failed"`
+}
+
+// Deleter is a TargetConnector that can delete the users of a CMF file
+// (rollback): each one alone, by the target ID the import gave it, else by
+// looking it up by identifier. It never deletes anything else.
+type Deleter interface {
+	DeleteUsers(ctx context.Context, users []DeleteRequest, dryRun bool) (RollbackReport, error)
+}
+
 // TargetConnector imports CMF identities into a provider.
 type TargetConnector interface {
 	Name() string

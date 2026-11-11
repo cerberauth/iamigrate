@@ -91,6 +91,9 @@ iamigrate import kratos --in ./fixtures/users.cmf.jsonl.gz --schema-id default
 
 # Reconcile a CMF file against the live instance after import
 iamigrate diff kratos --in ./fixtures/users.cmf.jsonl.gz
+
+# Delete the identities that import created (--dry-run lists them first)
+iamigrate rollback kratos --in ./fixtures/users.cmf.jsonl.gz --report ./fixtures/import-report.json
 ```
 
 Kratos only supports importing pre-existing bcrypt and argon2id password

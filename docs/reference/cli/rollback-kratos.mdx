@@ -1,0 +1,32 @@
+---
+title: rollback kratos
+description: Delete the users of a CMF file from an Ory Kratos instance.
+---
+
+Deletes from the instance the identities of a CMF file's users: each one by the identity ID in `--report`'s `target_ids`, else the one its email, username or phone number finds (via the Admin API's `credentials_identifier` filter). An identifier matching several identities deletes none of them and is listed as `failed`. A user with no identifier to look it up by is listed as `no identifier`. Nothing else is deleted.
+
+Use it to clear out a rehearsal or a failed migration. With `--report`, only the identities that import created are deleted.
+
+## Usage
+
+```sh
+# list what would be deleted
+iamigrate rollback kratos --in users.cmf.jsonl.gz --report import-report.json --dry-run --admin-url http://127.0.0.1:4434
+# delete
+iamigrate rollback kratos --in users.cmf.jsonl.gz --report import-report.json --admin-url http://127.0.0.1:4434
+```
+
+A real delete asks for confirmation. When not run interactively, pass `--yes`.
+
+The rollback report, `rollback-report.json` alongside `--in` unless `--out` says otherwise, lists the users `deleted` (with their identity ID), `not_found`, `no_identifier` and `failed`. On a dry run, `deleted` lists the users that would be.
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--report` | `import-report.json` of the import to undo: only its `succeeded` users are deleted, by its `target_ids` (optional) |
+| `--out` | `rollback-report.json` output path (default: alongside `--in`) |
+| `--dry-run` | List the users that would be deleted, without deleting them |
+| `--yes`, `-y` | Delete without asking for confirmation (required when not run interactively) |
+| `--admin-url` | Kratos Admin API base URL (or `$KRATOS_ADMIN_URL`) |
