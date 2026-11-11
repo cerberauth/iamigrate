@@ -46,6 +46,10 @@ type Job struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// version is the stored version this copy of the job was loaded at or
+	// last saved as (see Store.Save).
+	version string
 }
 
 // ChunkCheckpoints returns the saved chunk checkpoints in chunk order.

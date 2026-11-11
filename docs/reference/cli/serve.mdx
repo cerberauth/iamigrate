@@ -6,13 +6,14 @@ description: Serve jobs over a REST API.
 Runs the [`job`](../job/) state machine as a long-lived HTTP service. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
 
 ```sh
-iamigrate serve --listen 127.0.0.1:8080 --dir ./jobs/
+iamigrate serve --listen 127.0.0.1:8080 --store ./jobs/
 ```
 
 | Flag | Description |
 | --- | --- |
 | `--listen` | Address to listen on (default `127.0.0.1:8080`) |
-| `--dir` | Directory the jobs' state is kept in (default `./jobs/`) |
+| `--store` | Where the jobs' state is kept: a local directory (default `./jobs/`), or a remote store URI, see [Job stores](../job/#job-stores). `--dir` is its deprecated former name |
+| `--rescan` | How often to look for unfinished jobs nobody runs, such as those of a replica that stopped (default `30s`; `0` only looks at start) |
 | `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) every job fires, and the handlers job mappings can hand strategies to |
 
 ## Endpoints
@@ -42,7 +43,11 @@ Credentials are never part of a request. Each step reads them from the environme
 
 Set `$IAMIGRATE_API_TOKEN` to require it as a bearer token (`Authorization: Bearer <token>`). Without a token, `serve` only accepts a loopback `--listen` address and refuses to start on any other.
 
-`SIGINT` or `SIGTERM` stops the server and interrupts its running jobs, which stay in the state they were in. When `serve` starts it resumes every unfinished job in `--dir`, the ones a crash or a shutdown interrupted, exactly as `job run` would: finished steps aren't redone and an Auth0 import carries on from its chunk checkpoints. A job another process is running is left to it.
+`SIGINT` or `SIGTERM` stops the server and interrupts its running jobs, which stay in the state they were in. When `serve` starts it resumes every unfinished job in `--store`, the ones a crash or a shutdown interrupted, exactly as `job run` would: finished steps aren't redone and an Auth0 import carries on from its chunk checkpoints. A job another process is running is left to it, and `serve` looks again every `--rescan`.
+
+## Several replicas
+
+With a remote `--store`, several `serve` replicas can share the jobs: each job runs on one replica at a time, the one holding its lease. A job is started by the replica that received its `POST /jobs` (or `retry`), and the others pick up unfinished jobs nobody holds when they rescan, such as those of a replica that crashed, once its leases expire (60 seconds after its last renewal). The job's files (`users`, `mapping`, ...) must be at the same paths on every replica.
 
 ## Hooks
 

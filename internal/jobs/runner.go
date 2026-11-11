@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -95,13 +96,38 @@ func (r *Runner) Create(params map[string]string) (*Job, error) {
 // only when it couldn't carry the job any further, namely when ctx is done
 // or the store fails. A cancelled ctx leaves the job in the state it was
 // interrupted in, to be resumed by another Run.
+//
+// The lock is a lease: if it is lost (it expired, or another process took
+// it over), the run stops before its next save, and Run returns
+// ErrLeaseLost.
 func (r *Runner) Run(ctx context.Context, id string) (*Job, error) {
-	unlock, err := r.Store.Lock(id)
+	lease, err := r.Store.Lock(id)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer lease.Release()
 
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if lost := lease.Lost(); lost != nil {
+		go func() {
+			select {
+			case <-lost:
+				cancel(ErrLeaseLost)
+			case <-ctx.Done():
+			}
+		}()
+	}
+	leased := *r
+	leased.Store = leasedStore{Store: r.Store, lease: lease}
+	j, err := leased.run(ctx, id)
+	if err != nil && errors.Is(context.Cause(ctx), ErrLeaseLost) {
+		return j, ErrLeaseLost
+	}
+	return j, err
+}
+
+func (r *Runner) run(ctx context.Context, id string) (*Job, error) {
 	j, err := r.Store.Load(id)
 	if err != nil {
 		return nil, err
@@ -237,11 +263,11 @@ func jobData(j *Job) map[string]any {
 // TransitionError for a from that isn't a working state at or before the
 // one the job failed in.
 func (r *Runner) Retry(id string, from State) (*Job, error) {
-	unlock, err := r.Store.Lock(id)
+	lease, err := r.Store.Lock(id)
 	if err != nil {
 		return nil, err
 	}
-	defer unlock()
+	defer lease.Release()
 
 	j, err := r.Store.Load(id)
 	if err != nil {
@@ -372,4 +398,23 @@ func (c *checkpoints) recordHook(res hooks.Result) {
 func (c *checkpoints) save() error {
 	c.job.UpdatedAt = c.now()
 	return c.store.Save(c.job)
+}
+
+// leasedStore is the Store of a Run: it refuses to save once the run's
+// lease is lost, so a run that lost its job never overwrites the new
+// holder's progress.
+type leasedStore struct {
+	Store
+	lease Lease
+}
+
+func (s leasedStore) Save(j *Job) error {
+	if lost := s.lease.Lost(); lost != nil {
+		select {
+		case <-lost:
+			return ErrLeaseLost
+		default:
+		}
+	}
+	return s.Store.Save(j)
 }

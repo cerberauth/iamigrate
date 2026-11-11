@@ -61,7 +61,13 @@ A job can only be driven by one `job run` at a time; a second gets `job is being
 | `job status <id>` | Show the state and the result of each finished step; `--json` prints the whole record |
 | `job report <id>` | Print, as JSON, what a finished (`done` or `failed`) job's steps found |
 
-All take `--dir` (default `./jobs/`), the directory the jobs' state is kept in, one `<id>.json` per job, `--api-url`, and `--hooks`.
+All take `--store` (default `./jobs/`), where the jobs' state is kept, one `<id>.json` per job (see [Job stores](#job-stores)), `--api-url`, and `--hooks`. `--dir` is the deprecated former name of `--store`.
+
+## Job stores
+
+`--store` is a local directory, given as a path or a `file://` URI, or the URI of a remote store, for jobs that resume on another machine, a CI runner or a restarted container, and for [`serve`](../serve/) replicas sharing their jobs.
+
+Only one run drives a job at a time: the one holding its lock. In a local directory it is a file lock, which the system releases if the process dies. In a remote store it is a lease the run renews while it goes; one that crashes stops renewing, and the job can be resumed elsewhere 60 seconds later. A run that loses its lease (it stalled past it, and another took the job over) stops before its next save. Every save is also conditional on the version the run last read, so two writers never overwrite each other.
 
 ## Hooks
 
@@ -77,7 +83,7 @@ Hooks aren't stored with a job: pass `--hooks` to every `job run`, a resumed one
 
 ## Driving a server
 
-With `--api-url` (or `$IAMIGRATE_API_URL`) the commands act on the jobs of a running [`iamigrate serve`](../serve/) instead of running them in process, and `--dir` is ignored:
+With `--api-url` (or `$IAMIGRATE_API_URL`) the commands act on the jobs of a running [`iamigrate serve`](../serve/) instead of running them in process, and `--store` is ignored:
 
 ```sh
 id=$(iamigrate job --api-url http://127.0.0.1:8080 create --target kratos --admin-url http://kratos:4434 --users /srv/work/users.cmf.jsonl)
