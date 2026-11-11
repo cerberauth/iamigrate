@@ -73,6 +73,7 @@ Only one run drives a job at a time: the one holding its lock. In a local direct
 | --- | --- |
 | Local directory | `./jobs/`, `file:///srv/jobs` |
 | [Google Cloud Storage](#google-cloud-storage) | `gs://bucket/prefix` |
+| [Amazon S3](#amazon-s3) | `s3://bucket/prefix` |
 
 ### Google Cloud Storage
 
@@ -83,6 +84,17 @@ Credentials are a service account key file at `$GOOGLE_APPLICATION_CREDENTIALS`,
 ```sh
 iamigrate job --store gs://acme-migrations/jobs create --target kratos --users /srv/work/users.cmf.jsonl
 iamigrate job --store gs://acme-migrations/jobs run "$id"
+```
+
+### Amazon S3
+
+`s3://bucket/prefix` keeps each job as the object `prefix/<id>.json`, and its lease as `prefix/<id>.lease`. Saves and leases are conditional writes (`If-None-Match: *` to create an object, `If-Match` on its ETag to replace it). An S3-compatible store that ignores them is refused when the store is opened, with an error saying so.
+
+Credentials and settings come from the environment variables the AWS tools read: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` for temporary credentials (`aws configure export-credentials --format env` prints them for a profile), `AWS_REGION` (or `AWS_DEFAULT_REGION`, default `us-east-1`), and `AWS_ENDPOINT_URL_S3` (or `AWS_ENDPOINT_URL`) for an S3-compatible store such as MinIO, which is then addressed path-style. The credentials need `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` and `s3:ListBucket` on the bucket and prefix.
+
+```sh
+iamigrate job --store s3://acme-migrations/jobs create --target kratos --users /srv/work/users.cmf.jsonl
+iamigrate job --store s3://acme-migrations/jobs run "$id"
 ```
 
 ## Hooks

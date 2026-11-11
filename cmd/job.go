@@ -14,6 +14,7 @@ import (
 	"github.com/cerberauth/iamigrate/internal/api"
 	"github.com/cerberauth/iamigrate/internal/jobs"
 	_ "github.com/cerberauth/iamigrate/internal/jobs/gcsstore" // gs:// job stores
+	_ "github.com/cerberauth/iamigrate/internal/jobs/s3store"  // s3:// job stores
 	"github.com/cerberauth/iamigrate/pkg/connector/auth0"
 	"github.com/cerberauth/iamigrate/pkg/progress"
 	"github.com/cerberauth/x/telemetryx"
