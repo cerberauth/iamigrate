@@ -74,6 +74,7 @@ Only one run drives a job at a time: the one holding its lock. In a local direct
 | Local directory | `./jobs/`, `file:///srv/jobs` |
 | [Google Cloud Storage](#google-cloud-storage) | `gs://bucket/prefix` |
 | [Amazon S3](#amazon-s3) | `s3://bucket/prefix` |
+| [Azure Blob Storage](#azure-blob-storage) | `azblob://container/prefix` |
 
 ### Google Cloud Storage
 
@@ -95,6 +96,17 @@ Credentials and settings come from the environment variables the AWS tools read:
 ```sh
 iamigrate job --store s3://acme-migrations/jobs create --target kratos --users /srv/work/users.cmf.jsonl
 iamigrate job --store s3://acme-migrations/jobs run "$id"
+```
+
+### Azure Blob Storage
+
+`azblob://container/prefix` keeps each job as the blob `prefix/<id>.json`. Saves are conditional on the blob's ETag (`If-Match`, or `If-None-Match: *` to create one), and a job's lock is a native blob lease on `prefix/<id>.lease`, renewed while the job runs. Azure leases last between 15 and 60 seconds, so a crashed run's job can be resumed elsewhere a minute later at most.
+
+Credentials come from `$AZURE_STORAGE_CONNECTION_STRING`, or `$AZURE_STORAGE_ACCOUNT` with either `$AZURE_STORAGE_KEY` (the account key) or `$AZURE_STORAGE_SAS_TOKEN` (a shared access signature allowing read, write, delete and list on the container). For Azurite, `AZURE_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true`.
+
+```sh
+iamigrate job --store azblob://migrations/jobs create --target kratos --users /srv/work/users.cmf.jsonl
+iamigrate job --store azblob://migrations/jobs run "$id"
 ```
 
 ## Hooks
