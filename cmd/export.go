@@ -1,12 +1,14 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -19,6 +21,8 @@ import (
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 	"github.com/cerberauth/iamigrate/pkg/lifecycle"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
+	"github.com/cerberauth/x/telemetryx"
+	"github.com/getargvio/argvio-go"
 	"github.com/spf13/cobra"
 )
 
@@ -132,6 +136,7 @@ func newExportCmd() *cobra.Command {
 			var manifest connector.Manifest
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
+			exportStart := time.Now()
 			switch source {
 			case kratos.Name:
 				if adminURL == "" {
@@ -164,6 +169,7 @@ func newExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			recordExport(ctx, source, time.Since(exportStart), manifest)
 			if err := w.Close(); err != nil {
 				return err
 			}
@@ -269,4 +275,30 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// Export metrics, declared in the Argvio catalog. Hash algorithms are the
+// CMF's own identifiers; anything else is "other".
+var (
+	exportDuration      = argvio.NewDuration("export.run", argvio.Dims("source"))
+	exportUsers         = argvio.NewValue("export.users", argvio.WithUnit(argvio.UnitCount), argvio.Dims("source"))
+	exportSkipped       = argvio.NewValue("export.skipped", argvio.WithUnit(argvio.UnitCount), argvio.Dims("source"))
+	exportHashAlgorithm = argvio.NewCounter("export.hash-algorithm", argvio.Dims("source", "algorithm"))
+
+	exportSources  = []string{flatfile.Name, kratos.Name, keycloak.Name, firebase.Name, auth0.Name, azureb2c.Name}
+	hashAlgorithms = []string{
+		string(cmf.AlgBcrypt), string(cmf.AlgScrypt), string(cmf.AlgPBKDF2), string(cmf.AlgArgon2),
+		string(cmf.AlgMD5), string(cmf.AlgSHA1), string(cmf.AlgSHA256), string(cmf.AlgSHA512),
+		string(cmf.AlgMD4), string(cmf.AlgHMAC), string(cmf.AlgLDAP),
+	}
+)
+
+func recordExport(ctx context.Context, source string, d time.Duration, m connector.Manifest) {
+	source = telemetryx.Vocab(source, exportSources...)
+	exportDuration.Record(ctx, d, source)
+	exportUsers.Record(ctx, float64(m.RecordCount), source)
+	exportSkipped.Record(ctx, float64(len(m.SkippedRecords)), source)
+	for alg, n := range m.HashAlgorithmCounts {
+		exportHashAlgorithm.Add(ctx, int64(n), source, telemetryx.Vocab(string(alg), hashAlgorithms...))
+	}
 }
