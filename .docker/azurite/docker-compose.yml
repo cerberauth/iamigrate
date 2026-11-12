@@ -1,0 +1,13 @@
+# Spins up a disposable Azurite for the Azure Blob Storage job store's
+# contract tests in internal/jobs/azblobstore.
+#
+# Usage:
+#   docker compose -f .docker/azurite/docker-compose.yml up --wait
+#   AZURE_STORAGE_CONNECTION_STRING=UseDevelopmentStorage=true go test ./internal/jobs/azblobstore/ -run TestAzuriteContract
+#   docker compose -f .docker/azurite/docker-compose.yml down -v
+services:
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:3.34.0
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--blobPort", "10000", "--inMemoryPersistence", "--skipApiVersionCheck"]
+    ports:
+      - "10000:10000"
