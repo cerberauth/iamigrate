@@ -1,0 +1,23 @@
+# Spins up a disposable MinIO for the S3 job store's contract tests in
+# internal/jobs/s3store. (MinIO no longer publishes images of its own; this
+# is Bitnami's last build.)
+#
+# Usage:
+#   docker compose -f .docker/minio/docker-compose.yml up --wait
+#   IAMIGRATE_TEST_S3_ENDPOINT=http://127.0.0.1:9000 AWS_ACCESS_KEY_ID=iamigrate AWS_SECRET_ACCESS_KEY=iamigrate-secret \
+#     go test ./internal/jobs/s3store/ -run TestMinIOContract
+#   docker compose -f .docker/minio/docker-compose.yml down -v
+services:
+  minio:
+    image: bitnamilegacy/minio:2025.7.23
+    environment:
+      - MINIO_ROOT_USER=iamigrate
+      - MINIO_ROOT_PASSWORD=iamigrate-secret
+      - MINIO_DEFAULT_BUCKETS=iamigrate-jobs
+    ports:
+      - "9000:9000"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:9000/minio/health/live"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

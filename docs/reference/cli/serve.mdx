@@ -47,7 +47,7 @@ Set `$IAMIGRATE_API_TOKEN` to require it as a bearer token (`Authorization: Bear
 
 ## Several replicas
 
-With a remote `--store`, such as `gs://bucket/prefix` (see [Job stores](../job/#job-stores)), several `serve` replicas can share the jobs: each job runs on one replica at a time, the one holding its lease. A job is started by the replica that received its `POST /jobs` (or `retry`), and the others pick up unfinished jobs nobody holds when they rescan, such as those of a replica that crashed, once its leases expire (60 seconds after its last renewal). The job's files (`users`, `mapping`, ...) must be at the same paths on every replica.
+With a remote `--store`, such as `gs://bucket/prefix` or `s3://bucket/prefix` (see [Job stores](../job/#job-stores)), several `serve` replicas can share the jobs: each job runs on one replica at a time, the one holding its lease. A job is started by the replica that received its `POST /jobs` (or `retry`), and the others pick up unfinished jobs nobody holds when they rescan, such as those of a replica that crashed, once its leases expire (60 seconds after its last renewal). The job's files (`users`, `mapping`, ...) must be at the same paths on every replica.
 
 ## Hooks
 
