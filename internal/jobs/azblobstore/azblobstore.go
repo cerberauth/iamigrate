@@ -180,7 +180,10 @@ func (b *Bucket) Delete(ctx context.Context, key, match string) error {
 type listResult struct {
 	Blobs struct {
 		Blob []struct {
-			Name string `xml:"Name"`
+			Name       string `xml:"Name"`
+			Properties struct {
+				Etag string `xml:"Etag"`
+			} `xml:"Properties"`
 		} `xml:"Blob"`
 	} `xml:"Blobs"`
 	NextMarker string `xml:"NextMarker"`
@@ -188,7 +191,21 @@ type listResult struct {
 
 // List returns the keys under prefix, relative to the bucket's prefix.
 func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
-	var keys []string
+	objects, err := b.ListObjects(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(objects))
+	for i, o := range objects {
+		keys[i] = o.Key
+	}
+	return keys, nil
+}
+
+// ListObjects returns the blobs under prefix, relative to the bucket's
+// prefix, with their ETags.
+func (b *Bucket) ListObjects(ctx context.Context, prefix string) ([]jobs.Object, error) {
+	var objects []jobs.Object
 	marker := ""
 	for {
 		q := url.Values{"restype": {"container"}, "comp": {"list"}, "prefix": {b.Prefix + prefix}}
@@ -204,10 +221,10 @@ func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
 			return nil, fmt.Errorf("azblob: decoding the blob listing: %w", err)
 		}
 		for _, bl := range res.Blobs.Blob {
-			keys = append(keys, strings.TrimPrefix(bl.Name, b.Prefix))
+			objects = append(objects, jobs.Object{Key: strings.TrimPrefix(bl.Name, b.Prefix), Version: bl.Properties.Etag})
 		}
 		if res.NextMarker == "" {
-			return keys, nil
+			return objects, nil
 		}
 		marker = res.NextMarker
 	}

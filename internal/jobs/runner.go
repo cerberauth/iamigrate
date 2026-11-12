@@ -78,6 +78,16 @@ func (r *Runner) Create(params map[string]string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	return r.CreateWithID(id, params)
+}
+
+// CreateWithID stores a new queued job with the given ID, for a caller that
+// derives it from what triggered the job so a second trigger for the same
+// thing finds it: a job with that ID already in the store is ErrConflict.
+func (r *Runner) CreateWithID(id string, params map[string]string) (*Job, error) {
+	if err := checkID(id); err != nil {
+		return nil, err
+	}
 	now := r.now()
 	j := &Job{ID: id, State: Queued, Params: params, CreatedAt: now, UpdatedAt: now}
 	if err := r.Store.Save(j); err != nil {

@@ -3,6 +3,7 @@ package jobstest
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,6 +158,16 @@ func BucketContract(t *testing.T, newBucket func(t *testing.T) jobs.Bucket) {
 		keys, err = b.List(ctx, "ot")
 		require.NoError(t, err)
 		require.Equal(t, []string{"other"}, keys)
+
+		if lister, ok := b.(jobs.ObjectLister); ok {
+			objects, err := lister.ListObjects(ctx, "k")
+			require.NoError(t, err)
+			require.Len(t, objects, 1)
+			require.Equal(t, "k", objects[0].Key)
+			// Listings and GET headers may quote an ETag differently.
+			require.Equal(t, strings.Trim(v2, `"`), strings.Trim(objects[0].Version, `"`),
+				"a listed version is the one Get returns")
+		}
 
 		require.ErrorIs(t, b.Delete(ctx, "k", v1), jobs.ErrPrecondition)
 		require.NoError(t, b.Delete(ctx, "k", v2))

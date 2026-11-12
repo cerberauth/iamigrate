@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/cerberauth/iamigrate/internal/api"
 	"github.com/cerberauth/iamigrate/internal/jobs"
+	"github.com/cerberauth/iamigrate/internal/watch"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/stretchr/testify/require"
 )
@@ -353,4 +355,32 @@ func TestResumeRunsUnfinishedJobsOnly(t *testing.T) {
 	}
 	_, reran := imports.Load(finished.ID)
 	require.False(t, reran)
+}
+
+func TestInfoListsWatchers(t *testing.T) {
+	get := func(c *api.Client) api.Info {
+		resp, err := http.Get(c.BaseURL + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var info api.Info
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&info))
+		return info
+	}
+	c, _ := newTestServer(t, jobs.Steps{}, api.Options{})
+	require.NotNil(t, get(c).Watchers, "an empty list, not null")
+	require.Empty(t, get(c).Watchers)
+
+	c, _ = newTestServer(t, jobs.Steps{}, api.Options{Watchers: func() []watch.Status {
+		return []watch.Status{{Name: "nightly", Bucket: "s3://b/p/", JobsCreated: 2, LastError: "boom"}}
+	}})
+	info := get(c)
+	require.Len(t, info.Watchers, 1)
+	require.Equal(t, "nightly", info.Watchers[0].Name)
+	require.Equal(t, "boom", info.Watchers[0].LastError)
+
+	resp, err := http.Get(c.BaseURL + "/nope")
+	require.NoError(t, err)
+	resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode, "only / itself")
 }

@@ -37,6 +37,22 @@ type Bucket interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 }
 
+// Object is an entry of an ObjectLister's listing.
+type Object struct {
+	// Key is relative to the bucket's prefix.
+	Key string
+	// Version is the object's version, as Get returns it: it changes
+	// whenever the object is written.
+	Version string
+}
+
+// ObjectLister is a Bucket that lists its objects with their versions in
+// one call, which watching a bucket for new objects needs.
+type ObjectLister interface {
+	// ListObjects returns the objects under prefix, in no particular order.
+	ListObjects(ctx context.Context, prefix string) ([]Object, error)
+}
+
 // LeaseBucket is a Bucket with native leases on its objects, which an
 // ObjectStore then uses for Lock instead of lease objects of its own.
 type LeaseBucket interface {

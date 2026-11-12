@@ -3,7 +3,7 @@ title: serve
 description: Serve jobs over a REST API.
 ---
 
-Runs the [`job`](../job/) state machine as a long-lived HTTP service. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
+Runs the [`job`](../job/) state machine as a long-lived HTTP service, and with `--watch` starts jobs on its own for new objects in a bucket. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
 
 ```sh
 iamigrate serve --listen 127.0.0.1:8080 --store ./jobs/
@@ -15,11 +15,13 @@ iamigrate serve --listen 127.0.0.1:8080 --store ./jobs/
 | `--store` | Where the jobs' state is kept: a local directory (default `./jobs/`), or a remote store URI, see [Job stores](../job/#job-stores). `--dir` is its deprecated former name |
 | `--rescan` | How often to look for unfinished jobs nobody runs, such as those of a replica that stopped (default `30s`; `0` only looks at start) |
 | `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) every job fires, and the handlers job mappings can hand strategies to |
+| `--watch` | `watchers.yaml` path: [watchers](#watchers) that start a job from a template for each new object in a bucket |
 
 ## Endpoints
 
 | Endpoint | Does |
 | --- | --- |
+| `GET /` | The server's [watchers](#watchers): `{"watchers": [...]}`, each with the jobs it created and its last error |
 | `POST /jobs` | Queue a job and start running it in the background. Answers `202` with the job record and its `Location` |
 | `GET /jobs/{id}` | The job record: state, params, and the result of each finished step |
 | `GET /jobs/{id}/report` | What the finished steps found: `manifest`, `problems`, `warnings`, `import`, `verify`, and the hook calls that vetoed, failed or were ignored (`hooks`). Answers `409` while the job is still running |
@@ -36,6 +38,91 @@ curl -X POST http://127.0.0.1:8080/jobs -d '{
 The keys are `target`, `users`, `source`, `mapping`, `connection_id`, `upsert`, `in`, `format`, `source_mapping`, `admin_url`, `schema_id`, `schema_file`, `connection`, `connection_config`, `export_connection_id`, `export_fields`, `export_limit`, `tenant`, `filter`, `extension_attributes`, `hash_rounds` and `hash_mem_cost`, each matching the `job create` flag of the same name. The params are checked as `job create` checks them, and a mistake is a `400`. Poll `GET /jobs/{id}` until `state` is `done` or `failed`.
 
 Errors are `{"error": "..."}` with the matching status: `400` for a bad request, `401` for a missing or wrong token, `404` for an unknown job, `409` for a request the job's state doesn't allow.
+
+## Watchers
+
+With `--watch`, `serve` also starts jobs on its own: a watcher creates a job from a template for each new object under a bucket prefix, such as a nightly export dropped in a bucket, with no scheduler or glue code calling `POST /jobs`.
+
+```yaml
+# watchers.yaml
+version: 1
+work_dir: ./watch/            # default ./watch/, relative to this file
+watchers:
+  - name: nightly
+    bucket: s3://exports/nightly/
+    match: "*.cmf.jsonl.gz"
+    template: nightly.job.yaml
+    interval: 5m
+```
+
+| Key | Description |
+| --- | --- |
+| `name` | Identifies the watcher in `GET /` and in its jobs' IDs. Letters, digits, `-` and `_` |
+| `bucket` | Where new objects are looked for: a local directory, or `s3://bucket/prefix/`, `gs://bucket/prefix/` or `azblob://container/prefix/`, with the credentials of the [job stores](../job/#job-stores) of the same scheme. The bucket is only read |
+| `match` | Optional pattern the object's base name must match (`*`, `?`, `[...]`). Without it every object counts. Names starting with `.` never do |
+| `template` | The job template file, relative to this file |
+| `interval` | How often the bucket is listed (default `1m`) |
+| `queue` | Optional URI of a queue the bucket's event notifications arrive on, read instead of listing the bucket. See [Event notifications](#event-notifications) |
+
+The job template is the body of a `POST /jobs`, whose param values can use the variables of the object that triggered the job:
+
+```yaml
+# nightly.job.yaml
+params:
+  target: kratos
+  admin_url: http://kratos:4434
+  users: ${input}
+```
+
+| Variable | Value |
+| --- | --- |
+| `${input}` | The object as a local file: the file itself for a local directory, a copy downloaded into the job's work directory otherwise. The template must use it |
+| `${uri}` | The object's URI |
+| `${key}` | The object's key under the watched prefix |
+| `${version}` | The object's version: its ETag (S3, Azure), its generation (Cloud Storage), its modification time and size (local) |
+| `${work}` | The job's own directory, `<work_dir>/<job id>/`, for the files it writes: `users: ${work}/users.cmf.jsonl` when the object is an export to run through a `source` |
+| `${job}` | The job's ID |
+
+The template is checked when `serve` starts, as `POST /jobs` checks params, and a mistake stops it. Each job is checked again when it is created; a refused one is reported as the watcher's last error and not tried again until `serve` restarts.
+
+Each object version starts one job at most. A job's ID is derived from the watcher's name, the object's URI and its version, and the job store refuses to create a job twice: an object already handled is skipped after a restart, when several replicas watch the same bucket (one of them creates the job and runs it), and when a notification is delivered again. A new version of an object, written over it, is a new job. Every object already under the prefix when a watcher first starts gets a job too, so point a watcher at a prefix that only receives new drops.
+
+A file in a local directory is picked up once it is unchanged across two listings, so a file still being written isn't. An object in a remote bucket is only listed once complete. `work_dir` can't be inside a watched local directory, or the jobs' outputs would start jobs. With several replicas, `work_dir` must be on storage they share, like the other paths of a job.
+
+Downloaded copies stay in `work_dir` after their job finishes. An object is held in memory while it downloads, so give the server memory for the largest one.
+
+### Event notifications
+
+Listing a large bucket every `interval` is slow and costs requests. Where the provider sends event notifications to a queue, a watcher with a `queue` reads them instead, and starts a job for each object created under its `bucket` and matching its `match`:
+
+- Amazon S3 event notifications, sent to the queue directly or through an SNS topic;
+- Google Cloud Storage Pub/Sub notifications, with the `JSON_API_V1` payload or none;
+- Azure Blob Storage events from Event Grid, in the Event Grid or CloudEvents schema.
+
+A notification for anything else, such as a deletion or another bucket's object, is acknowledged and ignored. A message is acknowledged only once the jobs it notifies of are in the job store; one that isn't a notification, or whose object can't be downloaded or whose job is refused, is handed back to the queue, so its redelivery and dead-letter settings apply. A redelivered message finds its job already created, and is acknowledged without creating another. The queue's scheme must be one a message broker provider registers. `serve` refuses a scheme it doesn't know, and names the ones it does.
+
+### Status
+
+`GET /` lists the watchers:
+
+```json
+{
+  "watchers": [
+    {
+      "name": "nightly",
+      "bucket": "s3://exports/nightly/",
+      "match": "*.cmf.jsonl.gz",
+      "jobs_created": 3,
+      "last_job": "w1f0c...",
+      "last_check_at": "2026-11-12T03:05:00Z",
+      "last_error": "users-2026-11-11.cmf.jsonl.gz: downloading: s3: AccessDenied (status 403): Access Denied",
+      "last_error_at": "2026-11-12T02:05:00Z"
+    }
+  ]
+}
+```
+
+`jobs_created` and `last_job` count the jobs this server created since it started. `last_check_at` is the last time the bucket was listed, or the queue polled, successfully. `last_error` stays until another error replaces it: a `last_error_at` before `last_check_at` is an error the watcher has got past. Follow a job with `GET /jobs/{id}` as any other.
 
 ## Credentials and access
 

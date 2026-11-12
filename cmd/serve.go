@@ -13,6 +13,11 @@ import (
 	"time"
 
 	"github.com/cerberauth/iamigrate/internal/api"
+	"github.com/cerberauth/iamigrate/internal/jobs"
+	"github.com/cerberauth/iamigrate/internal/jobs/azblobstore"
+	"github.com/cerberauth/iamigrate/internal/jobs/gcsstore"
+	"github.com/cerberauth/iamigrate/internal/jobs/s3store"
+	"github.com/cerberauth/iamigrate/internal/watch"
 	"github.com/spf13/cobra"
 )
 
@@ -22,8 +27,8 @@ const shutdownTimeout = 10 * time.Second
 
 func newServeCmd() *cobra.Command {
 	var (
-		listen, store, hooksPath string
-		rescan                   time.Duration
+		listen, store, hooksPath, watchPath string
+		rescan                              time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -34,7 +39,8 @@ func newServeCmd() *cobra.Command {
 			"Drive it with `iamigrate job --api-url`. " +
 			"A job's connectors read their credentials from the environment of this process, and its file paths " +
 			"are paths on this machine. Set $" + envAPIToken + " to require it as a bearer token; " +
-			"without it only a loopback --listen address is accepted.",
+			"without it only a loopback --listen address is accepted. " +
+			"With --watch, jobs also start on their own, from a template, for each new object in a bucket.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			token := os.Getenv(envAPIToken)
@@ -60,7 +66,27 @@ func newServeCmd() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
 
-			srv := api.New(ctx, runner, api.Options{Validate: checkJobParams, Token: token})
+			opts := api.Options{Validate: checkJobParams, Token: token}
+			var srv *api.Server
+			var watchers *watch.Set
+			if watchPath != "" {
+				cfg, templates, err := watch.LoadConfig(watchPath)
+				if err != nil {
+					return err
+				}
+				watchers, err = watch.Open(ctx, cfg, templates, watch.Options{
+					Runner:   runner,
+					Start:    func(id string) bool { return srv.Start(id) },
+					Validate: checkJobParams,
+					Buckets:  watchBuckets,
+				})
+				if err != nil {
+					_ = ln.Close()
+					return err
+				}
+				opts.Watchers = watchers.Status
+			}
+			srv = api.New(ctx, runner, opts)
 			httpSrv := &http.Server{Handler: srv.Handler(), ReadHeaderTimeout: 10 * time.Second}
 			serveErr := make(chan error, 1)
 			go func() { serveErr <- httpSrv.Serve(ln) }()
@@ -76,18 +102,29 @@ func newServeCmd() *cobra.Command {
 			if rescan > 0 {
 				srv.Rescan(rescan)
 			}
+			if watchers != nil {
+				watchers.Run(ctx)
+			}
+			// The watchers start jobs: they stop before the server waits
+			// for its jobs.
+			wait := func() {
+				if watchers != nil {
+					watchers.Wait()
+				}
+				srv.Wait()
+			}
 
 			select {
 			case err := <-serveErr:
 				stop()
-				srv.Wait()
+				wait()
 				return err
 			case <-ctx.Done():
 			}
 			shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 			defer cancel()
 			err = httpSrv.Shutdown(shutCtx)
-			srv.Wait()
+			wait()
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				return err
 			}
@@ -98,8 +135,16 @@ func newServeCmd() *cobra.Command {
 	addStoreFlag(cmd.Flags(), &store)
 	cmd.Flags().DurationVar(&rescan, "rescan", 30*time.Second,
 		"how often to look for unfinished jobs nobody runs, such as those of a replica that stopped (0 to only look at start)")
+	cmd.Flags().StringVar(&watchPath, "watch", "", "watchers.yaml path: watchers that start a job from a template for each new object in a bucket")
 	cmd.Flags().StringVar(&hooksPath, "hooks", "", "hooks.yaml path: the hooks every job fires, and the handlers job mappings can delegate strategies to")
 	return cmd
+}
+
+// watchBuckets open the buckets --watch watchers list, read-only.
+var watchBuckets = map[string]jobs.BucketOpener{
+	s3store.Scheme:     s3store.OpenReadOnly,
+	gcsstore.Scheme:    gcsstore.Open,
+	azblobstore.Scheme: azblobstore.Open,
 }
 
 // isLoopback reports whether addr, a host:port, only accepts connections
