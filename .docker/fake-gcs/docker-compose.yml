@@ -1,0 +1,14 @@
+# Spins up a disposable fake-gcs-server for the Google Cloud Storage job
+# store's contract tests in internal/jobs/gcsstore.
+#
+# Usage:
+#   docker compose -f .docker/fake-gcs/docker-compose.yml up --wait
+#   STORAGE_EMULATOR_HOST=http://127.0.0.1:4443 go test ./internal/jobs/gcsstore/ -run TestFakeGCSContract
+#   docker compose -f .docker/fake-gcs/docker-compose.yml down -v
+services:
+  fake-gcs:
+    image: fsouza/fake-gcs-server:1.52.2
+    command: ["-scheme", "http", "-port", "4443", "-public-host", "127.0.0.1:4443", "-backend", "memory"]
+    entrypoint: ["/bin/fake-gcs-server"]
+    ports:
+      - "4443:4443"
