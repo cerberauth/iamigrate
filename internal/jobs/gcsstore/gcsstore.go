@@ -163,10 +163,24 @@ func (b *Bucket) Delete(ctx context.Context, key, match string) error {
 
 // List returns the keys under prefix, relative to the bucket's prefix.
 func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
-	var keys []string
+	objects, err := b.ListObjects(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(objects))
+	for i, o := range objects {
+		keys[i] = o.Key
+	}
+	return keys, nil
+}
+
+// ListObjects returns the objects under prefix, relative to the bucket's
+// prefix, with their generations.
+func (b *Bucket) ListObjects(ctx context.Context, prefix string) ([]jobs.Object, error) {
+	var objects []jobs.Object
 	token := ""
 	for {
-		q := url.Values{"prefix": {b.Prefix + prefix}, "fields": {"items(name),nextPageToken"}}
+		q := url.Values{"prefix": {b.Prefix + prefix}, "fields": {"items(name,generation),nextPageToken"}}
 		if token != "" {
 			q.Set("pageToken", token)
 		}
@@ -182,10 +196,10 @@ func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
 			return nil, fmt.Errorf("gcs: decoding the object listing: %w", err)
 		}
 		for _, o := range page.Items {
-			keys = append(keys, strings.TrimPrefix(o.Name, b.Prefix))
+			objects = append(objects, jobs.Object{Key: strings.TrimPrefix(o.Name, b.Prefix), Version: o.Generation})
 		}
 		if page.NextPageToken == "" {
-			return keys, nil
+			return objects, nil
 		}
 		token = page.NextPageToken
 	}

@@ -4,6 +4,7 @@
 // The endpoints are thin wrappers over jobs.Runner, so a job behaves the
 // same whether the CLI runs it in process or a server does:
 //
+//	GET  /                   the server's watchers, and how they are doing
 //	POST /jobs               queue a job and start running it in the background
 //	GET  /jobs/{id}          the job record
 //	GET  /jobs/{id}/report   what the finished steps found
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/cerberauth/iamigrate/internal/jobs"
+	"github.com/cerberauth/iamigrate/internal/watch"
 	"github.com/cerberauth/iamigrate/pkg/connector"
 	"github.com/cerberauth/iamigrate/pkg/hooks"
 )
@@ -64,6 +66,13 @@ type Report struct {
 	Hooks    []hooks.Result          `json:"hooks,omitempty"`
 }
 
+// Info is the body of GET /.
+type Info struct {
+	// Watchers are the watchers starting jobs from new objects (serve
+	// --watch), with the last error each hit.
+	Watchers []watch.Status `json:"watchers"`
+}
+
 // ErrorResponse is the body of every error response.
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -78,6 +87,10 @@ type Options struct {
 
 	// Token, if set, is the bearer token every request must carry.
 	Token string
+
+	// Watchers, if set, returns the status of the server's watchers, for
+	// GET /.
+	Watchers func() []watch.Status
 
 	// Logger receives the errors a background run ends with; slog's default
 	// if nil.
@@ -130,7 +143,7 @@ func (s *Server) Resume() (int, error) {
 			s.log.Error("job not resumed", "job", id, "error", err)
 			continue
 		}
-		if !j.State.Terminal() && s.start(id) {
+		if !j.State.Terminal() && s.Start(id) {
 			n++
 		}
 	}
@@ -162,6 +175,7 @@ func (s *Server) Rescan(interval time.Duration) {
 // Handler returns the HTTP handler of the API.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", s.info)
 	mux.HandleFunc("POST /jobs", s.create)
 	mux.HandleFunc("GET /jobs/{id}", s.get)
 	mux.HandleFunc("GET /jobs/{id}/report", s.report)
@@ -184,6 +198,14 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) info(w http.ResponseWriter, r *http.Request) {
+	info := Info{Watchers: []watch.Status{}}
+	if s.opts.Watchers != nil {
+		info.Watchers = s.opts.Watchers()
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
 func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	var req CreateRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
@@ -204,15 +226,15 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.start(j.ID)
+	s.Start(j.ID)
 
 	w.Header().Set("Location", "/jobs/"+j.ID)
 	writeJSON(w, http.StatusAccepted, j)
 }
 
-// start runs the job id in the background, unless this server already
-// is, and reports whether it started it.
-func (s *Server) start(id string) bool {
+// Start runs the job id in the background, unless this server already
+// is, and reports whether it started it. Not to be called once Wait is.
+func (s *Server) Start(id string) bool {
 	s.mu.Lock()
 	if s.running[id] {
 		s.mu.Unlock()
@@ -259,7 +281,7 @@ func (s *Server) retry(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	s.start(j.ID)
+	s.Start(j.ID)
 	writeJSON(w, http.StatusAccepted, j)
 }
 

@@ -62,6 +62,24 @@ type Bucket struct {
 // (or AWS_DEFAULT_REGION, else us-east-1) and AWS_ENDPOINT_URL_S3 (or
 // AWS_ENDPOINT_URL). It checks the bucket honors conditional writes.
 func Open(ctx context.Context, u *url.URL) (jobs.Bucket, error) {
+	b, err := open(u)
+	if err != nil {
+		return nil, err
+	}
+	if err := b.CheckConditionalWrites(ctx); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// OpenReadOnly opens the bucket of an s3://bucket/prefix URI as Open does,
+// without the conditional-write check, which writes to the bucket: for a
+// bucket only read from, such as one `serve` watches.
+func OpenReadOnly(_ context.Context, u *url.URL) (jobs.Bucket, error) {
+	return open(u)
+}
+
+func open(u *url.URL) (*Bucket, error) {
 	if u.Host == "" {
 		return nil, errors.New("s3: the URI names no bucket (s3://bucket/prefix)")
 	}
@@ -81,9 +99,6 @@ func Open(ctx context.Context, u *url.URL) (jobs.Bucket, error) {
 	}
 	if b.Credentials.AccessKeyID == "" || b.Credentials.SecretAccessKey == "" {
 		return nil, errors.New("s3: AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are required")
-	}
-	if err := b.CheckConditionalWrites(ctx); err != nil {
-		return nil, err
 	}
 	return b, nil
 }
@@ -189,7 +204,8 @@ func ifMatch(match string) http.Header {
 
 type listResult struct {
 	Contents []struct {
-		Key string `xml:"Key"`
+		Key  string `xml:"Key"`
+		ETag string `xml:"ETag"`
 	} `xml:"Contents"`
 	IsTruncated           bool   `xml:"IsTruncated"`
 	NextContinuationToken string `xml:"NextContinuationToken"`
@@ -198,7 +214,21 @@ type listResult struct {
 // List returns the keys under prefix, relative to the bucket's prefix,
 // through ListObjectsV2.
 func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
-	var keys []string
+	objects, err := b.ListObjects(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(objects))
+	for i, o := range objects {
+		keys[i] = o.Key
+	}
+	return keys, nil
+}
+
+// ListObjects returns the objects under prefix, relative to the bucket's
+// prefix, with their ETags, through ListObjectsV2.
+func (b *Bucket) ListObjects(ctx context.Context, prefix string) ([]jobs.Object, error) {
+	var objects []jobs.Object
 	token := ""
 	for {
 		q := url.Values{"list-type": {"2"}, "prefix": {b.Prefix + prefix}}
@@ -214,10 +244,10 @@ func (b *Bucket) List(ctx context.Context, prefix string) ([]string, error) {
 			return nil, fmt.Errorf("s3: decoding the object listing: %w", err)
 		}
 		for _, c := range res.Contents {
-			keys = append(keys, strings.TrimPrefix(c.Key, b.Prefix))
+			objects = append(objects, jobs.Object{Key: strings.TrimPrefix(c.Key, b.Prefix), Version: c.ETag})
 		}
 		if !res.IsTruncated || res.NextContinuationToken == "" {
-			return keys, nil
+			return objects, nil
 		}
 		token = res.NextContinuationToken
 	}

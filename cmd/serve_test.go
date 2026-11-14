@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/cerberauth/iamigrate/internal/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,16 +86,16 @@ func runCLI(t *testing.T, args ...string) string {
 	return out.String()
 }
 
-// startServe runs `serve` on a free port, with its jobs kept in dir, until
-// the test ends, and returns its URL.
-func startServe(t *testing.T, dir string) string {
+// startServe runs `serve` on a free port, with its jobs kept in dir and the
+// extra flags given, until the test ends, and returns its URL.
+func startServe(t *testing.T, dir string, flags ...string) string {
 	t.Helper()
 	ctx, stop := context.WithCancel(context.Background())
 	out := &syncBuffer{}
 	root := newRootCmd()
 	root.SetOut(out)
 	root.SetErr(&bytes.Buffer{})
-	root.SetArgs([]string{"serve", "--listen", "127.0.0.1:0", "--store", dir})
+	root.SetArgs(append([]string{"serve", "--listen", "127.0.0.1:0", "--store", dir}, flags...))
 	served := make(chan error, 1)
 	go func() { served <- root.ExecuteContext(ctx) }()
 	t.Cleanup(func() {
@@ -203,4 +205,72 @@ func TestServeResumesUnfinishedJobsOnStart(t *testing.T) {
 	apiURL := startServe(t, dir)
 	require.Contains(t, runCLI(t, "job", "--api-url", apiURL, "run", j.ID), "job "+j.ID+": done")
 	require.Equal(t, 3, imported())
+}
+
+func TestServeWatchStartsAJobPerNewFile(t *testing.T) {
+	work := t.TempDir()
+	runCLI(t, "testdata", "generate", "--count", "3", "--hash", "bcrypt:cost=4", "--no-gzip", "--no-answer-key", "--out", work)
+	kratosSrv, imported := fakeKratosAdmin(t)
+
+	drops := filepath.Join(work, "drops")
+	require.NoError(t, os.MkdirAll(drops, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "job.yaml"), []byte(
+		"params:\n  target: kratos\n  admin_url: "+kratosSrv.URL+"\n  users: ${input}\n"), 0o600))
+	watchers := filepath.Join(work, "watchers.yaml")
+	require.NoError(t, os.WriteFile(watchers, []byte(`version: 1
+work_dir: watch-work/
+watchers:
+  - name: drops
+    bucket: drops/
+    match: "*.cmf.jsonl"
+    template: job.yaml
+    interval: 50ms
+`), 0o600))
+
+	apiURL := startServe(t, filepath.Join(work, "server-jobs"), "--watch", watchers)
+
+	info := func() api.Info {
+		resp, err := http.Get(apiURL + "/")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		var i api.Info
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&i))
+		return i
+	}
+	require.Len(t, info().Watchers, 1)
+	require.Equal(t, "drops", info().Watchers[0].Name)
+
+	users, err := os.ReadFile(filepath.Join(work, "users.cmf.jsonl"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(drops, "nightly.cmf.jsonl"), users, 0o600))
+
+	var id string
+	require.Eventually(t, func() bool {
+		id = info().Watchers[0].LastJob
+		return id != ""
+	}, 10*time.Second, 20*time.Millisecond)
+	require.Contains(t, runCLI(t, "job", "--api-url", apiURL, "run", id), "job "+id+": done")
+	require.Equal(t, 3, imported())
+
+	// Further scans start nothing more for the same file.
+	time.Sleep(200 * time.Millisecond)
+	st := info().Watchers[0]
+	require.Equal(t, 1, st.JobsCreated)
+	require.Empty(t, st.LastError)
+}
+
+func TestServeWatchRefusesABadWatchersFile(t *testing.T) {
+	dir := t.TempDir()
+	watchers := filepath.Join(dir, "watchers.yaml")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "job.yaml"), []byte("params:\n  users: ${input}\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "drops"), 0o700))
+	require.NoError(t, os.WriteFile(watchers, []byte(
+		"version: 1\nwatchers:\n  - {name: w, bucket: drops, template: job.yaml}\n"), 0o600))
+	root := newRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"serve", "--listen", "127.0.0.1:0", "--store", filepath.Join(t.TempDir(), "jobs"), "--watch", watchers})
+	// No target: the template is checked as POST /jobs checks params.
+	require.ErrorContains(t, root.Execute(), `watcher "w": template:`)
 }

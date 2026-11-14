@@ -74,3 +74,15 @@ func (b *MemBucket) List(_ context.Context, prefix string) ([]string, error) {
 	}
 	return keys, nil
 }
+
+func (b *MemBucket) ListObjects(_ context.Context, prefix string) ([]jobs.Object, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var objects []jobs.Object
+	for k, o := range b.objects {
+		if strings.HasPrefix(k, prefix) {
+			objects = append(objects, jobs.Object{Key: k, Version: o.version})
+		}
+	}
+	return objects, nil
+}
