@@ -1,0 +1,145 @@
+---
+title: Migrate from Keycloak to AWS Cognito
+description: Move users from Keycloak to AWS Cognito with iamigrate, including what carries over, how password hashes and second factors are handled, and the steps to export, validate, import and verify.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Keycloak to AWS Cognito: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Keycloak](../../export/keycloak/) and the [import guide for AWS Cognito](../../import/cognito/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Keycloak to AWS Cognito |
+| --- | --- |
+| **Passwords** | Not carried over: Cognito can't import a hash. Users reset their password, or a Lambda trigger checks it at first sign-in. |
+| **Second factors** | Not carried over: users enroll again on AWS Cognito. |
+| **User IDs** | AWS Cognito generates new IDs. The report's `target_ids` maps each `source_id` to its new one. |
+
+The Keycloak export leaves behind:
+
+- Group and role memberships
+- Federated (social) identities
+- HOTP credentials, which CMF has no type for
+- Required actions, consents and timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- Shell access to the Keycloak server or container, to run `kc.sh export`. The Admin REST API never returns password hashes, so iamigrate reads a realm export rather than a live instance.
+- **AWS Cognito.** A user pool (**use a disposable pool for the rehearsal**), AWS credentials allowed to administer its users, and email or SMS delivery configured on the pool so users can reset their password. The [import guide](../../import/cognito/#1-point-iamigrate-at-the-pool) walks through it.
+
+<Aside type="caution">
+  The export contains password hashes and personal data. Write it somewhere access-controlled, never commit it, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Keycloak
+
+```sh
+# On the Keycloak host, or inside its container
+kc.sh export --dir /tmp/export --realm acme --users realm_file --http-management-port 9001
+
+# Copy the result out, then convert it
+iamigrate export --source keycloak --in ./realm-export --out ./export/
+```
+
+Service account users and users iamigrate can't translate are skipped and listed in `manifest.json`. The [Keycloak export guide](../../export/keycloak/#1-export-the-realm) covers running `kc.sh export` next to a live server.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped, and for the per-algorithm counts.
+
+## 2. Deal with passwords
+
+Cognito has no API that takes a password hash, so Keycloak's PBKDF2 and Argon2 hashes have nowhere to go. Every user is created with a random password nobody knows and listed under `requires_password_reset` in the import report. `validate` doesn't treat the hash as a problem for Cognito, so there is nothing to strip.
+
+Tell them to use **Forgot password**, or trigger the reset yourself with `AdminResetUserPassword`, which sends a code to a verified email or phone number.
+
+To keep the old password working instead, use Cognito's **Migrate user** Lambda trigger, which checks the password the user types against the old system on their first sign-in. iamigrate doesn't create it: see [Keep passwords with a Lambda trigger](../../import/cognito/#keep-passwords-with-a-lambda-trigger).
+
+## 3. Deal with second factors
+
+| Second factor in the export | On AWS Cognito |
+| --- | --- |
+| TOTP (portable) | Not imported. The user is created and listed under `requires_reenrollment`, and enrolls again after signing in. |
+| WebAuthn (flagged non-portable) | Not imported. The user is created and listed in the report for follow-up, and enrolls again after signing in. |
+| Recovery codes (flagged non-portable) | Not imported. The user is created and listed in the report for follow-up, and enrolls again after signing in. |
+
+## 4. Fit the data to AWS Cognito
+
+- **Choose the identifier users are created under.** A pool that signs users in by email or phone needs that identifier, a pool of usernames needs `username_first` (set the `identity.primary` strategy in `mapping.yaml`). The default is the first email, else the username, else the first phone number. See [Choose the identifier](../../import/cognito/#2-choose-the-identifier-users-are-created-under).
+- **Phone numbers must be E.164** (`+14155550123`) and no email, username or phone number can appear twice. `validate` checks both.
+- **Reset codes need a verified address.** Users reset their password with a code sent to a verified email or phone number, so check that Keycloak's verified flags are carried over (`validate` doesn't).
+- **Metadata isn't imported by default.** Every other user attribute arrives in `user_metadata`. Route what you need to `custom:<name>` attributes with `target_fields` or `metadata` in `mapping.yaml`, and declare each attribute in the pool's schema first: Cognito rejects the user otherwise.
+- **Names** carry over as standard attributes (`given_name`, `family_name`, `name`, `nickname`, `picture`, `locale`).
+
+## 5. Validate against AWS Cognito
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target cognito --mapping ./export/mapping.yaml
+iamigrate validate --in ./export/users.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target cognito
+```
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 6. Rehearse, then import
+
+Do a rehearsal first. Follow the [AWS Cognito import guide](../../import/cognito/) with a fixture that holds the same hash algorithms and second factors as your users, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at AWS Cognito:
+
+```sh
+export COGNITO_USER_POOL_ID=eu-west-1_AbCdEfGhI
+export AWS_ACCESS_KEY_ID=...
+export AWS_SECRET_ACCESS_KEY=...
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import cognito \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import cognito \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/cognito/) explains each code.
+
+## 7. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff cognito --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+There is no password to prove here, so check the reset path instead: make sure a test user can set a new password on AWS Cognito and sign in.
+
+Cognito generates each user's `sub`. The report's `target_ids` maps every `source_id` to it. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Keycloak, re-export, and import the final file.
+- Reconnect what the export doesn't carry: federated (social) identities, and group and role memberships. Then point every application at AWS Cognito.
+- Tell users what to expect. They need to set a new password. A second factor that didn't move has to be enrolled again.
+- Clean up the rehearsal. Delete the rehearsal users from the user pool, or use a disposable pool.
+
+## See also
+
+- [Export users from Keycloak](../../export/keycloak/)
+- [Import users into AWS Cognito](../../import/cognito/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import cognito`](../../../reference/cli/import-cognito/) and [`diff cognito`](../../../reference/cli/diff-cognito/)
+- [`mapping.yaml`](../../../reference/mapping/)

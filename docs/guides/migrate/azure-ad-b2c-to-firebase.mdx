@@ -1,0 +1,138 @@
+---
+title: Migrate from Azure AD B2C to Firebase
+description: Export users from Azure AD B2C without passwords, check what Firebase can take, import them with iamigrate, and verify the result.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Azure AD B2C to Firebase: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Azure AD B2C](../../export/azure-ad-b2c/) and the [import guide for Firebase](../../import/firebase/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Azure AD B2C to Firebase |
+| --- | --- |
+| **Passwords** | Not carried over: B2C never returns hashes. Users reset their password. |
+| **Second factors** | Not exported: users enroll again on Firebase. |
+| **User IDs** | The Azure AD object ID becomes the Firebase `uid`, up to 128 characters. |
+
+The Azure AD B2C export leaves behind:
+
+- Password hashes (Microsoft Graph never returns them)
+- MFA enrollments
+- Links to federated identity providers (the issuer and ID are kept in `app_metadata.federated_identities`, nothing more)
+- Groups, directory roles and application role assignments
+- Custom policies and user flows
+- Timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- An app registration in the B2C tenant with the Microsoft Graph **application** permission `User.Read.All`, admin consent granted, and a client secret.
+- The names of any custom attributes you want to export, in the form `extension_<app ID>_<name>`.
+- **Firebase.** A Firebase project with **Authentication** enabled and the **Email/Password** sign-in method turned on (**use a disposable project for the rehearsal**), plus a service account key or an OAuth2 access token. The [import guide](../../import/firebase/#1-point-iamigrate-at-the-project) walks through it.
+
+<Aside type="caution">
+  The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Azure AD B2C
+
+```sh
+export AZURE_TENANT_ID=your-tenant.onmicrosoft.com   # the B2C tenant's domain or directory ID
+export AZURE_CLIENT_ID=...       # the app registration's Application (client) ID
+export AZURE_CLIENT_SECRET=...   # and its client secret
+
+iamigrate export --source azure-ad-b2c \
+  --filter "creationType eq 'LocalAccount'" \
+  --out ./export/
+```
+
+The `--filter` above leaves out the tenant's administrators and guests. Add `--extension-attributes` to export custom attributes into `user_metadata`, and `--limit` to try the export on a sample first.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped.
+
+## 2. Deal with passwords
+
+Azure AD B2C never returns password hashes, so users are created in Firebase without a password, and every one of them has to set a new one. Send them a password reset email, for example with the Admin SDK's `generatePasswordResetLink`.
+
+Checking each password against B2C as users sign in would avoid that, but it needs a hook in the target's sign-in, and iamigrate doesn't cover one for Firebase. The idea is described in [Migrating from Azure AD B2C without password export](https://www.cerberauth.com/blog/migrating-from-azure-b2c-without-password-export/).
+
+## 3. Fit the data to Firebase
+
+- **An email or a phone number is required.** Firebase can't create a user with neither, and reports `TRANSLATION_ERROR`. B2C users who sign in with a username or a phone number have no email, and a user with no email, username or phone number is skipped by the export.
+- **Usernames are dropped.** Firebase has no username sign-in, so users who signed in with a username need an email or phone number to sign in at all.
+- **`user_metadata` is dropped.** Firebase stores no free-form profile data. Custom attributes you ask for land in `user_metadata`, and each federated sign-in identity in `app_metadata.federated_identities`. Move what you need into `app_metadata` (it becomes custom claims, limited to 1000 serialized characters and no reserved claim names), or keep it in your own database.
+- **Names and picture.** `profile.name` (else `given_name` and `family_name`) becomes `displayName`, and `profile.picture` becomes `photoURL`.
+
+## 4. Validate against Firebase
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target firebase --mapping ./export/mapping.yaml
+iamigrate validate --in ./export/users.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target firebase
+```
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 5. Rehearse, then import
+
+Do a rehearsal first. Follow the [Firebase import guide](../../import/firebase/) with a small fixture, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at Firebase:
+
+```sh
+export FIREBASE_PROJECT_ID=acme-rehearsal
+export GOOGLE_APPLICATION_CREDENTIALS=./service-account.json
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import firebase \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import firebase \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/firebase/) explains each code.
+
+## 6. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff firebase --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+There is no password to prove here, so check the reset path instead: make sure a test user can set a new password on Firebase and sign in.
+
+Firebase keeps the `source_id` as the user's `uid`, which Firebase limits to 128 characters. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Azure AD B2C, re-export, and import the final file.
+- Reconnect what the export doesn't carry: the federated identity providers (the issuer and ID of each are in `app_metadata.federated_identities`), groups and roles. Then point every application at Firebase.
+- Tell users what to expect. They need to set a new password, unless you check passwords against B2C as they sign in. Second factors aren't exported, so users enroll them again.
+- Clean up the rehearsal. Delete the rehearsal project, or delete its users from **Authentication → Users**.
+
+## See also
+
+- [Export users from Azure AD B2C](../../export/azure-ad-b2c/)
+- [Import users into Firebase](../../import/firebase/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import firebase`](../../../reference/cli/import-firebase/) and [`diff firebase`](../../../reference/cli/diff-firebase/)
+- [`mapping.yaml`](../../../reference/mapping/)

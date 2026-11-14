@@ -1,0 +1,149 @@
+---
+title: Migrate from Keycloak to Auth0
+description: Move users from Keycloak to Auth0 with iamigrate, including what carries over, how password hashes and second factors are handled, and the steps to export, validate, import and verify.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Keycloak to Auth0: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Keycloak](../../export/keycloak/) and the [import guide for Auth0](../../import/auth0/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Keycloak to Auth0 |
+| --- | --- |
+| **Passwords** | Kept. Auth0 accepts PBKDF2 and Argon2. |
+| **Second factors** | TOTP enrollments carry over. The rest need re-enrollment. |
+| **User IDs** | The Keycloak user UUID is kept as `source_id`, and Auth0 adds its connection prefix to it. |
+
+The Keycloak export leaves behind:
+
+- Group and role memberships
+- Federated (social) identities
+- HOTP credentials, which CMF has no type for
+- Required actions, consents and timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- Shell access to the Keycloak server or container, to run `kc.sh export`. The Admin REST API never returns password hashes, so iamigrate reads a realm export rather than a live instance.
+- **Auth0.** An Auth0 tenant (**use a development tenant for the rehearsal**), a database connection to import into, the MFA factors you intend to import enabled under **Security → Multi-factor Auth**, and Management API credentials. The [import guide](../../import/auth0/#1-prepare-the-auth0-tenant) walks through it.
+
+<Aside type="caution">
+  The export contains password hashes and personal data. Write it somewhere access-controlled, never commit it, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Keycloak
+
+```sh
+# On the Keycloak host, or inside its container
+kc.sh export --dir /tmp/export --realm acme --users realm_file --http-management-port 9001
+
+# Copy the result out, then convert it
+iamigrate export --source keycloak --in ./realm-export --out ./export/
+```
+
+Service account users and users iamigrate can't translate are skipped and listed in `manifest.json`. The [Keycloak export guide](../../export/keycloak/#1-export-the-realm) covers running `kc.sh export` next to a live server.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped, and for the per-algorithm counts.
+
+## 2. Deal with passwords
+
+Users keep their password: Auth0 accepts every hash algorithm Keycloak stores.
+
+| Hash in the export | Auth0 |
+| --- | --- |
+| PBKDF2 | Imported as `custom_password_hash`. Needs a salt and a digest Auth0 supports. |
+| Argon2 | Imported as `custom_password_hash`, from the full PHC string. |
+
+Look at `hash_algorithm_counts` in `manifest.json` to see which of these your Keycloak users actually have.
+
+## 3. Deal with second factors
+
+| Second factor in the export | On Auth0 |
+| --- | --- |
+| TOTP (portable) | Imported. The user keeps their authenticator app. Auth0 needs the secret as unpadded Base32, which `validate` checks, and the **One-time Password** factor enabled. |
+| WebAuthn (flagged non-portable) | Not imported. The user is created and listed in the report for follow-up, and enrolls again after signing in. |
+| Recovery codes (flagged non-portable) | Not imported: the old codes can't carry over. The user is listed under `requires_recovery_code_regen`. |
+
+## 4. Fit the data to Auth0
+
+- **Email is required.** Auth0's bulk import needs an email, so a user without one isn't sent and is reported as `TRANSLATION_ERROR`. Keycloak doesn't require an email, so a realm can hold users that sign in with a username only.
+- **Metadata.** Every other user attribute arrives in `user_metadata`. Auth0 takes `app_metadata` and `user_metadata` as they are, and `validate` reports a top-level `app_metadata` key Auth0 reserves, such as `email` or `blocked`.
+
+## 5. Validate against Auth0
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target auth0 --mapping ./export/mapping.yaml --connection-id con_XXXXXXXXXXXXXXXX
+iamigrate validate --in ./export/users.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target auth0
+```
+
+Add `--connection-config connection.json` (a `GET /connections/{id}` response) to check usernames against the connection's own rules.
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 6. Rehearse, then import
+
+Do a rehearsal first. Follow the [Auth0 import guide](../../import/auth0/) with a fixture that holds the same hash algorithms and second factors as your users, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at Auth0:
+
+```sh
+export AUTH0_DOMAIN=your-tenant.us.auth0.com
+export AUTH0_CLIENT_ID=...       # a Machine-to-Machine application with the scopes the import guide lists
+export AUTH0_CLIENT_SECRET=...
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import auth0 \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --connection-id con_XXXXXXXXXXXXXXXX \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import auth0 \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --connection-id con_XXXXXXXXXXXXXXXX \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/auth0/) explains each code.
+
+## 7. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff auth0 --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+A user showing up doesn't prove its password hash was translated correctly. Before the export, create a few test users in Keycloak with passwords you know, one for each hash algorithm in `manifest.json`, and sign in as each of them on Auth0 after the import: **Authentication → Database → your connection → Try Connection** in the Dashboard, or any application that has the connection enabled.
+
+Auth0 builds the `user_id` as `auth0|<source_id>`, so the Keycloak user ID `3f2b9c1e-…` becomes `auth0|3f2b9c1e-…`. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Keycloak, re-export, and import the final file.
+- Reconnect what the export doesn't carry: federated (social) identities, and group and role memberships (Auth0 can take them from files you write, see [Organizations, roles and groups](../#organizations-roles-and-groups)). Then point every application at Auth0.
+- Tell users what to expect. Their passwords keep working, apart from any user the report lists under `requires_password_reset`, who needs a reset. A second factor that didn't move has to be enrolled again.
+- Clean up the rehearsal. Delete the rehearsal users from **User Management → Users**, or delete the connection and recreate it, before you import real ones. Users deleted any other way can linger in Auth0's user store and cause `DUPLICATED_USER` later.
+
+## See also
+
+- [Export users from Keycloak](../../export/keycloak/)
+- [Import users into Auth0](../../import/auth0/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import auth0`](../../../reference/cli/import-auth0/) and [`diff auth0`](../../../reference/cli/diff-auth0/)
+- [`mapping.yaml`](../../../reference/mapping/)

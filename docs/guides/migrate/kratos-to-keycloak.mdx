@@ -1,0 +1,149 @@
+---
+title: Migrate from Ory Kratos to Keycloak
+description: Move users from Ory Kratos to Keycloak with iamigrate, including what carries over, how password hashes and second factors are handled, and the steps to export, validate, import and verify.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Ory Kratos to Keycloak: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Ory Kratos](../../export/kratos/) and the [import guide for Keycloak](../../import/keycloak/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Ory Kratos to Keycloak |
+| --- | --- |
+| **Passwords** | Partly kept: Argon2 hashes are imported. bcrypt users must reset their password. |
+| **Second factors** | Not exported: users enroll again on Keycloak. |
+| **User IDs** | Keycloak generates new IDs. The report's `target_ids` maps each `source_id` to its new one. |
+
+The Ory Kratos export leaves behind:
+
+- Every trait except `email`, `username` and `phone`: names and custom traits, so `profile` is empty
+- MFA (TOTP, recovery codes and WebAuthn)
+- Social sign-in links
+- Recovery addresses and timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- A self-hosted instance whose **Admin API** you can reach, usually on port `4434`. iamigrate calls it without credentials, so Ory Network projects aren't supported yet.
+- **Keycloak.** A self-hosted Keycloak realm with **unmanaged attributes** enabled, so Keycloak doesn't drop phone numbers and metadata (**use a disposable instance for the rehearsal**), and an admin user, or a service account with the `manage-users` and `view-users` roles. The [import guide](../../import/keycloak/#1-prepare-the-realm) walks through it.
+
+<Aside type="caution">
+  The export contains password hashes and personal data. Write it somewhere access-controlled, never commit it, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Ory Kratos
+
+```sh
+export KRATOS_ADMIN_URL=http://127.0.0.1:4434
+
+iamigrate export --source kratos --out ./export/
+```
+
+Identities with no password hash are skipped and listed in `manifest.json`.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped, and for the per-algorithm counts.
+
+## 2. Deal with passwords
+
+Ory Kratos stores bcrypt and Argon2, and Keycloak imports only Argon2. A user whose hash can't be translated **isn't created at all**, so deal with the bcrypt users before the import.
+
+| Hash in the export | Keycloak |
+| --- | --- |
+| bcrypt | **Not supported.** The user isn't created: it fails `validate` and the import reports `TRANSLATION_ERROR`. |
+| Argon2 | Imported with Keycloak's `argon2` provider. Only `v=19` and `v=16` are supported. |
+
+`manifest.json` shows how many users hold each algorithm. If any hold bcrypt, drop their password, so they are created without one:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz \
+  | jq -c 'if .password.algorithm == "bcrypt" then .password = null else . end' \
+  | gzip > export/users.ready.cmf.jsonl.gz
+```
+
+Those users then need to set a new password. Let them reset it from the login page: turn on **Forgot password** under **Realm settings → Login** and configure the realm's email settings.
+
+Read the later steps from `export/users.ready.cmf.jsonl.gz`.
+
+## 3. Fit the data to Keycloak
+
+- **Unmanaged attributes must be on.** Otherwise Keycloak silently drops `phoneNumber` and every `user_metadata` and `app_metadata` attribute iamigrate writes.
+- **Username.** Keycloak signs users in by `username`, which iamigrate takes from the CMF `username`, else the first email, else the first phone number.
+- **No names.** Kratos exports no `profile`, so `firstName` and `lastName` stay empty. If your realm's **Verify Profile** required action requires them, disable it, or users are asked to fill them in at first login.
+- **Metadata.** `metadata_admin` becomes `app_metadata` and `metadata_public` becomes `user_metadata`. In Keycloak they become user attributes. `app_metadata` wins when a key appears in both. `validate` reports an attribute key over 255 characters, or named `username`, `email`, `firstName` or `lastName`.
+
+## 4. Validate against Keycloak
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target keycloak --mapping ./export/mapping.yaml
+iamigrate validate --in ./export/users.ready.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target keycloak
+```
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 5. Rehearse, then import
+
+Do a rehearsal first. Follow the [Keycloak import guide](../../import/keycloak/) with a fixture that holds the same hash algorithms as your users, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at Keycloak:
+
+```sh
+export KEYCLOAK_URL=http://127.0.0.1:8080
+export KEYCLOAK_REALM=acme
+export KEYCLOAK_AUTH_REALM=master
+export KEYCLOAK_USERNAME=admin
+export KEYCLOAK_PASSWORD=...
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.ready.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.ready.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import keycloak \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import keycloak \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/keycloak/) explains each code.
+
+## 6. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff keycloak --in ./export/users.ready.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+A user showing up doesn't prove its password hash was translated correctly. Before the export, create a few test users in Ory Kratos with passwords you know, one for each hash algorithm in `manifest.json`, and sign in as each of them on Keycloak after the import: the realm's account console or any client that uses the realm.
+
+Keycloak generates each user's UUID (`POST /users` ignores one it is given). The report's `target_ids` maps every `source_id` to it. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Ory Kratos, re-export, and import the final file.
+- Reconnect what the export doesn't carry: social sign-in links, and whatever lived in traits other than `email`, `username` and `phone`. Then point every application at Keycloak.
+- Tell users what to expect. Users whose hash was imported keep their password. The others need a reset. Second factors aren't exported, so users enroll them again.
+- Clean up the rehearsal. Delete the rehearsal users, or throw the disposable instance away.
+
+## See also
+
+- [Export users from Ory Kratos](../../export/kratos/)
+- [Import users into Keycloak](../../import/keycloak/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import keycloak`](../../../reference/cli/import-keycloak/) and [`diff keycloak`](../../../reference/cli/diff-keycloak/)
+- [`mapping.yaml`](../../../reference/mapping/)
