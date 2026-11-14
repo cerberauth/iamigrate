@@ -92,6 +92,7 @@ Skipped identities aren't migrated at all. If you need them on the target, recre
 | `id` | `source_id` |
 | `traits.email` | `emails[0]`, marked primary. Verified if a matching `verifiable_addresses` entry is verified. |
 | `traits.username` | `username` |
+| `traits.phone` | `phones[0]`, marked primary. Verified if a matching `verifiable_addresses` entry is verified. |
 | `state: inactive` | `blocked: true` |
 | `metadata_admin` | `app_metadata` |
 | `metadata_public` | `user_metadata` |
@@ -101,7 +102,7 @@ The Kratos identity UUID becomes `source_id`, and is what import reports refer t
 
 ### Not exported
 
-- **Other traits.** Only `email` and `username` are read. Names, phone numbers, and any custom traits are dropped, so `profile` is empty on every exported user.
+- **Other traits.** Only `email`, `username` and `phone` are read. Names and any custom traits are dropped, so `profile` is empty on every exported user.
 - **MFA.** TOTP, recovery codes (`lookup_secret`), and WebAuthn credentials aren't exported. Users have to set up a second factor again on the target.
 - **Social sign-in links** (`oidc` credentials).
 - **Recovery addresses** and **timestamps** such as creation date.

@@ -1,0 +1,112 @@
+---
+title: Migrate between providers
+description: One guide for each pair of supported providers, covering what carries over, how password hashes and second factors are handled, and the steps to run.
+---
+
+iamigrate moves users in three steps: it exports a source into the Canonical Migration Format (CMF), checks the file against what the target can import, and imports it. What changes from one provider to the next is what survives the trip. The biggest difference is passwords: each provider hashes them with its own algorithms, and most can only import some of them. Second factors and profile fields vary too.
+
+Each guide below covers one pair, with the commands to run and the caveats specific to it. It builds on the [export guides](../export/auth0/) and [import guides](../import/auth0/), which describe each provider on its own.
+
+## Providers
+
+| Provider | As a source | As a target |
+| --- | --- | --- |
+| Auth0 | Yes | Yes |
+| Azure AD B2C | Yes | No |
+| Firebase | Yes | Yes |
+| Keycloak | Yes | Yes |
+| Ory Kratos | Yes | Yes |
+| AWS Cognito | No | Yes |
+
+Azure AD B2C only exports, and AWS Cognito only imports. A move between two instances of the same provider, such as two Keycloak realms, doesn't need a pair guide: follow that provider's export guide, then its import guide. A CSV or JSON file can also be the source, see [`export`](../../reference/cli/export/).
+
+## Password hash compatibility
+
+When a target can't import a user's hash, it doesn't create the user, unless you drop their password first, which each guide shows how to do. Cognito takes no hash at all, so it creates every user without a password. Find the algorithms your users hold in `manifest.json` after the export.
+
+| Algorithm | Auth0 | AWS Cognito | Firebase | Keycloak | Ory Kratos |
+| --- | --- | --- | --- | --- | --- |
+| bcrypt | Yes | No | Yes | No | Yes |
+| Argon2 | Yes | No | No | Yes | Yes |
+| PBKDF2 | Yes | No | No | Yes | No |
+| scrypt | Yes | No | Yes | No | No |
+
+Kratos takes `argon2id` only. Firebase's own scrypt variant, which is what a Firebase export holds, is understood by Firebase alone, so the `scrypt` row doesn't help a Firebase source. Auth0 also accepts MD4, MD5, SHA-1, SHA-256, SHA-512, HMAC and LDAP hashes. Auth0 and Azure AD B2C never return hashes, so exports from them have none to compare.
+
+## Organizations, roles and groups
+
+No source reads organizations, roles or groups, so they never travel with the users, whichever pair you pick. Auth0 is the only target that can receive them, from files you write. Cognito, Firebase, Keycloak and Ory Kratos ignore those files: recreate groups and roles on the target yourself (Kratos has none of its own, they live in Ory Permissions).
+
+To create organizations and roles in Auth0, build the files from the source's own API or database, and put them in the directory of the users file:
+
+```jsonl
+{"source_id":"org-acme","name":"acme","display_name":"Acme Inc."}
+```
+
+in `organizations.cmf.jsonl`, and
+
+```jsonl
+{"source_id":"role-admin","name":"admin","description":"Full access"}
+```
+
+in `roles.cmf.jsonl`. Then give each user record its place in them, using those `source_id` values:
+
+```json
+{"memberships":[{"organization":"org-acme","roles":["role-admin"]}],"global_roles":["role-admin"]}
+```
+
+`memberships` adds the user to an organization with the roles it holds there, and `global_roles` are roles that apply outside any organization. `import auth0` creates the roles and organizations first, reusing any that already exist under the same name, then adds the members. A failure of this second phase is reported as `ROLE_ORG_PHASE_ERROR`, and the Management API credentials need the organization scopes listed in the [Auth0 import guide](../import/auth0/#create-a-management-api-token).
+
+## Pick your migration
+
+### From Auth0
+
+| To | Passwords | Second factors |
+| --- | --- | --- |
+| [AWS Cognito](./auth0-to-cognito/) | Reset, or Lambda trigger | Not exported |
+| [Firebase](./auth0-to-firebase/) | Reset, or merge a hash file | Not exported |
+| [Keycloak](./auth0-to-keycloak/) | Reset | Not exported |
+| [Ory Kratos](./auth0-to-kratos/) | Reset, or merge a hash file | Not exported |
+
+### From Azure AD B2C
+
+| To | Passwords | Second factors |
+| --- | --- | --- |
+| [Auth0](./azure-ad-b2c-to-auth0/) | Reset, or check at sign-in | Not exported |
+| [AWS Cognito](./azure-ad-b2c-to-cognito/) | Reset, or check at sign-in | Not exported |
+| [Firebase](./azure-ad-b2c-to-firebase/) | Reset | Not exported |
+| [Keycloak](./azure-ad-b2c-to-keycloak/) | Reset, or check at sign-in | Not exported |
+| [Ory Kratos](./azure-ad-b2c-to-kratos/) | Reset | Not exported |
+
+### From Firebase
+
+| To | Passwords | Second factors |
+| --- | --- | --- |
+| [Auth0](./firebase-to-auth0/) | Reset | SMS carries over |
+| [AWS Cognito](./firebase-to-cognito/) | Reset, or Lambda trigger | Re-enroll |
+| [Keycloak](./firebase-to-keycloak/) | Reset | Re-enroll |
+| [Ory Kratos](./firebase-to-kratos/) | Reset | Re-enroll |
+
+### From Keycloak
+
+| To | Passwords | Second factors |
+| --- | --- | --- |
+| [Auth0](./keycloak-to-auth0/) | Kept | TOTP carries over |
+| [AWS Cognito](./keycloak-to-cognito/) | Reset, or Lambda trigger | Re-enroll |
+| [Firebase](./keycloak-to-firebase/) | Reset | Re-enroll |
+| [Ory Kratos](./keycloak-to-kratos/) | Partly kept (Argon2 only) | TOTP blocks the import, re-enroll |
+
+### From Ory Kratos
+
+| To | Passwords | Second factors |
+| --- | --- | --- |
+| [Auth0](./kratos-to-auth0/) | Kept | Not exported |
+| [AWS Cognito](./kratos-to-cognito/) | Reset, or Lambda trigger | Not exported |
+| [Firebase](./kratos-to-firebase/) | Partly kept (bcrypt only) | Not exported |
+| [Keycloak](./kratos-to-keycloak/) | Partly kept (Argon2 only) | Not exported |
+
+## See also
+
+- [Generate test fixtures](../generate-test-fixtures/), to rehearse a migration with synthetic users
+- [Prepare password hashes](../prepare-password-hashes/), for a flat file whose hashes iamigrate can't read as they are
+- [CLI reference](../../reference/cli/)

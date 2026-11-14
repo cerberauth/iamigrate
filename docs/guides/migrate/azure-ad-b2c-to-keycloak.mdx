@@ -1,0 +1,141 @@
+---
+title: Migrate from Azure AD B2C to Keycloak
+description: Export users from Azure AD B2C without passwords, check what Keycloak can take, import them with iamigrate, and verify the result.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Azure AD B2C to Keycloak: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Azure AD B2C](../../export/azure-ad-b2c/) and the [import guide for Keycloak](../../import/keycloak/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Azure AD B2C to Keycloak |
+| --- | --- |
+| **Passwords** | Not carried over: B2C never returns hashes. Users reset their password, or you check passwords against B2C at sign-in. |
+| **Second factors** | Not exported: users enroll again on Keycloak. |
+| **User IDs** | Keycloak generates new IDs. The report's `target_ids` maps each `source_id` to its new one. |
+
+The Azure AD B2C export leaves behind:
+
+- Password hashes (Microsoft Graph never returns them)
+- MFA enrollments
+- Links to federated identity providers (the issuer and ID are kept in `app_metadata.federated_identities`, nothing more)
+- Groups, directory roles and application role assignments
+- Custom policies and user flows
+- Timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- An app registration in the B2C tenant with the Microsoft Graph **application** permission `User.Read.All`, admin consent granted, and a client secret.
+- The names of any custom attributes you want to export, in the form `extension_<app ID>_<name>`.
+- **Keycloak.** A self-hosted Keycloak realm with **unmanaged attributes** enabled, so Keycloak doesn't drop phone numbers and metadata (**use a disposable instance for the rehearsal**), and an admin user, or a service account with the `manage-users` and `view-users` roles. The [import guide](../../import/keycloak/#1-prepare-the-realm) walks through it.
+
+<Aside type="caution">
+  The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Azure AD B2C
+
+```sh
+export AZURE_TENANT_ID=your-tenant.onmicrosoft.com   # the B2C tenant's domain or directory ID
+export AZURE_CLIENT_ID=...       # the app registration's Application (client) ID
+export AZURE_CLIENT_SECRET=...   # and its client secret
+
+iamigrate export --source azure-ad-b2c \
+  --filter "creationType eq 'LocalAccount'" \
+  --out ./export/
+```
+
+The `--filter` above leaves out the tenant's administrators and guests. Add `--extension-attributes` to export custom attributes into `user_metadata`, and `--limit` to try the export on a sample first.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped.
+
+## 2. Deal with passwords
+
+Azure AD B2C never returns password hashes, so users are created in Keycloak without a password. The way to avoid asking everyone to reset it is to check each password against B2C as users sign in. In Keycloak, that means a custom authenticator that checks each password against B2C ([Skycloak's walkthrough](https://skycloak.io/blog/migrate-azure-ad-b2c-to-keycloak/)). iamigrate doesn't do that part itself, since it runs inside Keycloak. The approach, including how to decide when to stop, is in [Migrating from Azure AD B2C without password export](https://www.cerberauth.com/blog/migrating-from-azure-b2c-without-password-export/).
+
+Whatever you choose, the users who haven't signed in by cutover need to set a new password. Let them reset it from the login page: turn on **Forgot password** under **Realm settings → Login** and configure the realm's email settings.
+
+## 3. Fit the data to Keycloak
+
+- **Unmanaged attributes must be on.** Otherwise Keycloak silently drops `phoneNumber` and every `user_metadata` and `app_metadata` attribute iamigrate writes.
+- **Username.** Keycloak signs users in by `username`, which iamigrate takes from the CMF `username`, else the first email, else the first phone number.
+- **Names.** `given_name` and `family_name` become `firstName` and `lastName`. `profile.name` and `nickname` aren't imported. If your realm needs both names non-empty, check your export sets them.
+- **Metadata.** Custom attributes you ask for land in `user_metadata`, and each federated sign-in identity in `app_metadata.federated_identities`. In Keycloak they become user attributes. `app_metadata` wins when a key appears in both. `validate` reports an attribute key over 255 characters, or named `username`, `email`, `firstName` or `lastName`.
+
+## 4. Validate against Keycloak
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target keycloak --mapping ./export/mapping.yaml
+iamigrate validate --in ./export/users.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target keycloak
+```
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 5. Rehearse, then import
+
+Do a rehearsal first. Follow the [Keycloak import guide](../../import/keycloak/) with a small fixture, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at Keycloak:
+
+```sh
+export KEYCLOAK_URL=http://127.0.0.1:8080
+export KEYCLOAK_REALM=acme
+export KEYCLOAK_AUTH_REALM=master
+export KEYCLOAK_USERNAME=admin
+export KEYCLOAK_PASSWORD=...
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import keycloak \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import keycloak \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/keycloak/) explains each code.
+
+## 6. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff keycloak --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+There is no password to prove here, so check the reset path instead: make sure a test user can set a new password on Keycloak and sign in.
+
+Keycloak generates each user's UUID (`POST /users` ignores one it is given). The report's `target_ids` maps every `source_id` to it. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Azure AD B2C, re-export, and import the final file.
+- Reconnect what the export doesn't carry: the federated identity providers (the issuer and ID of each are in `app_metadata.federated_identities`), groups and roles. Then point every application at Keycloak.
+- Tell users what to expect. They need to set a new password, unless you check passwords against B2C as they sign in. Second factors aren't exported, so users enroll them again.
+- Clean up the rehearsal. Delete the rehearsal users, or throw the disposable instance away.
+
+## See also
+
+- [Export users from Azure AD B2C](../../export/azure-ad-b2c/)
+- [Import users into Keycloak](../../import/keycloak/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import keycloak`](../../../reference/cli/import-keycloak/) and [`diff keycloak`](../../../reference/cli/diff-keycloak/)
+- [`mapping.yaml`](../../../reference/mapping/)

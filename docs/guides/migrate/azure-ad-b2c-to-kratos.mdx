@@ -1,0 +1,143 @@
+---
+title: Migrate from Azure AD B2C to Ory Kratos
+description: Export users from Azure AD B2C without passwords, check what Ory Kratos can take, import them with iamigrate, and verify the result.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide covers moving users from Azure AD B2C to Ory Kratos: what carries over and what doesn't, how their passwords and second factors are handled, and the commands to run. It sticks to what is specific to this pair. The [export guide for Azure AD B2C](../../export/azure-ad-b2c/) and the [import guide for Ory Kratos](../../import/kratos/) cover each side in full, including a rehearsal with synthetic users.
+
+## What carries over
+
+| | Azure AD B2C to Ory Kratos |
+| --- | --- |
+| **Passwords** | Not carried over: B2C never returns hashes. Users reset their password. |
+| **Second factors** | Not exported: users enroll again on Ory Kratos. |
+| **User IDs** | Ory Kratos generates new IDs. The report's `target_ids` maps each `source_id` to its new one. |
+
+The Azure AD B2C export leaves behind:
+
+- Password hashes (Microsoft Graph never returns them)
+- MFA enrollments
+- Links to federated identity providers (the issuer and ID are kept in `app_metadata.federated_identities`, nothing more)
+- Groups, directory roles and application role assignments
+- Custom policies and user flows
+- Timestamps
+
+## Before you start
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- An app registration in the B2C tenant with the Microsoft Graph **application** permission `User.Read.All`, admin consent granted, and a client secret.
+- The names of any custom attributes you want to export, in the form `extension_<app ID>_<name>`.
+- **Ory Kratos.** A self-hosted Kratos instance whose **Admin API** you can reach, with an identity schema that accepts the traits iamigrate writes and the `password` method enabled (**use a disposable instance for the rehearsal**). The [import guide](../../import/kratos/#1-prepare-the-kratos-instance) walks through it.
+
+<Aside type="caution">
+  The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 1. Export from Azure AD B2C
+
+```sh
+export AZURE_TENANT_ID=your-tenant.onmicrosoft.com   # the B2C tenant's domain or directory ID
+export AZURE_CLIENT_ID=...       # the app registration's Application (client) ID
+export AZURE_CLIENT_SECRET=...   # and its client secret
+
+iamigrate export --source azure-ad-b2c \
+  --filter "creationType eq 'LocalAccount'" \
+  --out ./export/
+```
+
+The `--filter` above leaves out the tenant's administrators and guests. Add `--extension-attributes` to export custom attributes into `user_metadata`, and `--limit` to try the export on a sample first.
+
+The export is a snapshot: users created, and passwords changed, after it aren't in it, so plan a freeze or a final re-export before cutover. Check `export/manifest.json` for `skipped_records`, because the command exits with status `0` even when users are skipped.
+
+## 2. Deal with passwords
+
+Azure AD B2C never returns password hashes, so users are created in Ory Kratos without a password, and every one of them has to set a new one. Let them use Kratos' recovery flow. The minimal identity schema in the import guide enables recovery by email.
+
+Checking each password against B2C as users sign in would avoid that, but it needs a hook in the target's sign-in, and iamigrate doesn't cover one for Ory Kratos. The idea is described in [Migrating from Azure AD B2C without password export](https://www.cerberauth.com/blog/migrating-from-azure-b2c-without-password-export/).
+
+## 3. Fit the data to Ory Kratos
+
+- **The identity schema decides what imports.** Kratos rejects any identity that doesn't match it. The schema needs an `email` trait marked as a password identifier (or `username`/`phone`, if that's how your users sign in) and must not require traits iamigrate doesn't fill. Run `validate` with `--schema-file` to find mismatches before the import.
+- **Metadata becomes traits.** Custom attributes you ask for land in `user_metadata`, and each federated sign-in identity in `app_metadata.federated_identities`. Every `user_metadata` key is also copied into `traits`, so the schema must declare it or set `"additionalProperties": true`. A key named `email`, `username` or `phone` collides with an identifier, and `validate` reports it.
+- **`app_metadata`** goes to `metadata_admin`, where it isn't visible to the user.
+- **Phone numbers.** The first one becomes the `phone` trait, so declare it in the schema, as `"format": "tel"` if you want it checked. Kratos validates it as E.164.
+- **Names aren't imported.** Kratos gets no `given_name`, `family_name` or `name`. To keep them, add them to `user_metadata` under the trait names your schema expects, with a [`metadata` route in `mapping.yaml`](../../../reference/mapping/#metadata) or by editing the CMF records.
+- **Username.** It becomes `traits.username`, which must be declared in the schema and be at most 255 characters.
+
+## 4. Validate against Ory Kratos
+
+Set the target in the scaffolded mapping, then check the export against what the target can import. `validate` makes no network calls:
+
+```sh
+iamigrate map --target kratos --mapping ./export/mapping.yaml
+iamigrate validate --in ./export/users.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml --target kratos --schema-file identity.schema.json
+```
+
+`--schema-file` checks every user's traits against your identity schema, so schema problems show up before the import.
+
+Fix every reported problem at the source, or in the CMF records, and run it again until it comes back clean. Review `mapping.yaml` too: custom metadata keys are flagged under `manual_steps` for you to place, rather than guessed at.
+
+## 5. Rehearse, then import
+
+Do a rehearsal first. Follow the [Ory Kratos import guide](../../import/kratos/) with a small fixture, against a disposable target, and sign in as a few of the users (see [Generate test fixtures](../../generate-test-fixtures/)).
+
+For the real run, point iamigrate at Ory Kratos:
+
+```sh
+export KRATOS_ADMIN_URL=http://127.0.0.1:4434
+```
+
+Split off a small canary, import it, and check the result before you import the rest:
+
+```sh
+gunzip -c export/users.cmf.jsonl.gz | head -n 100 | gzip > export/canary.cmf.jsonl.gz
+gunzip -c export/users.cmf.jsonl.gz | tail -n +101 | gzip > export/rest.cmf.jsonl.gz
+
+iamigrate import kratos \
+  --in ./export/canary.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --schema-id default \
+  --report ./export/canary-report.json
+```
+
+Sign in as a few canary users, then import the rest:
+
+```sh
+iamigrate import kratos \
+  --in ./export/rest.cmf.jsonl.gz \
+  --mapping ./export/mapping.yaml \
+  --schema-id default \
+  --report ./export/rest-report.json
+```
+
+The command exits with status `0` even when users fail. Always read the reports: each failed user is listed under `failed` with a code, and the follow-up lists (`requires_password_reset`, `requires_reenrollment` and so on) say who needs to hear from you. The [import guide](../../import/kratos/) explains each code.
+
+## 6. Verify
+
+Reconcile the file with the live target. It reports users missing from it and drift in the fields it can read back:
+
+```sh
+iamigrate diff kratos --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.yaml
+```
+
+There is no password to prove here, so check the reset path instead: make sure a test user can set a new password on Ory Kratos and sign in.
+
+Kratos generates each identity's UUID and rejects a chosen one. The report's `target_ids` maps every `source_id` to it. If your applications reference users by the old ID, keep that mapping.
+
+## Cutover
+
+- Freeze changes in Azure AD B2C, re-export, and import the final file.
+- Reconnect what the export doesn't carry: the federated identity providers (the issuer and ID of each are in `app_metadata.federated_identities`), groups and roles. Then point every application at Ory Kratos.
+- Tell users what to expect. They need to set a new password, unless you check passwords against B2C as they sign in. Second factors aren't exported, so users enroll them again.
+- Clean up the rehearsal. Delete the rehearsal identities with [`rollback kratos`](../../../reference/cli/rollback-kratos/), or throw the disposable instance away.
+
+## See also
+
+- [Export users from Azure AD B2C](../../export/azure-ad-b2c/)
+- [Import users into Ory Kratos](../../import/kratos/)
+- [`export`](../../../reference/cli/export/), [`validate`](../../../reference/cli/validate/) and [`map`](../../../reference/cli/map/) references
+- [`import kratos`](../../../reference/cli/import-kratos/) and [`diff kratos`](../../../reference/cli/diff-kratos/)
+- [`mapping.yaml`](../../../reference/mapping/)
