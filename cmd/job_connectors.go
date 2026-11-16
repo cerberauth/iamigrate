@@ -26,6 +26,9 @@ const (
 	paramInput            = "in"
 	paramFormat           = "format"
 	paramSourceMapping    = "source_mapping"
+	paramOrganizations    = "organizations"
+	paramRoles            = "roles"
+	paramMemberships      = "memberships"
 	paramAdminURL         = "admin_url"
 	paramSchemaID         = "schema_id"
 	paramSchemaFile       = "schema_file"
@@ -71,7 +74,12 @@ func jobSource(j *jobs.Job) (connector.SourceConnector, connector.ExportOptions,
 		if format == "" {
 			format = "csv"
 		}
-		return flatfile.New(), flatfile.ExportOptions{Path: p[paramInput], Format: flatfile.Format(format), Mapping: m}, nil
+		return flatfile.New(), flatfile.ExportOptions{
+			Path: p[paramInput], Format: flatfile.Format(format), Mapping: m,
+			Organizations: flatfileInput(p[paramOrganizations]).file(format),
+			Roles:         flatfileInput(p[paramRoles]).file(format),
+			Memberships:   flatfileInput(p[paramMemberships]).file(format),
+		}, nil
 	case keycloak.Name:
 		if p[paramInput] == "" {
 			return nil, nil, fmt.Errorf("param %q is required for source %s", paramInput, name)

@@ -101,3 +101,34 @@ func TestCheckUserAcceptsAPasswordWhenTheTargetTakesNone(t *testing.T) {
 	require.Len(t, CheckUser(u, connector.Capabilities{}), 1)
 	require.Empty(t, CheckUser(u, connector.Capabilities{NoPasswords: true}))
 }
+
+func TestDirectoryChecker(t *testing.T) {
+	orgs := []cmf.Organization{{SourceID: "o1", Name: "Acme"}, {SourceID: "o2", Name: "acme"}}
+	roles := []cmf.Role{{SourceID: "admin", Name: "Admin"}}
+	u := cmf.User{
+		SourceID:    "u1",
+		Memberships: []cmf.Membership{{Organization: "o1", Roles: []string{"admin", "ghost"}}, {Organization: "o9"}},
+		GlobalRoles: []string{"admin"},
+	}
+
+	d, problems := NewDirectoryChecker(orgs, roles, connector.Capabilities{SupportsOrgs: true, SupportsRoles: true})
+	require.Equal(t, []connector.Problem{
+		{SourceID: "o2", Field: "organizations.name", Rule: "duplicate of organization o1", Value: "acme"},
+	}, problems)
+	require.Equal(t, []connector.Problem{
+		{SourceID: "u1", Field: "memberships.roles", Rule: "unknown role", Value: "ghost"},
+		{SourceID: "u1", Field: "memberships.organization", Rule: "unknown organization", Value: "o9"},
+	}, d.Check(u))
+
+	d, _ = NewDirectoryChecker(orgs, roles, connector.Capabilities{})
+	require.Equal(t, []connector.Problem{
+		{SourceID: "u1", Field: "memberships.organization", Rule: "organizations unsupported by target", Value: "o1"},
+		{SourceID: "u1", Field: "memberships.roles", Rule: "unknown role", Value: "ghost"},
+		{SourceID: "u1", Field: "memberships.roles", Rule: "roles unsupported by target", Value: "admin,ghost"},
+		{SourceID: "u1", Field: "memberships.organization", Rule: "unknown organization", Value: "o9"},
+		{SourceID: "u1", Field: "memberships.organization", Rule: "organizations unsupported by target", Value: "o9"},
+		{SourceID: "u1", Field: "global_roles", Rule: "roles unsupported by target", Value: "admin"},
+	}, d.Check(u))
+
+	require.Empty(t, d.Check(cmf.User{SourceID: "u2"}))
+}

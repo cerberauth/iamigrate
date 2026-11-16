@@ -39,30 +39,45 @@ func validDestination(dest string) bool {
 	return false
 }
 
-func compileRules(m mapping.Mapping, reg *transform.Registry) ([]rule, error) {
-	rules := make([]rule, 0, len(m.Fields))
-	for i, f := range m.Fields {
-		if !validDestination(f.CMF) {
-			return nil, fmt.Errorf("mapping: fields[%d]: unknown cmf field %q (one of %s, or %s<key>, %s<key>)",
-				i, f.CMF, strings.Join(conventionalColumns, ", "), appMetadataPrefix, userMetadataPrefix)
+// userFields is the schema of a users file: the columns rowToUser reads.
+var userFields = fieldSchema{
+	section: "fields",
+	valid:   validDestination,
+	known: fmt.Sprintf("one of %s, or %s<key>, %s<key>",
+		strings.Join(conventionalColumns, ", "), appMetadataPrefix, userMetadataPrefix),
+}
+
+// fieldSchema is the set of cmf fields one kind of file's mapping can write:
+// section names its mapping.yaml section in errors, and known lists them.
+type fieldSchema struct {
+	section string
+	valid   func(string) bool
+	known   string
+}
+
+func compileRules(fields []mapping.FieldMapping, schema fieldSchema, reg *transform.Registry) ([]rule, error) {
+	rules := make([]rule, 0, len(fields))
+	for i, f := range fields {
+		if !schema.valid(f.CMF) {
+			return nil, fmt.Errorf("mapping: %s[%d]: unknown cmf field %q (%s)", schema.section, i, f.CMF, schema.known)
 		}
 		if f.Source == "" && f.Default == "" {
-			return nil, fmt.Errorf("mapping: fields[%d] (%s): needs a source, a default, or both", i, f.CMF)
+			return nil, fmt.Errorf("mapping: %s[%d] (%s): needs a source, a default, or both", schema.section, i, f.CMF)
 		}
 		r := rule{source: f.Source, dest: f.CMF, def: f.Default, values: f.Values}
 		if f.Pattern != "" {
 			re, err := regexp.Compile(f.Pattern)
 			if err != nil {
-				return nil, fmt.Errorf("mapping: fields[%d] (%s): pattern: %w", i, f.CMF, err)
+				return nil, fmt.Errorf("mapping: %s[%d] (%s): pattern: %w", schema.section, i, f.CMF, err)
 			}
 			if re.NumSubexp() < 1 {
-				return nil, fmt.Errorf("mapping: fields[%d] (%s): pattern %q needs a capture group, e.g. ^[^$]*\\$(.*)$", i, f.CMF, f.Pattern)
+				return nil, fmt.Errorf("mapping: %s[%d] (%s): pattern %q needs a capture group, e.g. ^[^$]*\\$(.*)$", schema.section, i, f.CMF, f.Pattern)
 			}
 			r.pattern = re
 		}
 		p, err := reg.Compile(f.Transform)
 		if err != nil {
-			return nil, fmt.Errorf("mapping: fields[%d] (%s): %w", i, f.CMF, err)
+			return nil, fmt.Errorf("mapping: %s[%d] (%s): %w", schema.section, i, f.CMF, err)
 		}
 		r.pipeline = p
 		rules = append(rules, r)
@@ -95,11 +110,40 @@ func normalize(ctx context.Context, rows []map[string]string, m mapping.Mapping,
 	if len(m.Fields) == 0 {
 		return rows, nil
 	}
+	out, err := applyFields(ctx, rows, m.Fields, userFields, m, d)
+	if err != nil {
+		return nil, err
+	}
+	for i, n := range out {
+		// rowToUser reads these leniently (anything but "true" is false);
+		// settle them here so a stray "yes" can't silently become false.
+		for _, c := range []string{colBlocked, colEmailVerified} {
+			if v := n[c]; v != "" {
+				b, err := transform.ParseBool(v)
+				if err != nil {
+					return nil, fmt.Errorf("record %d: %s: %w", i+1, c, err)
+				}
+				n[c] = strconv.FormatBool(b)
+			}
+		}
+		if err := settlePasswordColumns(n); err != nil {
+			return nil, fmt.Errorf("record %d: %w", i+1, err)
+		}
+	}
+	return out, nil
+}
+
+// applyFields rewrites rows through fields, the mapping of one kind of file
+// (schema), as normalize describes. m supplies the custom transforms.
+func applyFields(ctx context.Context, rows []map[string]string, fields []mapping.FieldMapping, schema fieldSchema, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
+	if len(fields) == 0 {
+		return rows, nil
+	}
 	reg, err := transform.New(m, transform.ExportHook, d)
 	if err != nil {
 		return nil, err
 	}
-	rules, err := compileRules(m, reg)
+	rules, err := compileRules(fields, schema, reg)
 	if err != nil {
 		return nil, err
 	}
@@ -158,22 +202,6 @@ func normalize(ctx context.Context, rows []map[string]string, m mapping.Mapping,
 				out[i][r.dest] = vals[k]
 				written[i][r.dest] = true
 			}
-		}
-	}
-	for i, n := range out {
-		// rowToUser reads these leniently (anything but "true" is false);
-		// settle them here so a stray "yes" can't silently become false.
-		for _, c := range []string{colBlocked, colEmailVerified} {
-			if v := n[c]; v != "" {
-				b, err := transform.ParseBool(v)
-				if err != nil {
-					return nil, fmt.Errorf("record %d: %s: %w", i+1, c, err)
-				}
-				n[c] = strconv.FormatBool(b)
-			}
-		}
-		if err := settlePasswordColumns(n); err != nil {
-			return nil, fmt.Errorf("record %d: %w", i+1, err)
 		}
 	}
 	return out, nil

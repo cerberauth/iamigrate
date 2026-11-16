@@ -37,6 +37,11 @@ type ExportOptions struct {
 	// Mapping renames and transforms the file's own columns into the
 	// recognized ones; the zero value expects them already.
 	Mapping mapping.Mapping
+	// Organizations, Roles and Memberships are the source's files of
+	// organizations, roles and who holds them, each optional, read through
+	// the mapping's sections of the same names. Memberships are joined
+	// into the users by source ID.
+	Organizations, Roles, Memberships File
 }
 
 // Connector is a SourceConnector and TargetConnector over flat CSV/JSON
@@ -47,6 +52,7 @@ type ExportOptions struct {
 type Connector struct {
 	targetPath   string
 	targetFormat Format
+	directory    *connector.Directory
 }
 
 // New returns a flatfile connector usable as a SourceConnector.
@@ -71,6 +77,11 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		return connector.Manifest{}, fmt.Errorf("flatfile: Export requires flatfile.ExportOptions, got %T", eo)
 	}
 
+	c.directory = nil
+	dir, grants, dirSkipped, err := readDirectory(ctx, opts)
+	if err != nil {
+		return connector.Manifest{}, err
+	}
 	rows, err := readRows(opts.Path, opts.Format, opts.Mapping.RecordsPath)
 	if err != nil {
 		return connector.Manifest{}, err
@@ -125,6 +136,9 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			})
 			continue
 		}
+		if grants != nil {
+			grants.Apply(&u)
+		}
 		if err := w.WriteUser(u); err != nil {
 			return manifest, fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
 		}
@@ -139,8 +153,16 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		}
 	}
 
+	if dir != nil {
+		manifest.SkippedRecords = append(append(manifest.SkippedRecords, dirSkipped...), grants.Unused()...)
+		c.directory = dir
+	}
 	return manifest, nil
 }
+
+// Directory returns the organizations and roles the last Export read, nil
+// when it was given none of their files.
+func (c *Connector) Directory() *connector.Directory { return c.directory }
 
 // Capabilities reports what the flatfile target accepts: everything CMF
 // can express, since it's a generic sink with no provider-side

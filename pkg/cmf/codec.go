@@ -141,6 +141,12 @@ func CountUsers(r io.Reader) (int, error) {
 	return n, nil
 }
 
+// The organizations and roles files, read next to the users file.
+const (
+	OrganizationsFile = "organizations.cmf.jsonl"
+	RolesFile         = "roles.cmf.jsonl"
+)
+
 // WriteOrganizations writes organizations.cmf.jsonl (uncompressed; see
 // SPEC_NOTES.md open question 2).
 func WriteOrganizations(w io.Writer, orgs []Organization) error {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/cerberauth/iamigrate/pkg/cmf"
 	"github.com/cerberauth/iamigrate/pkg/connector"
@@ -113,7 +114,11 @@ func newValidateCmd() *cobra.Command {
 			defer bar.Done()
 			bar.Stage("checking users", countUsers(bar, in))
 
-			var problems []connector.Problem
+			dir, err := connector.ReadDirectory(filepath.Dir(in))
+			if err != nil {
+				return err
+			}
+			memberships, problems := validate.NewDirectoryChecker(dir.Organizations, dir.Roles, caps)
 			dups := validate.NewDupTracker()
 			targetIDs := ids.NewChecker(idStrategy, target, caps)
 			count := 0
@@ -130,6 +135,7 @@ func newValidateCmd() *cobra.Command {
 				problems = append(problems, validate.CheckUser(u, caps)...)
 				problems = append(problems, tc.ValidateUser(u)...)
 				problems = append(problems, dups.Check(u)...)
+				problems = append(problems, memberships.Check(u)...)
 				problems = append(problems, targetIDs.Check(u)...)
 				ps, err := hooked.Add(ctx, u)
 				if err != nil {

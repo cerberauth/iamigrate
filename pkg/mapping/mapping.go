@@ -159,23 +159,36 @@ func (s *IDStrategy) validate() error {
 	return fmt.Errorf("mapping: ids.target: unknown strategy %q (preserve, prefix, template, uuidv5, or a handler)", s.Strategy)
 }
 
+// RecordMapping describes a source file of organizations, roles or
+// memberships the way RecordsPath and Fields describe the users': where its
+// records sit in a JSON file, and how its columns become the CMF fields of
+// that file's kind.
+type RecordMapping struct {
+	RecordsPath string         `yaml:"records_path,omitempty"`
+	Fields      []FieldMapping `yaml:"fields,omitempty"`
+}
+
 // Mapping is the parsed form of mapping.yaml. RecordsPath is the dotted path
 // to the array of users in a JSON source file whose root is an object, e.g.
-// "data.users".
+// "data.users". Organizations, Roles and Memberships describe the source's
+// other files, when it has them.
 type Mapping struct {
-	Target       string                  `yaml:"target"`
-	ConnectionID string                  `yaml:"connection_id,omitempty"`
-	RecordsPath  string                  `yaml:"records_path,omitempty"`
-	Fields       []FieldMapping          `yaml:"fields,omitempty"`
-	AppMetadata  []MetadataPlacement     `yaml:"app_metadata,omitempty"`
-	UserMetadata []MetadataPlacement     `yaml:"user_metadata,omitempty"`
-	ManualSteps  []ManualStep            `yaml:"manual_steps,omitempty"`
-	IDs          IDs                     `yaml:"ids,omitempty"`
-	Transforms   map[string]TransformRef `yaml:"transforms,omitempty"`
-	TargetFields []TargetField           `yaml:"target_fields,omitempty"`
-	Strategies   map[string]StrategyRef  `yaml:"strategies,omitempty"`
-	Metadata     []MetadataRoute         `yaml:"metadata,omitempty"`
-	Conflict     *Conflict               `yaml:"conflict,omitempty"`
+	Target        string                  `yaml:"target"`
+	ConnectionID  string                  `yaml:"connection_id,omitempty"`
+	RecordsPath   string                  `yaml:"records_path,omitempty"`
+	Fields        []FieldMapping          `yaml:"fields,omitempty"`
+	Organizations *RecordMapping          `yaml:"organizations,omitempty"`
+	Roles         *RecordMapping          `yaml:"roles,omitempty"`
+	Memberships   *RecordMapping          `yaml:"memberships,omitempty"`
+	AppMetadata   []MetadataPlacement     `yaml:"app_metadata,omitempty"`
+	UserMetadata  []MetadataPlacement     `yaml:"user_metadata,omitempty"`
+	ManualSteps   []ManualStep            `yaml:"manual_steps,omitempty"`
+	IDs           IDs                     `yaml:"ids,omitempty"`
+	Transforms    map[string]TransformRef `yaml:"transforms,omitempty"`
+	TargetFields  []TargetField           `yaml:"target_fields,omitempty"`
+	Strategies    map[string]StrategyRef  `yaml:"strategies,omitempty"`
+	Metadata      []MetadataRoute         `yaml:"metadata,omitempty"`
+	Conflict      *Conflict               `yaml:"conflict,omitempty"`
 }
 
 // Load reads and parses a mapping.yaml file from path.
