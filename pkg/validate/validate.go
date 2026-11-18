@@ -89,3 +89,68 @@ func (d *DupTracker) Check(u cmf.User) []connector.Problem {
 	}
 	return problems
 }
+
+// DirectoryChecker checks users' memberships and global roles against the
+// organizations and roles exported with them, and against a target that
+// must take them.
+type DirectoryChecker struct {
+	caps  connector.Capabilities
+	orgs  map[string]bool
+	roles map[string]bool
+}
+
+// NewDirectoryChecker returns a DirectoryChecker over orgs and roles (those
+// of organizations.cmf.jsonl and roles.cmf.jsonl, nil when absent) for a
+// target with caps, and the problems with orgs themselves: names used by
+// more than one organization, which a target matching them by name merges.
+func NewDirectoryChecker(orgs []cmf.Organization, roles []cmf.Role, caps connector.Capabilities) (*DirectoryChecker, []connector.Problem) {
+	d := &DirectoryChecker{caps: caps, orgs: map[string]bool{}, roles: map[string]bool{}}
+	var problems []connector.Problem
+	names := map[string]string{}
+	for _, o := range orgs {
+		d.orgs[o.SourceID] = true
+		key := strings.ToLower(o.Name)
+		if first, ok := names[key]; ok {
+			problems = append(problems, connector.Problem{
+				SourceID: o.SourceID, Field: "organizations.name",
+				Rule: fmt.Sprintf("duplicate of organization %s", first), Value: o.Name,
+			})
+			continue
+		}
+		names[key] = o.SourceID
+	}
+	for _, r := range roles {
+		d.roles[r.SourceID] = true
+	}
+	return d, problems
+}
+
+// Check reports the memberships and roles of u naming an organization or a
+// role that isn't exported, and those the target can't take.
+func (d *DirectoryChecker) Check(u cmf.User) []connector.Problem {
+	var problems []connector.Problem
+	add := func(field, rule, value string) {
+		problems = append(problems, connector.Problem{SourceID: u.SourceID, Field: field, Rule: rule, Value: value})
+	}
+	checkRoles := func(field string, roles []string) {
+		for _, r := range roles {
+			if !d.roles[r] {
+				add(field, "unknown role", r)
+			}
+		}
+		if len(roles) > 0 && !d.caps.SupportsRoles {
+			add(field, "roles unsupported by target", strings.Join(roles, ","))
+		}
+	}
+	for _, m := range u.Memberships {
+		if !d.orgs[m.Organization] {
+			add("memberships.organization", "unknown organization", m.Organization)
+		}
+		if !d.caps.SupportsOrgs {
+			add("memberships.organization", "organizations unsupported by target", m.Organization)
+		}
+		checkRoles("memberships.roles", m.Roles)
+	}
+	checkRoles("global_roles", u.GlobalRoles)
+	return problems
+}

@@ -107,3 +107,35 @@ func TestExportKeepsMappingFieldsInScaffold(t *testing.T) {
 	require.Contains(t, string(after), "records_path: data.users")
 	require.Contains(t, string(after), "source: login")
 }
+
+func TestExportFlatfileDirectoryThenValidate(t *testing.T) {
+	in, out := t.TempDir(), t.TempDir()
+	write := func(name, content string) string {
+		p := filepath.Join(in, name)
+		require.NoError(t, os.WriteFile(p, []byte(content), 0o600))
+		return p
+	}
+	_, _, err := runRootCmd(t, "export", "--source", "flatfile",
+		"--in", write("users.csv", "source_id,email\nu1,a@example.com\n"),
+		"--organizations", write("orgs.json", `[{"source_id":"o1","name":"acme"}]`),
+		"--memberships", write("members.csv", "user_id,organization,role\nu1,o1,admin\n"),
+		"--out", out)
+	require.NoError(t, err)
+	for _, f := range []string{"organizations.cmf.jsonl", "roles.cmf.jsonl"} {
+		_, err := os.Stat(filepath.Join(out, f))
+		require.NoError(t, err)
+	}
+
+	stdout, _, err := runRootCmd(t, "validate", "--in", filepath.Join(out, "users.cmf.jsonl.gz"), "--target", "auth0")
+	require.ErrorContains(t, err, "1 problem(s)")
+	require.Contains(t, stdout, `u1: memberships.roles unknown role (value="admin")`)
+
+	stdout, _, err = runRootCmd(t, "validate", "--in", filepath.Join(out, "users.cmf.jsonl.gz"), "--target", "kratos")
+	require.Error(t, err)
+	require.Contains(t, stdout, `u1: memberships.organization organizations unsupported by target (value="o1")`)
+}
+
+func TestExportDirectoryOnlyForFlatfile(t *testing.T) {
+	_, _, err := runRootCmd(t, "export", "--source", "kratos", "--memberships", "m.csv", "--out", t.TempDir())
+	require.ErrorContains(t, err, "only apply to --source flatfile")
+}

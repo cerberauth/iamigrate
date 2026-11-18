@@ -131,6 +131,19 @@ func Check(m mapping.Mapping) error {
 			return err
 		}
 	}
+	for _, s := range []struct {
+		name string
+		rm   *mapping.RecordMapping
+	}{{"organizations", m.Organizations}, {"roles", m.Roles}, {"memberships", m.Memberships}} {
+		if s.rm == nil {
+			continue
+		}
+		for i, f := range s.rm.Fields {
+			if err := check(fmt.Sprintf("%s.fields[%d] (%s)", s.name, i, f.CMF), f.Transform); err != nil {
+				return err
+			}
+		}
+	}
 	for i, f := range m.TargetFields {
 		if err := check(fmt.Sprintf("target_fields[%d] (%s)", i, f.Target), f.Transform); err != nil {
 			return err

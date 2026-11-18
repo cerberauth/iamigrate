@@ -15,6 +15,11 @@ fields:
   - {source: id, cmf: source_id}
   - {source: mail, cmf: email, transform: "trim|lowercase"}
   - {source: active, cmf: blocked, transform: not}
+# ... and the flat files of organizations, roles and memberships
+organizations:
+  fields: [{source: id, cmf: source_id}, {source: slug, cmf: name}]
+memberships:
+  fields: [{source: member, cmf: user_id}, {source: org_id, cmf: organization}, {source: role_key, cmf: role}]
 
 # Custom transforms, usable in any transform pipeline
 transforms:
@@ -48,6 +53,36 @@ The target connector the mapping is for (`auth0`, `kratos`, `keycloak`, `firebas
 How a flat file's own columns become CMF fields, on `export --source flatfile` (and [`prepare`](../cli/prepare/)). See [`export`](../cli/export/) for the column convention and [`prepare`](../cli/prepare/) for the full options of a field: `source`, `cmf`, `pattern`, `values`, `transform` and `default`. `records_path` is the dotted path to the array of users in a JSON file whose root is an object.
 
 A `transform` is a pipeline of transforms joined with `|`, run left to right: the built-ins `trim`, `lowercase`, `uppercase`, `bool` (true/false, yes/no, 1/0, on/off... into `true` or `false`) and `not` (`bool`, inverted), and the custom ones under `transforms`. An empty value stays empty.
+
+## `organizations`, `roles`, `memberships`
+
+How the files given to `export --source flatfile` with `--organizations`, `--roles` and `--memberships` become CMF, each with its own `records_path` and `fields`, which work as the users' do. A file whose columns already have the names below needs no section.
+
+```yaml
+organizations:
+  records_path: data
+  fields:
+    - {source: id, cmf: source_id}
+    - {source: slug, cmf: name, transform: lowercase}
+    - {source: title, cmf: display_name}
+roles:
+  fields:
+    - {source: key, cmf: source_id}
+    - {source: label, cmf: name}
+memberships:
+  fields:
+    - {source: member, cmf: user_id}
+    - {source: org_id, cmf: organization}
+    - {source: role_key, cmf: role}
+```
+
+| File | CMF fields |
+| --- | --- |
+| organizations | `source_id` (required), `name` (default: the source ID), `display_name`, `metadata.<key>`; any other column is kept as metadata |
+| roles | `source_id` (required), `name` (default: the source ID), `description` |
+| memberships | `user_id` (a user's `source_id`), `organization` and `role` (an organization's and a role's `source_id`): one row per user, organization and role |
+
+A membership row with an organization and no role makes the user a member without a role; one with a role and no organization gives a global role. Organizations and roles go to `organizations.cmf.jsonl` and `roles.cmf.jsonl`, next to the users file; memberships are joined into the users. A row naming a user the export doesn't have is listed in the manifest's skipped records.
 
 ## `transforms`
 

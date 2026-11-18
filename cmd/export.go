@@ -41,6 +41,8 @@ func newExportCmd() *cobra.Command {
 		a0Export auth0.ExportOptions
 		azAuth   azureB2CFlags
 		azExport azureb2c.ExportOptions
+
+		ffDirectory flatfileDirectoryFlags
 	)
 
 	cmd := &cobra.Command{
@@ -52,6 +54,9 @@ func newExportCmd() *cobra.Command {
 			}
 			if (source == flatfile.Name || source == keycloak.Name) && in == "" {
 				return fmt.Errorf("--in is required for --source %s", source)
+			}
+			if source != flatfile.Name && ffDirectory.given() {
+				return fmt.Errorf("--organizations, --roles and --memberships only apply to --source %s", flatfile.Name)
 			}
 
 			var fileMapping mapping.Mapping
@@ -137,6 +142,8 @@ func newExportCmd() *cobra.Command {
 			ctx, bar := startProgress(cmd)
 			defer bar.Done()
 			exportStart := time.Now()
+			var src connector.SourceConnector
+			var opts connector.ExportOptions
 			switch source {
 			case kratos.Name:
 				if adminURL == "" {
@@ -145,26 +152,25 @@ func newExportCmd() *cobra.Command {
 				if adminURL == "" {
 					return fmt.Errorf("--admin-url (or $KRATOS_ADMIN_URL) is required for --source kratos")
 				}
-				client := kratos.NewClient(adminURL)
-				bar.Stage("exporting users", 0)
-				manifest, err = kratos.New(client, "").Export(ctx, w, kratos.ExportOptions{})
+				src, opts = kratos.New(kratos.NewClient(adminURL), ""), kratos.ExportOptions{}
 			case keycloak.Name:
-				bar.Stage("exporting users", 0)
-				manifest, err = keycloak.New(nil).Export(ctx, w, keycloak.ExportOptions{Path: in})
+				src, opts = keycloak.New(nil), keycloak.ExportOptions{Path: in}
 			case firebase.Name:
-				bar.Stage("exporting users", 0)
-				manifest, err = firebase.New(fbClient).Export(ctx, w, firebase.ExportOptions{Scrypt: fbScrypt})
+				src, opts = firebase.New(fbClient), firebase.ExportOptions{Scrypt: fbScrypt}
 			case auth0.Name:
-				bar.Stage("exporting users", 0)
-				manifest, err = auth0.New(a0Client).Export(ctx, w, a0Export)
+				src, opts = auth0.New(a0Client), a0Export
 			case azureb2c.Name:
-				bar.Stage("exporting users", 0)
-				manifest, err = azureb2c.New(azClient).Export(ctx, w, azExport)
+				src, opts = azureb2c.New(azClient), azExport
 			default:
-				opts := flatfile.ExportOptions{Path: in, Format: flatfile.Format(format), Mapping: fileMapping}
-				bar.Stage("exporting users", 0)
-				manifest, err = flatfile.New().Export(ctx, w, opts)
+				src, opts = flatfile.New(), flatfile.ExportOptions{
+					Path: in, Format: flatfile.Format(format), Mapping: fileMapping,
+					Organizations: ffDirectory.organizations.file(format),
+					Roles:         ffDirectory.roles.file(format),
+					Memberships:   ffDirectory.memberships.file(format),
+				}
 			}
+			bar.Stage("exporting users", 0)
+			manifest, err = src.Export(ctx, w, opts)
 			bar.Done()
 			if err != nil {
 				return err
@@ -189,6 +195,9 @@ func newExportCmd() *cobra.Command {
 			if err := writeManifest(outDir, manifest); err != nil {
 				return err
 			}
+			if err := connector.WriteDirectory(outDir, src); err != nil {
+				return err
+			}
 
 			// A scaffolded mapping.yaml covering the recognized-column
 			// simple case needs no manual edits; any custom column that
@@ -202,6 +211,7 @@ func newExportCmd() *cobra.Command {
 			// Keep how the file's columns were read next to the export, and
 			// don't lose it when --mapping is the file written here.
 			m.RecordsPath, m.Fields = fileMapping.RecordsPath, fileMapping.Fields
+			m.Organizations, m.Roles, m.Memberships = fileMapping.Organizations, fileMapping.Roles, fileMapping.Memberships
 			if err := mapping.Save(filepath.Join(outDir, "mapping.yaml"), m); err != nil {
 				return err
 			}
@@ -217,6 +227,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().StringVar(&in, "in", "", "input file path (flatfile source), or a kc.sh export realm file or directory (keycloak source)")
 	cmd.Flags().StringVar(&format, "format", "csv", "input format: csv|json (flatfile source)")
 	cmd.Flags().StringVar(&mapPath, "mapping", "", "mapping.yaml path renaming the file's own columns into CMF fields, and its export strategies (export.user, ids.target) (flatfile source)")
+	ffDirectory.register(cmd)
 	cmd.Flags().StringVar(&outDir, "out", "./export/", "output directory")
 	cmd.Flags().StringVar(&adminURL, "admin-url", "", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL, kratos source)")
 	fbAuth.register(cmd)
@@ -301,4 +312,34 @@ func recordExport(ctx context.Context, source string, d time.Duration, m connect
 	for alg, n := range m.HashAlgorithmCounts {
 		exportHashAlgorithm.Add(ctx, int64(n), source, telemetryx.Vocab(string(alg), hashAlgorithms...))
 	}
+}
+
+// flatfileDirectoryFlags names the flat-file source's files of
+// organizations, roles and memberships.
+type flatfileDirectoryFlags struct {
+	organizations, roles, memberships flatfileInput
+}
+
+func (f *flatfileDirectoryFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar((*string)(&f.organizations), "organizations", "", "organizations file, mapped by the organizations section of --mapping; written to organizations.cmf.jsonl (flatfile source)")
+	cmd.Flags().StringVar((*string)(&f.roles), "roles", "", "roles file, mapped by the roles section of --mapping; written to roles.cmf.jsonl (flatfile source)")
+	cmd.Flags().StringVar((*string)(&f.memberships), "memberships", "", "memberships file (user_id, organization, role), mapped by the memberships section of --mapping and joined into the users (flatfile source)")
+}
+
+func (f flatfileDirectoryFlags) given() bool {
+	return f.organizations != "" || f.roles != "" || f.memberships != ""
+}
+
+// flatfileInput is the path of a flat file whose format is told by its
+// .csv or .json extension, else is the users file's.
+type flatfileInput string
+
+func (p flatfileInput) file(format string) flatfile.File {
+	switch strings.ToLower(filepath.Ext(string(p))) {
+	case ".csv":
+		format = string(flatfile.FormatCSV)
+	case ".json":
+		format = string(flatfile.FormatJSON)
+	}
+	return flatfile.File{Path: string(p), Format: flatfile.Format(format)}
 }

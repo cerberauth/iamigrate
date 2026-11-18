@@ -158,6 +158,9 @@ func (c Connectors) export(ctx context.Context, j *Job) error {
 	if err := os.Rename(part, path); err != nil {
 		return err
 	}
+	if err := connector.WriteDirectory(filepath.Dir(path), src); err != nil {
+		return err
+	}
 	j.Manifest = &manifest
 	return nil
 }
@@ -271,9 +274,17 @@ func (c Connectors) validate(ctx context.Context, j *Job) error {
 	defer closeFn()
 
 	caps := tc.Capabilities()
+	path, err := usersPath(j)
+	if err != nil {
+		return err
+	}
+	dir, err := connector.ReadDirectory(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	memberships, problems := validate.NewDirectoryChecker(dir.Organizations, dir.Roles, caps)
 	dups := validate.NewDupTracker()
 	targetIDs := ids.NewChecker(idStrategy, tc.Name(), caps)
-	var problems []connector.Problem
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -288,6 +299,7 @@ func (c Connectors) validate(ctx context.Context, j *Job) error {
 		problems = append(problems, validate.CheckUser(u, caps)...)
 		problems = append(problems, tc.ValidateUser(u)...)
 		problems = append(problems, dups.Check(u)...)
+		problems = append(problems, memberships.Check(u)...)
 		problems = append(problems, targetIDs.Check(u)...)
 		ps, err := hooked.Add(ctx, u)
 		if err != nil {

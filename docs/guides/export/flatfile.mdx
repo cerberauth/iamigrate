@@ -1,0 +1,109 @@
+---
+title: Export users from CSV or JSON files
+description: Export users, and their organizations, roles and memberships, from CSV or JSON files into CMF with iamigrate.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through exporting users kept in CSV or JSON files into the Canonical Migration Format (CMF), along with the organizations and roles they belong to.
+
+## How iamigrate reads flat files
+
+`iamigrate export --source flatfile` reads one file of users, one record per user. A file whose columns follow iamigrate's convention (`source_id`, `email`, `email_verified`, `username`, `given_name`, `family_name`, `locale`, `blocked`, `password`, `password_algorithm`, ...) needs nothing else; any other layout is described in a [`mapping.yaml`](../../../reference/mapping/). See [Prepare password hashes from a flat file](../../prepare-password-hashes/) for the password columns.
+
+Organizations, roles and who holds them come in three more files, each optional:
+
+| Flag | One record per | Written to |
+| --- | --- | --- |
+| `--organizations` | organization: `source_id`, `name`, `display_name`, metadata | `organizations.cmf.jsonl` |
+| `--roles` | role: `source_id`, `name`, `description` | `roles.cmf.jsonl` |
+| `--memberships` | user, organization and role: `user_id`, `organization`, `role` | the users' `memberships` and `global_roles` |
+
+Each file is CSV or JSON, told by its `.csv` or `.json` extension (else `--format`), and is described by its own section of the mapping, `organizations`, `roles` and `memberships`, with the same field syntax as the users'.
+
+## Prerequisites
+
+- iamigrate installed (see [Installation](../../../installation/)).
+- Your users, and optionally organizations, roles and memberships, as CSV or JSON files.
+
+## 1. Describe the files
+
+Say the application exported these files:
+
+```csv
+# users.csv
+id,mail,first,last
+u1,jane@example.com,Jane,Doe
+u2,john@example.com,John,Roe
+```
+
+```json
+// teams.json
+{"teams": [{"id": "t1", "slug": "acme", "title": "Acme Inc", "plan": "gold"}]}
+```
+
+```csv
+# members.csv
+user,team,permission
+u1,t1,owner
+u2,t1,
+u2,,auditor
+```
+
+`members.csv` has one row per user, organization and role. `u2` is a member of `t1` without a role, and holds `auditor` outside any organization: a row with no organization is a global role.
+
+The mapping renames each file's columns into the CMF fields:
+
+```yaml
+fields:
+  - {source: id, cmf: source_id}
+  - {source: mail, cmf: email}
+  - {source: first, cmf: given_name}
+  - {source: last, cmf: family_name}
+organizations:
+  records_path: teams
+  fields:
+    - {source: id, cmf: source_id}
+    - {source: slug, cmf: name}
+    - {source: title, cmf: display_name}
+memberships:
+  fields:
+    - {source: user, cmf: user_id}
+    - {source: team, cmf: organization}
+    - {source: permission, cmf: role}
+```
+
+Memberships name organizations and roles by their `source_id`. An organization's other columns (`plan` here) are kept as its metadata.
+
+## 2. Export
+
+```sh
+iamigrate export --source flatfile --in users.csv --mapping mapping.yaml \
+  --organizations teams.json --roles roles.csv --memberships members.csv \
+  --out ./export/
+```
+
+The output directory gets `users.cmf.jsonl.gz`, with each user's memberships, `organizations.cmf.jsonl`, `roles.cmf.jsonl` and `manifest.json`. `import` reads the organizations and roles files from next to the users file.
+
+The manifest's `skipped_records` lists the rows that couldn't be used: an organization or role with no `source_id`, a membership with no user or with neither an organization nor a role, and memberships naming a user that isn't exported (unknown to the users file, or skipped).
+
+<Aside type="caution">
+  The export contains personal data, and password hashes if the users file has them. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## 3. Validate
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --target auth0
+```
+
+Besides the users' own problems, `validate` reports:
+
+- a membership naming an organization or a role that isn't in `organizations.cmf.jsonl` or `roles.cmf.jsonl`;
+- organizations with the same name, which a target matching organizations by name would merge;
+- memberships and roles headed for a target that has no organizations or roles. Of the targets, only Auth0 imports them.
+
+## Next steps
+
+- [Import into Auth0](../../import/auth0/), which creates the organizations and roles, then assigns the memberships.
+- The [`mapping.yaml` reference](../../../reference/mapping/) for every field option.
