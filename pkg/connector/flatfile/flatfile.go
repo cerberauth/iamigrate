@@ -37,6 +37,9 @@ type ExportOptions struct {
 	// Mapping renames and transforms the file's own columns into the
 	// recognized ones; the zero value expects them already.
 	Mapping mapping.Mapping
+	// Provenance is the source connector the users are recorded as coming
+	// from (default flatfile).
+	Provenance string
 	// Organizations, Roles and Memberships are the source's files of
 	// organizations, roles and who holds them, each optional, read through
 	// the mapping's sections of the same names. Memberships are joined
@@ -76,9 +79,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	if !ok {
 		return connector.Manifest{}, fmt.Errorf("flatfile: Export requires flatfile.ExportOptions, got %T", eo)
 	}
-
-	c.directory = nil
-	dir, grants, dirSkipped, err := readDirectory(ctx, opts)
+	dir, err := readDirectoryFiles(opts)
 	if err != nil {
 		return connector.Manifest{}, err
 	}
@@ -86,34 +87,117 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 	if err != nil {
 		return connector.Manifest{}, err
 	}
-	rows, positions, dropped, err := exportRecord(ctx, rows, opts.Mapping)
-	if err != nil {
-		return connector.Manifest{}, err
+	progress.FromContext(ctx).SetTotal(len(rows))
+	// A file is read whole, so its records go through the hooks in one
+	// batch.
+	return c.ExportRows(ctx, w, &sliceRows{rows: rows}, dir, opts, len(rows))
+}
+
+// RowReader yields a source's records one at a time, as flat rows of
+// strings; Next returns io.EOF after the last.
+type RowReader interface {
+	Next() (map[string]string, error)
+}
+
+type sliceRows struct {
+	rows []map[string]string
+	i    int
+}
+
+func (s *sliceRows) Next() (map[string]string, error) {
+	if s.i >= len(s.rows) {
+		return nil, io.EOF
 	}
-	if rows, err = idSource(ctx, rows, positions, opts.Mapping); err != nil {
-		return connector.Manifest{}, err
-	}
-	if rows, err = normalize(ctx, rows, opts.Mapping, hooks.FromContext(ctx)); err != nil {
-		return connector.Manifest{}, err
-	}
-	detected, err := detectHashes(ctx, rows, opts.HashHints, opts.Mapping)
-	if err != nil {
-		return connector.Manifest{}, err
+	s.i++
+	return s.rows[s.i-1], nil
+}
+
+// DirectoryRows are the raw records of a source's organizations, roles and
+// memberships, to be mapped through the mapping's sections of the same
+// names.
+type DirectoryRows struct {
+	Organizations, Roles, Memberships []map[string]string
+}
+
+// ExportRows is Export over the records rows yields instead of a file:
+// each is mapped into CMF per opts.Mapping and written to w, batch records
+// at a time (at least one), so a source too large for memory streams
+// through, its hooks called once per batch. dir, when not nil, holds the
+// source's organizations, roles and memberships, the last joined into the
+// users; opts' file fields are ignored.
+func (c *Connector) ExportRows(ctx context.Context, w *cmf.Writer, rows RowReader, dir *DirectoryRows, opts ExportOptions, batch int) (connector.Manifest, error) {
+	c.directory = nil
+	var directory *connector.Directory
+	var grants *Grants
+	var dirSkipped []connector.SkippedRecord
+	if dir != nil {
+		var err error
+		if directory, grants, dirSkipped, err = mapDirectory(ctx, *dir, opts.Mapping); err != nil {
+			return connector.Manifest{}, err
+		}
 	}
 
 	manifest := connector.Manifest{
 		HashAlgorithmCounts:  map[cmf.Algorithm]int{},
 		NonPortableMFACounts: map[cmf.MFAType]int{},
-		SkippedRecords:       dropped,
 	}
-	bar := progress.FromContext(ctx)
-	bar.SetTotal(len(rows))
+	batch = max(batch, 1)
+	for read, done := 0, false; !done; {
+		var chunk []map[string]string
+		for len(chunk) < batch {
+			row, err := rows.Next()
+			if err == io.EOF {
+				done = true
+				break
+			}
+			if err != nil {
+				return manifest, err
+			}
+			chunk = append(chunk, row)
+		}
+		if len(chunk) == 0 {
+			break
+		}
+		if err := c.exportBatch(ctx, w, chunk, read, grants, opts, &manifest); err != nil {
+			return manifest, err
+		}
+		read += len(chunk)
+	}
 
+	if directory != nil {
+		manifest.SkippedRecords = append(append(manifest.SkippedRecords, dirSkipped...), grants.Unused()...)
+		c.directory = directory
+	}
+	return manifest, nil
+}
+
+// exportBatch maps rows, the records after the first `before` ones, into
+// CMF users written to w, and counts them into manifest.
+func (c *Connector) exportBatch(ctx context.Context, w *cmf.Writer, rows []map[string]string, before int, grants *Grants, opts ExportOptions, manifest *connector.Manifest) error {
+	rows, positions, dropped, err := exportRecord(ctx, rows, before, opts.Mapping)
+	if err != nil {
+		return err
+	}
+	manifest.SkippedRecords = append(manifest.SkippedRecords, dropped...)
+	if rows, err = idSource(ctx, rows, positions, before, opts.Mapping); err != nil {
+		return err
+	}
+	if rows, err = normalize(ctx, rows, before, opts.Mapping, hooks.FromContext(ctx)); err != nil {
+		return err
+	}
+	detected, err := detectHashes(ctx, rows, opts.HashHints, opts.Mapping)
+	if err != nil {
+		return err
+	}
+
+	bar := progress.FromContext(ctx)
+	provenance := opts.Provenance
+	if provenance == "" {
+		provenance = Name
+	}
 	for i, row := range rows {
-		select {
-		case <-ctx.Done():
-			return manifest, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 
 		bar.Add(1)
@@ -127,7 +211,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 		}
 		u, skipReason, err := rowToUser(row, opts.HashHints, det.password)
 		if err != nil {
-			return manifest, err
+			return err
 		}
 		if skipReason != "" {
 			manifest.SkippedRecords = append(manifest.SkippedRecords, connector.SkippedRecord{
@@ -136,11 +220,12 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			})
 			continue
 		}
+		u.Provenance.SourceConnector = provenance
 		if grants != nil {
 			grants.Apply(&u)
 		}
 		if err := w.WriteUser(u); err != nil {
-			return manifest, fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
+			return fmt.Errorf("flatfile: writing user %s: %w", u.SourceID, err)
 		}
 		manifest.RecordCount++
 		if u.Password != nil {
@@ -152,12 +237,7 @@ func (c *Connector) Export(ctx context.Context, w *cmf.Writer, eo connector.Expo
 			}
 		}
 	}
-
-	if dir != nil {
-		manifest.SkippedRecords = append(append(manifest.SkippedRecords, dirSkipped...), grants.Unused()...)
-		c.directory = dir
-	}
-	return manifest, nil
+	return nil
 }
 
 // Directory returns the organizations and roles the last Export read, nil
@@ -227,10 +307,11 @@ func (c *Connector) Verify(ctx context.Context, r *cmf.Reader) (connector.DiffRe
 
 // exportRecord hands the raw rows, as read and before any mapping, to the
 // mapping's export.record handler, if any, which keeps, drops or replaces
-// each. Rows are keyed by their record number, as they have no source ID
-// yet; so are the dropped ones in the manifest. positions are the record
-// numbers (from 1) of the rows kept, nil when the rows keep their own.
-func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mapping) (kept []map[string]string, positions []int, dropped []connector.SkippedRecord, err error) {
+// each. Rows are keyed by their record number (counting the `before`
+// records read ahead of them), as they have no source ID yet; so are the
+// dropped ones in the manifest. positions are the indexes in rows of those
+// kept, nil when all are.
+func exportRecord(ctx context.Context, rows []map[string]string, before int, m mapping.Mapping) (kept []map[string]string, positions []int, dropped []connector.SkippedRecord, err error) {
 	if m.Strategies[strategy.ExportRecord].Handler == "" {
 		return rows, nil, nil, nil
 	}
@@ -240,7 +321,7 @@ func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mappi
 	}
 	items := make([]hooks.Item, len(rows))
 	for i, row := range rows {
-		items[i] = hooks.Item{Key: recordKey(i), Data: map[string]any{"record": row}}
+		items[i] = hooks.Item{Key: recordKey(before + i), Data: map[string]any{"record": row}}
 	}
 	res, err := set.Resolve(ctx, strategy.ExportRecord, items)
 	if err != nil || res == nil {
@@ -252,25 +333,25 @@ func exportRecord(ctx context.Context, rows []map[string]string, m mapping.Mappi
 			Reason string            `json:"reason"`
 			Record map[string]string `json:"record"`
 		}
-		if err := strategy.Decode(strategy.ExportRecord, recordKey(i), res[recordKey(i)], &a); err != nil {
+		if err := strategy.Decode(strategy.ExportRecord, recordKey(before+i), res[recordKey(before+i)], &a); err != nil {
 			return nil, nil, nil, err
 		}
 		switch a.Action {
 		case "", strategy.ActionKeep:
-			kept, positions = append(kept, row), append(positions, i+1)
+			kept, positions = append(kept, row), append(positions, i)
 		case strategy.ActionReplace:
 			if a.Record == nil {
-				return nil, nil, nil, fmt.Errorf("%s: %s: replace needs a record", strategy.ExportRecord, recordKey(i))
+				return nil, nil, nil, fmt.Errorf("%s: %s: replace needs a record", strategy.ExportRecord, recordKey(before+i))
 			}
-			kept, positions = append(kept, a.Record), append(positions, i+1)
+			kept, positions = append(kept, a.Record), append(positions, i)
 		case strategy.ActionDrop:
 			reason := a.Reason
 			if reason == "" {
 				reason = "dropped by the " + strategy.ExportRecord + " hook"
 			}
-			dropped = append(dropped, connector.SkippedRecord{SourceID: recordKey(i), Reason: reason})
+			dropped = append(dropped, connector.SkippedRecord{SourceID: recordKey(before + i), Reason: reason})
 		default:
-			return nil, nil, nil, fmt.Errorf("%s: %s: unknown action %q (keep, drop or replace)", strategy.ExportRecord, recordKey(i), a.Action)
+			return nil, nil, nil, fmt.Errorf("%s: %s: unknown action %q (keep, drop or replace)", strategy.ExportRecord, recordKey(before+i), a.Action)
 		}
 	}
 	return kept, positions, dropped, nil

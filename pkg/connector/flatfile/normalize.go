@@ -99,18 +99,18 @@ func compileRules(fields []mapping.FieldMapping, schema fieldSchema, reg *transf
 // only needs to cover what differs from the convention. With no fields the
 // rows are returned untouched.
 func Normalize(rows []map[string]string, m mapping.Mapping) ([]map[string]string, error) {
-	return normalize(context.Background(), rows, m, nil)
+	return normalize(context.Background(), rows, 0, m, nil)
 }
 
 // normalize is Normalize, with custom transforms sent to their handlers
 // through d. Each field runs over every row before the next field does, so a
 // custom transform is one batched call per field, not one per row; the
 // result is the same as field by field within each row.
-func normalize(ctx context.Context, rows []map[string]string, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
+func normalize(ctx context.Context, rows []map[string]string, before int, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
 	if len(m.Fields) == 0 {
 		return rows, nil
 	}
-	out, err := applyFields(ctx, rows, m.Fields, userFields, m, d)
+	out, err := applyFields(ctx, rows, before, m.Fields, userFields, m, d)
 	if err != nil {
 		return nil, err
 	}
@@ -121,21 +121,22 @@ func normalize(ctx context.Context, rows []map[string]string, m mapping.Mapping,
 			if v := n[c]; v != "" {
 				b, err := transform.ParseBool(v)
 				if err != nil {
-					return nil, fmt.Errorf("record %d: %s: %w", i+1, c, err)
+					return nil, fmt.Errorf("record %d: %s: %w", before+i+1, c, err)
 				}
 				n[c] = strconv.FormatBool(b)
 			}
 		}
 		if err := settlePasswordColumns(n); err != nil {
-			return nil, fmt.Errorf("record %d: %w", i+1, err)
+			return nil, fmt.Errorf("record %d: %w", before+i+1, err)
 		}
 	}
 	return out, nil
 }
 
-// applyFields rewrites rows through fields, the mapping of one kind of file
-// (schema), as normalize describes. m supplies the custom transforms.
-func applyFields(ctx context.Context, rows []map[string]string, fields []mapping.FieldMapping, schema fieldSchema, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
+// applyFields rewrites rows, the records after the first `before` ones,
+// through fields, the mapping of one kind of file (schema), as normalize
+// describes. m supplies the custom transforms.
+func applyFields(ctx context.Context, rows []map[string]string, before int, fields []mapping.FieldMapping, schema fieldSchema, m mapping.Mapping, d *hooks.Dispatcher) ([]map[string]string, error) {
 	if len(fields) == 0 {
 		return rows, nil
 	}
@@ -188,12 +189,12 @@ func applyFields(ctx context.Context, rows []map[string]string, fields []mapping
 			if v == "" {
 				v = r.def
 			}
-			idx, keys, vals = append(idx, i), append(keys, strconv.Itoa(i+1)), append(vals, v)
+			idx, keys, vals = append(idx, i), append(keys, strconv.Itoa(before+i+1)), append(vals, v)
 		}
 		if err := r.pipeline.Apply(ctx, r.dest, keys, vals); err != nil {
 			var ve *transform.ValueError
 			if errors.As(err, &ve) {
-				return nil, fmt.Errorf("record %d: %s -> %s: %w", idx[ve.Index]+1, r.source, r.dest, ve.Err)
+				return nil, fmt.Errorf("record %d: %s -> %s: %w", before+idx[ve.Index]+1, r.source, r.dest, ve.Err)
 			}
 			return nil, fmt.Errorf("%s -> %s: %w", r.source, r.dest, err)
 		}

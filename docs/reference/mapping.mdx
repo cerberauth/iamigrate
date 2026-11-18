@@ -9,7 +9,7 @@ description: Every section of mapping.yaml, from field renames to ID strategies 
 target: auth0
 connection_id: con_1a2b3c
 
-# Source side: flat-file columns -> CMF (export --source flatfile)
+# Source side: flat-file columns -> CMF (export --source flatfile, or sql: the query's columns)
 records_path: data.users
 fields:
   - {source: id, cmf: source_id}

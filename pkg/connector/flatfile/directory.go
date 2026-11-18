@@ -50,27 +50,32 @@ var (
 	}
 )
 
-// records reads f and maps its rows through rm per schema. It returns no
-// rows when f names no file.
-func records(ctx context.Context, f File, rm *mapping.RecordMapping, schema fieldSchema, m mapping.Mapping) ([]map[string]string, error) {
+// mapRecords maps rows through rm per schema.
+func mapRecords(ctx context.Context, rows []map[string]string, rm *mapping.RecordMapping, schema fieldSchema, m mapping.Mapping) ([]map[string]string, error) {
+	if rm == nil || len(rows) == 0 {
+		return rows, nil
+	}
+	return applyFields(ctx, rows, 0, rm.Fields, schema, m, hooks.FromContext(ctx))
+}
+
+// readFile reads f's records, found at rm's records path in JSON; none when
+// f names no file.
+func readFile(f File, rm *mapping.RecordMapping) ([]map[string]string, error) {
 	if f.Path == "" {
 		return nil, nil
 	}
-	if rm == nil {
-		rm = &mapping.RecordMapping{}
+	var recordsPath string
+	if rm != nil {
+		recordsPath = rm.RecordsPath
 	}
-	rows, err := readRows(f.Path, f.Format, rm.RecordsPath)
-	if err != nil {
-		return nil, err
-	}
-	return applyFields(ctx, rows, rm.Fields, schema, m, hooks.FromContext(ctx))
+	return readRows(f.Path, f.Format, recordsPath)
 }
 
-// readOrganizations reads the organizations file: a source_id each, a name
-// (the source ID when it has none), a display name, and the rest of its
+// mapOrganizations maps organization records: a source_id each, a name
+// (the source ID when it has none), a display name, and the rest of their
 // columns as metadata.
-func readOrganizations(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Organization, []connector.SkippedRecord, error) {
-	rows, err := records(ctx, f, m.Organizations, orgFields, m)
+func mapOrganizations(ctx context.Context, rows []map[string]string, m mapping.Mapping) ([]cmf.Organization, []connector.SkippedRecord, error) {
+	rows, err := mapRecords(ctx, rows, m.Organizations, orgFields, m)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,7 +89,7 @@ func readOrganizations(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Or
 			continue
 		}
 		if seen[id] {
-			return nil, nil, fmt.Errorf("flatfile: %s: more than one organization has source_id %q", f.Path, id)
+			return nil, nil, fmt.Errorf("flatfile: more than one organization has source_id %q", id)
 		}
 		seen[id] = true
 		o := cmf.Organization{SourceID: id, Name: row[colName], DisplayName: row[colDisplayName]}
@@ -105,11 +110,11 @@ func readOrganizations(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Or
 	return orgs, skipped, nil
 }
 
-// readRoles reads the roles file: a source_id each, a name (the source ID
-// when it has none) and a description. Other columns are left out, as CMF
-// roles have nowhere to keep them.
-func readRoles(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Role, []connector.SkippedRecord, error) {
-	rows, err := records(ctx, f, m.Roles, roleFields, m)
+// mapRoles maps role records: a source_id each, a name (the source ID when
+// it has none) and a description. Other columns are left out, as CMF roles
+// have nowhere to keep them.
+func mapRoles(ctx context.Context, rows []map[string]string, m mapping.Mapping) ([]cmf.Role, []connector.SkippedRecord, error) {
+	rows, err := mapRecords(ctx, rows, m.Roles, roleFields, m)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -123,7 +128,7 @@ func readRoles(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Role, []co
 			continue
 		}
 		if seen[id] {
-			return nil, nil, fmt.Errorf("flatfile: %s: more than one role has source_id %q", f.Path, id)
+			return nil, nil, fmt.Errorf("flatfile: more than one role has source_id %q", id)
 		}
 		seen[id] = true
 		r := cmf.Role{SourceID: id, Name: row[colName], Description: row[colDescription]}
@@ -209,10 +214,10 @@ func (g *Grants) Unused() []connector.SkippedRecord {
 	return out
 }
 
-// readMemberships reads the memberships file, a user_id and an organization,
-// a role or both on each row, into Grants.
-func readMemberships(ctx context.Context, f File, m mapping.Mapping) (*Grants, []connector.SkippedRecord, error) {
-	rows, err := records(ctx, f, m.Memberships, membershipFields, m)
+// mapMemberships maps membership records, a user_id and an organization, a
+// role or both on each, into Grants.
+func mapMemberships(ctx context.Context, rows []map[string]string, m mapping.Mapping) (*Grants, []connector.SkippedRecord, error) {
+	rows, err := mapRecords(ctx, rows, m.Memberships, membershipFields, m)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -241,23 +246,40 @@ func appendUnique(list []string, v string) []string {
 	return append(list, v)
 }
 
-// readDirectory reads the organizations, roles and memberships files opts
-// names. dir is nil when it names none of them.
-func readDirectory(ctx context.Context, opts ExportOptions) (dir *connector.Directory, grants *Grants, skipped []connector.SkippedRecord, err error) {
+// readDirectoryFiles reads the organizations, roles and memberships files
+// opts names; nil when it names none of them.
+func readDirectoryFiles(opts ExportOptions) (*DirectoryRows, error) {
 	if opts.Organizations.Path == "" && opts.Roles.Path == "" && opts.Memberships.Path == "" {
-		return nil, nil, nil, nil
+		return nil, nil
 	}
+	m := opts.Mapping
+	var d DirectoryRows
+	var err error
+	if d.Organizations, err = readFile(opts.Organizations, m.Organizations); err != nil {
+		return nil, err
+	}
+	if d.Roles, err = readFile(opts.Roles, m.Roles); err != nil {
+		return nil, err
+	}
+	if d.Memberships, err = readFile(opts.Memberships, m.Memberships); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// mapDirectory maps the records of d through m.
+func mapDirectory(ctx context.Context, d DirectoryRows, m mapping.Mapping) (dir *connector.Directory, grants *Grants, skipped []connector.SkippedRecord, err error) {
 	dir = &connector.Directory{}
 	var s []connector.SkippedRecord
-	if dir.Organizations, s, err = readOrganizations(ctx, opts.Organizations, opts.Mapping); err != nil {
+	if dir.Organizations, s, err = mapOrganizations(ctx, d.Organizations, m); err != nil {
 		return nil, nil, nil, err
 	}
 	skipped = append(skipped, s...)
-	if dir.Roles, s, err = readRoles(ctx, opts.Roles, opts.Mapping); err != nil {
+	if dir.Roles, s, err = mapRoles(ctx, d.Roles, m); err != nil {
 		return nil, nil, nil, err
 	}
 	skipped = append(skipped, s...)
-	if grants, s, err = readMemberships(ctx, opts.Memberships, opts.Mapping); err != nil {
+	if grants, s, err = mapMemberships(ctx, d.Memberships, m); err != nil {
 		return nil, nil, nil, err
 	}
 	return dir, grants, append(skipped, s...), nil

@@ -15,9 +15,10 @@ import (
 // idSource hands the raw rows, after export.record and before any
 // mapping, to the mapping's id.source handler, if any, which answers the
 // source_id of each. A row it answers none for keeps the one it has.
-// positions are the record numbers of rows (nil: their own), which key the
-// items as they do for export.record.
-func idSource(ctx context.Context, rows []map[string]string, positions []int, m mapping.Mapping) ([]map[string]string, error) {
+// positions are where rows were in their batch (nil: where they are), the
+// `before` records read ahead of it counted, which key the items as they
+// do for export.record.
+func idSource(ctx context.Context, rows []map[string]string, positions []int, before int, m mapping.Mapping) ([]map[string]string, error) {
 	if m.Strategies[strategy.IDSource].Handler == "" {
 		return rows, nil
 	}
@@ -27,9 +28,9 @@ func idSource(ctx context.Context, rows []map[string]string, positions []int, m 
 	}
 	key := func(i int) string {
 		if positions != nil {
-			return recordKey(positions[i] - 1)
+			return recordKey(before + positions[i])
 		}
-		return recordKey(i)
+		return recordKey(before + i)
 	}
 	items := make([]hooks.Item, len(rows))
 	for i, row := range rows {
