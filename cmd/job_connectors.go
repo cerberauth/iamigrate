@@ -15,6 +15,7 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/connector/flatfile"
 	"github.com/cerberauth/iamigrate/pkg/connector/keycloak"
 	"github.com/cerberauth/iamigrate/pkg/connector/kratos"
+	"github.com/cerberauth/iamigrate/pkg/connector/sqlsource"
 	"github.com/cerberauth/iamigrate/pkg/mapping"
 )
 
@@ -29,6 +30,12 @@ const (
 	paramOrganizations    = "organizations"
 	paramRoles            = "roles"
 	paramMemberships      = "memberships"
+	paramDriver           = "driver"
+	paramDSNFile          = "dsn_file"
+	paramQuery            = "query"
+	paramOrgsQuery        = "organizations_query"
+	paramRolesQuery       = "roles_query"
+	paramMembersQuery     = "memberships_query"
 	paramAdminURL         = "admin_url"
 	paramSchemaID         = "schema_id"
 	paramSchemaFile       = "schema_file"
@@ -85,6 +92,21 @@ func jobSource(j *jobs.Job) (connector.SourceConnector, connector.ExportOptions,
 			return nil, nil, fmt.Errorf("param %q is required for source %s", paramInput, name)
 		}
 		return keycloak.New(nil), keycloak.ExportOptions{Path: p[paramInput]}, nil
+	case sqlsource.Name:
+		// The DSN is never a param: it comes from a file or $SQL_DSN.
+		opts, err := sqlFlags{
+			driver: p[paramDriver], dsnFile: p[paramDSNFile], query: p[paramQuery],
+			organizationsQuery: p[paramOrgsQuery], rolesQuery: p[paramRolesQuery], membershipsQuery: p[paramMembersQuery],
+		}.options()
+		if err != nil {
+			return nil, nil, err
+		}
+		if path := p[paramSourceMapping]; path != "" {
+			if opts.Mapping, err = mapping.Load(path); err != nil {
+				return nil, nil, err
+			}
+		}
+		return sqlsource.New(), opts, nil
 	case kratos.Name:
 		url := flagOrEnv(p[paramAdminURL], "KRATOS_ADMIN_URL")
 		if url == "" {
@@ -141,7 +163,7 @@ func jobSource(j *jobs.Job) (connector.SourceConnector, connector.ExportOptions,
 		}
 		return azureb2c.New(client), opts, nil
 	default:
-		return nil, nil, fmt.Errorf("unsupported source %q (supports \"flatfile\", \"kratos\", \"keycloak\", \"firebase\", \"auth0\", and \"azure-ad-b2c\")", name)
+		return nil, nil, fmt.Errorf("unsupported source %q (supports \"flatfile\", \"sql\", \"kratos\", \"keycloak\", \"firebase\", \"auth0\", and \"azure-ad-b2c\")", name)
 	}
 }
 

@@ -1,0 +1,119 @@
+---
+title: Export users from a SQL database
+description: Export users, and optionally organizations, roles and memberships, from a query over an application's own database into CMF with iamigrate.
+---
+
+import { Aside } from '@/components/docs';
+
+This guide walks through exporting users stored in an application's own database into Canonical Migration Format (CMF), by running SQL against it.
+
+## How iamigrate reads a database
+
+`iamigrate export --source sql` runs the query you give it and turns each row into one record. The column names are the record's source fields, so everything that works on a [flat file](../flatfile/) works on a query: [`mapping.yaml`](../../../reference/mapping/) renames and transforms the columns, password hashes are detected or described the same way (see [Prepare password hashes](../../prepare-password-hashes/)), and the export strategies apply unchanged.
+
+- **`--driver`** names the database engine. It is required: there is no default. Today `sqlite` is available.
+- **`--query`** is the SQL selecting the users, or `@users.sql` to read it from a file.
+- **`--mapping`** maps the query's columns into CMF. A query whose columns already follow iamigrate's convention (`source_id`, `email`, `password`, ...) needs none.
+
+The export runs in one read-only transaction, over a single snapshot of the database, and nothing is ever written to it. Rows are streamed: the users are never all held in memory.
+
+<Aside type="caution">
+  Use a database account that can only read the tables you query. The transaction is read-only on the engine's side too, but a dedicated, least-privilege account is the safe default.
+</Aside>
+
+## 1. Write the query
+
+Give each column the name your mapping expects, with `AS` where it differs. Two columns of the same name are refused.
+
+```sql
+-- users.sql
+SELECT id, mail, first, last, verified, pw, salt FROM users WHERE deleted_at IS NULL
+```
+
+Binary columns (`BLOB`) come through as bytes: iamigrate reads them as hex, so a hash and its salt stored as raw bytes are described with `hex` encodings in the mapping. Text columns are read as text. A `NULL` is a missing value, as an empty cell in a CSV is.
+
+```yaml
+# mapping.yaml
+fields:
+  - {source: id, cmf: source_id}
+  - {source: mail, cmf: email}
+  - {source: first, cmf: given_name}
+  - {source: last, cmf: family_name}
+  - {source: verified, cmf: email_verified}
+  - {source: pw, cmf: password}
+  - {cmf: password_algorithm, default: sha256}
+  - {cmf: password_encoding, default: hex}
+  - {source: salt, cmf: password_salt}
+  - {cmf: password_salt_encoding, default: hex}
+  - {cmf: password_salt_position, default: suffix}
+```
+
+## 2. Organizations, roles and memberships
+
+Each of them has an optional query of its own, mapped by the section of the mapping with the same name, exactly as for flat files.
+
+```sql
+-- memberships.sql: one row per user, organization and role
+SELECT uid, team, perm FROM members
+```
+
+```yaml
+organizations:
+  fields:
+    - {source: id, cmf: source_id}
+    - {source: slug, cmf: name}
+memberships:
+  fields:
+    - {source: uid, cmf: user_id}
+    - {source: team, cmf: organization}
+    - {source: perm, cmf: role}
+```
+
+These queries are read whole, as memberships are joined into the users as they stream by. See [Export from CSV or JSON files](../flatfile/) for how memberships name organizations and roles, and what the manifest reports.
+
+## 3. Export
+
+```sh
+export SQL_DSN="file:/srv/app/app.db?mode=ro"
+
+iamigrate export --source sql --driver sqlite \
+  --query @users.sql --mapping mapping.yaml \
+  --organizations-query "SELECT id, slug FROM teams" \
+  --memberships-query @memberships.sql \
+  --out ./export/
+```
+
+The output directory gets `users.cmf.jsonl.gz`, `organizations.cmf.jsonl` and `roles.cmf.jsonl` when their queries were given, and `manifest.json`, whose `skipped_records` lists the rows that couldn't be used and why.
+
+### Keep the DSN secret
+
+The DSN usually holds a password, so it never goes on the command line of a job and is never logged or stored with it. Give it, in order of precedence, as `--dsn`, `--dsn-file` (a mounted secret, say) or the `SQL_DSN` environment variable. Where a driver's error would quote it, the DSN and its password are masked.
+
+### Run it as a job
+
+`job create --source sql` takes the same `--driver` and queries, and reads the DSN from `--dsn-file` or `$SQL_DSN` each time a step runs, so set it for `job run` too.
+
+```sh
+id=$(iamigrate job create --source sql --driver sqlite --query @users.sql \
+  --source-mapping mapping.yaml --target kratos --users ./work/users.cmf.jsonl.gz)
+```
+
+## 4. Validate
+
+```sh
+iamigrate validate --in ./export/users.cmf.jsonl.gz --target auth0
+```
+
+<Aside type="caution">
+  The export contains personal data, and password hashes if the query selects them. Write it somewhere access-controlled, and delete it once the migration is done.
+</Aside>
+
+## SQLite
+
+`--driver sqlite` uses a pure-Go driver: no cgo, and nothing to install. The DSN is the database file's path, or a `file:` URI with the driver's query parameters. Open the file read-only with `file:/path/app.db?mode=ro`. The transaction also sets `query_only`, so the connection refuses every write.
+
+## Next steps
+
+- [Prepare password hashes](../../prepare-password-hashes/) to describe the algorithm, encoding and salt of your hashes.
+- The [`mapping.yaml` reference](../../../reference/mapping/) for every field option.
+- The [`export` reference](../../../reference/cli/export/) for every flag.

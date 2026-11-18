@@ -177,7 +177,7 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	}
 
 	fl := cmd.Flags()
-	fl.StringVar(&source, "source", "", "source connector name: flatfile|kratos|keycloak|firebase|auth0|azure-ad-b2c (default: no export, start from the existing --users file)")
+	fl.StringVar(&source, "source", "", "source connector name: flatfile|sql|kratos|keycloak|firebase|auth0|azure-ad-b2c (default: no export, start from the existing --users file)")
 	fl.StringVar(&target, "target", "", "target connector name: auth0|kratos|keycloak|firebase|cognito")
 	fl.StringVar(&users, "users", "", "CMF users file: written by the export, read by the other steps (.gz is gzipped)")
 	fl.StringVar(&mappingPath, "mapping", "", "mapping.yaml path (optional)")
@@ -193,6 +193,12 @@ func newJobCreateCmd(f *jobFlags) *cobra.Command {
 	strParam(paramOrganizations, "organizations", "organizations file, mapped by the organizations section of --source-mapping (flatfile source)")
 	strParam(paramRoles, "roles", "roles file, mapped by the roles section of --source-mapping (flatfile source)")
 	strParam(paramMemberships, "memberships", "memberships file (user_id, organization, role), joined into the users (flatfile source)")
+	strParam(paramDriver, "driver", "database engine (sql source)")
+	strParam(paramDSNFile, "dsn-file", "file holding the database DSN; without it, $SQL_DSN is read when the export runs (sql source)")
+	strParam(paramQuery, "query", "SQL selecting the users, or @file.sql (sql source)")
+	strParam(paramOrgsQuery, "organizations-query", "SQL selecting the organizations, or @file.sql (sql source)")
+	strParam(paramRolesQuery, "roles-query", "SQL selecting the roles, or @file.sql (sql source)")
+	strParam(paramMembersQuery, "memberships-query", "SQL selecting the memberships (user_id, organization, role), or @file.sql (sql source)")
 	strParam(paramAdminURL, "admin-url", "Kratos Admin API base URL (or $KRATOS_ADMIN_URL)")
 	strParam(paramSchemaID, "schema-id", "Kratos identity schema ID to create identities against (default \"default\")")
 	strParam(paramSchemaFile, "schema-file", "Kratos identity schema JSON path, to check traits against (kratos target)")

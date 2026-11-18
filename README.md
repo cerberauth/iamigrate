@@ -75,6 +75,17 @@ iamigrate prepare --in users.json --format json --mapping mapping.yaml --out use
 
 `prepare` also flags password hashes that `export` couldn't read (wrong algorithm for the digest's size, bad encoding, a salt with no encoding), and the [password hashes guide](https://www.cerberauth.com/docs/iamigrate/guides/prepare-password-hashes/) covers salts, encodings and packed formats.
 
+## Migrating from a SQL database
+
+Users kept in an application's own database are exported by a query: each row is one record, its column names the fields a `mapping.yaml` maps, exactly as for a flat file. The export runs in one read-only transaction and streams the rows. `--driver` is required, and the DSN is read from `--dsn-file` or `$SQL_DSN`, never stored with a job.
+
+```sh
+export SQL_DSN="file:./app.db?mode=ro"
+iamigrate export --source sql --driver sqlite --query "SELECT id, mail, pw FROM users" --mapping mapping.yaml --out ./export/
+```
+
+Binary columns come through as bytes (read as hex), so hashes and salts stored as `BLOB` are described like a flat file's. An optional `--memberships-query` (`user_id`, `organization`, `role`) fills the users' memberships. See [Export users from a SQL database](docs/guides/export/sql.mdx).
+
 ## Migrating with Ory Kratos
 
 Kratos can be either side of a migration: export identities out of a running
