@@ -37,6 +37,9 @@ const (
 
 	appMetadataPrefix  = "app_metadata."
 	userMetadataPrefix = "user_metadata."
+
+	// reasonMissingSourceID is the skip reason for a record with no source_id.
+	reasonMissingSourceID = "missing source_id"
 )
 
 // rowToUser converts one flat row into a CMF user. skipReason is non-empty
@@ -46,7 +49,7 @@ const (
 func rowToUser(row map[string]string, hints map[string]cmf.Algorithm, detected *cmf.Password) (cmf.User, string, error) {
 	sourceID := row[colSourceID]
 	if sourceID == "" {
-		return cmf.User{}, "missing source_id", nil
+		return cmf.User{}, reasonMissingSourceID, nil
 	}
 
 	u := cmf.User{

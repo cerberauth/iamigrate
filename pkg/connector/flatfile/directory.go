@@ -80,7 +80,7 @@ func readOrganizations(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Or
 	for i, row := range rows {
 		id := row[colSourceID]
 		if id == "" {
-			skipped = append(skipped, connector.SkippedRecord{SourceID: fmt.Sprintf("organization record %d", i+1), Reason: "missing source_id"})
+			skipped = append(skipped, connector.SkippedRecord{SourceID: fmt.Sprintf("organization record %d", i+1), Reason: reasonMissingSourceID})
 			continue
 		}
 		if seen[id] {
@@ -119,7 +119,7 @@ func readRoles(ctx context.Context, f File, m mapping.Mapping) ([]cmf.Role, []co
 	for i, row := range rows {
 		id := row[colSourceID]
 		if id == "" {
-			skipped = append(skipped, connector.SkippedRecord{SourceID: fmt.Sprintf("role record %d", i+1), Reason: "missing source_id"})
+			skipped = append(skipped, connector.SkippedRecord{SourceID: fmt.Sprintf("role record %d", i+1), Reason: reasonMissingSourceID})
 			continue
 		}
 		if seen[id] {
