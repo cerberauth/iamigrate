@@ -38,8 +38,7 @@ func (*Connector) Name() string { return Name }
 
 // Capabilities declares Auth0's bulk-import support: all 11
 // custom_password_hash algorithms, but only totp/sms/email MFA factors
-// (webauthn and recovery_codes have no import API at all, per
-// DESIGN.md's MFA import section).
+// (webauthn and recovery_codes have no import API at all).
 func (*Connector) Capabilities() connector.Capabilities {
 	return connector.Capabilities{
 		HashAlgorithms: []cmf.Algorithm{
@@ -59,11 +58,9 @@ func (*Connector) Capabilities() connector.Capabilities {
 	}
 }
 
-// Import runs the bulk user import job (chunked, submitted, and polled
-// per DESIGN.md), then, if opts.Organizations and/or opts.Roles are
-// set, the per-call organizations/roles/memberships phase -- all in one
-// call, per the CLI reference's note that `import auth0` sequences both
-// phases automatically.
+// Import runs the bulk user import job (chunked, submitted, and polled),
+// then, if opts.Organizations and/or opts.Roles are set, the
+// organizations/roles/memberships phase, all in one call.
 //
 // The orgs/roles phase addresses each user in report.Succeeded by the
 // user_id Auth0 gave them, recorded in report.TargetIDs: their target ID,

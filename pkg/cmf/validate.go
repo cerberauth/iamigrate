@@ -31,8 +31,8 @@ func init() {
 }
 
 // ValidateVersion reports an error if v is not a CMF version this package
-// understands. It's checked before any other decode step, per the design
-// doc: every consumer checks cmf_version first.
+// understands. Every consumer checks cmf_version before any other decode
+// step.
 func ValidateVersion(v string) error {
 	if v == "" {
 		return fmt.Errorf("cmf: missing cmf_version")

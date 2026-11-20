@@ -12,8 +12,7 @@ import (
 )
 
 // Recognized source column names. A source using this convention needs no
-// mapping.yaml edits (see DESIGN.md's "simple case" round-trip); any
-// other column is carried through as app_metadata so nothing is silently
+// mapping.yaml edits; any other column is carried through as app_metadata so nothing is silently
 // dropped, and flagged as a manual mapping step by `iamigrate map`. A column
 // named app_metadata.<key> or user_metadata.<key> is placed explicitly.
 const (

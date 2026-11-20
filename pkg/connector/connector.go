@@ -1,6 +1,6 @@
 // Package connector defines the SourceConnector and TargetConnector
-// interfaces every provider implements, per DESIGN.md's Architecture
-// section, plus the supporting types those interfaces exchange.
+// interfaces every provider implements, plus the supporting types those
+// interfaces exchange.
 package connector
 
 import (
@@ -36,7 +36,7 @@ type ImportOptions struct {
 	// when organizations.cmf.jsonl / roles.cmf.jsonl sit alongside the
 	// users file, so a target that supports them (Capabilities().
 	// SupportsOrgs / SupportsRoles) can run its second phase without a
-	// second CLI invocation, per DESIGN.md's CLI reference.
+	// second CLI invocation.
 	Organizations []cmf.Organization
 	Roles         []cmf.Role
 }
@@ -86,9 +86,9 @@ func (c Capabilities) SupportsMFAType(t cmf.MFAType) bool {
 }
 
 // Problem is one field on one user that a target's offline validation
-// rules reject, per DESIGN.md's validate command: raised by ValidateUser
-// (per-target field rules such as username length or email format) as
-// well as by `validate`'s own capability and cross-user duplicate checks.
+// rules reject. It's raised by ValidateUser (per-target field rules such
+// as username length or email format) as well as by `validate`'s own
+// capability and cross-user duplicate checks.
 type Problem struct {
 	SourceID string
 	Field    string
@@ -239,7 +239,7 @@ type TargetConnector interface {
 	// ValidateUser applies the target's offline field rules to u (e.g.
 	// Auth0's username length/characters or Kratos' identity schema),
 	// beyond the hash algorithm/MFA type checks Capabilities already
-	// covers, per DESIGN.md's validate command. It makes no network
+	// covers. It makes no network
 	// calls, so any rule that needs live configuration (an Auth0
 	// connection's validation.username, a Kratos identity schema) only
 	// applies once the connector's been given that configuration

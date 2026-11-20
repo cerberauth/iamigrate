@@ -215,10 +215,8 @@ func newExportCmd() *cobra.Command {
 				return err
 			}
 
-			// A scaffolded mapping.yaml covering the recognized-column
-			// simple case needs no manual edits; any custom column that
-			// landed in app_metadata is flagged as a manual step instead
-			// of guessed at, per DESIGN.md.
+			// Recognized columns need no manual edits; any custom column
+			// that landed in app_metadata is flagged as a manual step.
 			appKeys, userKeys, err := collectMetadataKeys(usersPath)
 			if err != nil {
 				return err

@@ -61,7 +61,7 @@ const maxConcurrentJobs = 2
 // order. allowUpsert controls whether Import intends to
 // call this again later for the same users (opts.Upsert); when true, the
 // hash translator always prefers custom_password_hash so a future run can
-// correct a bad translation (see DESIGN.md, "Idempotent re-runs").
+// correct a bad translation.
 //
 // It also returns per-user global_roles/memberships for every user with
 // either set, for the caller to feed into the organizations/roles phase.
@@ -300,13 +300,13 @@ const DuplicatedUserCode = "DUPLICATED_USER"
 // duplicatedUserMessage explains a DUPLICATED_USER error. Without upsert,
 // Auth0 reports it for any user already in the connection. With upsert,
 // existing connection users are updated, so the user can only be left over
-// in Auth0's user store (see DESIGN.md).
+// in Auth0's user store.
 func duplicatedUserMessage(upsert bool) string {
 	if !upsert {
 		return "user already exists in this connection: re-run with --upsert to update it"
 	}
 	return "user exists in Auth0's user store but not this tenant/connection: " +
-		"delete via the Connection Users endpoint and re-import (see DESIGN.md)"
+		"delete via the Connection Users endpoint and re-import"
 }
 
 // JobFailedCode is the code iamigrate reports for a user whose bulk import

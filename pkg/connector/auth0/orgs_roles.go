@@ -10,8 +10,8 @@ import (
 	"github.com/cerberauth/iamigrate/pkg/progress"
 )
 
-// RunOrgsRolesPhase implements DESIGN.md's post-import organizations/
-// roles/memberships steps 1-5. It assumes every source_id in roleInfos
+// RunOrgsRolesPhase creates roles and organizations and assigns
+// memberships after the user import. It assumes every source_id in roleInfos
 // that also appears in userIDs was successfully imported and that
 // userIDs[source_id] is that user's Auth0 user_id, prefix included.
 //
@@ -51,8 +51,7 @@ func runOrgsRolesPhase(
 	bar := progress.FromContext(ctx)
 	bar.Stage("creating roles & organizations", len(roles)+len(orgs))
 
-	// Step 1: roles, matched by name (no source_id round-trip on Auth0's
-	// side, per the design doc).
+	// Step 1: roles, matched by name (Auth0 doesn't store a source_id).
 	existingRoles, err := listRolesByName(ctx, client)
 	if err != nil {
 		return report, err

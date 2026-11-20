@@ -1,7 +1,6 @@
 // Package auth0 implements the Auth0 TargetConnector: Management API
 // client, bulk user import job chunking/polling, and the post-import
-// organizations/roles/memberships phase, per DESIGN.md's Auth0
-// import pipeline section.
+// organizations/roles/memberships phase.
 package auth0
 
 import (

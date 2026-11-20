@@ -97,8 +97,7 @@ func bcryptUser(id string) cmf.User {
 // TestRunBulkImportRecordedCassette records RunBulkImport's HTTP traffic
 // against fakeAuth0Server, then replays that cassette with no live server
 // running at all, asserting both runs produce the same request shapes and
-// ImportReport. This is the "recorded-cassette Auth0 connector test"
-// layer from DESIGN.md's testing strategy.
+// ImportReport.
 func TestRunBulkImportRecordedCassette(t *testing.T) {
 	orig := setFastPolling(t)
 	defer orig()

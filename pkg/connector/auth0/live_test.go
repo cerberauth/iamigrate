@@ -21,15 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLiveAuth0Login is the gated, live-tenant integration test from
-// DESIGN.md's testing strategy layer 4: testdata generate -> import
-// auth0 -> log in as a sample of fixture users with their real password
-// (and TOTP code, where enrolled) via a throwaway Resource Owner Password
-// Grant client, against a disposable Auth0 dev tenant.
+// TestLiveAuth0Login is a live-tenant integration test: testdata generate
+// -> import auth0 -> log in as a sample of fixture users with their real
+// password (and TOTP code, where enrolled) via a throwaway Resource Owner
+// Password Grant client, against a disposable Auth0 dev tenant.
 //
 // It only runs when every required environment variable is set, so it's
-// silently skipped in ordinary `go test ./...` runs and CI's default job;
-// wire it into a nightly/pre-release job per the design doc.
+// skipped in ordinary `go test ./...` runs.
 //
 // Required env vars:
 //
@@ -53,9 +51,8 @@ func TestLiveAuth0Login(t *testing.T) {
 	dir := t.TempDir()
 	answerKeyPath := dir + "/answer-key.json"
 
-	// 1. testdata generate: every algorithm and portable MFA type the
-	// design doc marks portable for Auth0 (totp; sms/email are excluded
-	// here since this test can't receive a real SMS/email OTP).
+	// 1. testdata generate: every algorithm, and TOTP as the only MFA type
+	// (this test can't receive a real SMS/email OTP).
 	opts := fixture.ExportOptions{
 		Count: 22, // one full round of every algorithm below, x2
 		Hashes: []fixture.HashSpec{
