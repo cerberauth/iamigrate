@@ -17,8 +17,7 @@ import (
 
 // Connector is a SourceConnector generating synthetic CMF users. It's used
 // both directly by `iamigrate testdata generate` and, indirectly, as the
-// rehearsal path every other connector's validate/import/diff steps also
-// run — see DESIGN.md's end-to-end flow diagram.
+// rehearsal path for every other connector's validate/import/diff steps.
 type Connector struct{}
 
 func New() *Connector { return &Connector{} }

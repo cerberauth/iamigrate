@@ -9,8 +9,7 @@ import (
 )
 
 // defaultConcurrency bounds how many organization/role/membership calls
-// run at once during the O(users x memberships) second phase (see
-// DESIGN.md, "Organizations, roles, and memberships").
+// run at once during the O(users x memberships) second phase.
 const defaultConcurrency = 8
 
 // rateLimiter is shared across every worker in a pool so a 429 or a

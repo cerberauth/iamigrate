@@ -8,8 +8,7 @@ import (
 	iamhash "github.com/cerberauth/iamigrate/pkg/hash"
 )
 
-// userFlags records which post-import follow-ups a translated user needs,
-// per DESIGN.md's MFA import and idempotent re-run sections.
+// userFlags records which post-import follow-ups a translated user needs.
 type userFlags struct {
 	requiresPasswordReset     bool
 	requiresReenrollment      bool

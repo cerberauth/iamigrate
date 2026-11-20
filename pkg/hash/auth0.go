@@ -43,10 +43,9 @@ const (
 )
 
 // ToAuth0 translates a CMF password into the field/payload Auth0's bulk
-// user import job expects, per DESIGN.md's hash algorithm mapping
-// table. allowPasswordHash should be false whenever the importer might
-// need to upsert this user again later, since password_hash can only be
-// set once (see DESIGN.md, "Idempotent re-runs").
+// user import job expects. allowPasswordHash should be false whenever the
+// importer might need to upsert this user again later, since password_hash
+// can only be set once.
 func ToAuth0(p cmf.Password, allowPasswordHash bool) (Auth0Hash, error) {
 	if !p.Portable {
 		return Auth0Hash{}, fmt.Errorf("hash: password marked non-portable, cannot translate to Auth0")

@@ -3,10 +3,8 @@ package mapping
 import "fmt"
 
 // Scaffold generates a starting mapping.yaml for target from an export
-// manifest's known app_metadata/user_metadata keys, per `iamigrate map`.
-// Keys not recognized as standard CMF fields are flagged as manual steps
-// rather than guessed at, per DESIGN.md's note that custom claims
-// need a human decision.
+// manifest's known app_metadata/user_metadata keys. Keys not recognized as
+// standard CMF fields are flagged as manual steps rather than guessed at.
 func Scaffold(target, connectionID string, appMetadataKeys, userMetadataKeys []string) Mapping {
 	m := Mapping{Target: target, ConnectionID: connectionID}
 	for _, k := range appMetadataKeys {

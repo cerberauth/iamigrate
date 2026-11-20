@@ -14,9 +14,9 @@ import (
 
 const goldenPath = "testdata/golden/users.golden.jsonl"
 
-// goldenUsers covers the edge cases DESIGN.md calls out for this
-// layer: password: null, ten MFA factors on one user, non-ASCII names,
-// and users whose only login identifier is a username or a phone.
+// goldenUsers covers the edge cases: password: null, ten MFA factors on
+// one user, non-ASCII names, and users whose only login identifier is a
+// username or a phone.
 func goldenUsers() []cmf.User {
 	fixedTime := time.Date(2024, 1, 15, 12, 0, 0, 0, time.UTC)
 

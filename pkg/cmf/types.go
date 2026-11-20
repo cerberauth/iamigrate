@@ -104,7 +104,7 @@ type KeyValue struct {
 }
 
 // Password is CMF's password credential object, modeled on Auth0's
-// custom_password_hash schema per DESIGN.md.
+// custom_password_hash schema.
 type Password struct {
 	Algorithm Algorithm      `json:"algorithm"`
 	PHCString string         `json:"phc_string,omitempty"`

@@ -150,8 +150,8 @@ func writeManifest(outDir string, m connector.Manifest) error {
 	return fsx.WriteFile(filepath.Join(outDir, "manifest.json"), b, 0o600)
 }
 
-// writeGitignore ensures answer-key.json is gitignored by default within
-// the output directory, per DESIGN.md.
+// writeGitignore ensures answer-key.json is gitignored in the output
+// directory.
 func writeGitignore(outDir string) error {
 	path := filepath.Join(outDir, ".gitignore")
 	if exists, err := fsx.FileExists(path); err != nil {
