@@ -1,6 +1,8 @@
 ---
-title: job
+title: iamigrate job
 description: Run export, validate, import, and verify as one resumable job.
+sidebar:
+  order: 12
 ---
 
 Runs the whole migration as a single job that survives a crash or a restart. Instead of four commands you re-run by hand, a job moves through fixed states, saving its state to disk before each step:
@@ -13,7 +15,7 @@ queued → exporting → validating → importing → verifying → done
 | State | Step |
 | --- | --- |
 | `exporting` | `export` from `--source` into `--users`, then the `--mapping`'s `export.user` and `ids.target`, if any. Skipped when the job has no `--source` and starts from an existing `--users` file. |
-| `validating` | The same checks as [`validate`](../validate/). Any problem fails the job, unless a `validate.after` hook downgrades it to a warning or decides otherwise. |
+| `validating` | The same checks as [`validate`](./validate/). Any problem fails the job, unless a `validate.after` hook downgrades it to a warning or decides otherwise. |
 | `importing` | `import` into `--target`, with `organizations.cmf.jsonl` and `roles.cmf.jsonl` read from beside `--users` if present. |
 | `verifying` | The same lookups as `diff`, with the import's target IDs for `verify.lookup: {strategy: target_id}`. A user missing from the target, or with drifted attributes, fails the job, unless a `verify.after` hook decides otherwise. Users the import skipped on purpose aren't looked for. |
 
@@ -65,7 +67,7 @@ All take `--store` (default `./jobs/`), where the jobs' state is kept, one `<id>
 
 ## Job stores
 
-`--store` is a local directory, given as a path or a `file://` URI, or the URI of a remote store, for jobs that resume on another machine, a CI runner or a restarted container, and for [`serve`](../serve/) replicas sharing their jobs.
+`--store` is a local directory, given as a path or a `file://` URI, or the URI of a remote store, for jobs that resume on another machine, a CI runner or a restarted container, and for [`serve`](./serve/) replicas sharing their jobs.
 
 Only one run drives a job at a time: the one holding its lock. In a local directory it is a file lock, which the system releases if the process dies. In a remote store it is a lease the run renews while it goes; one that crashes stops renewing, and the job can be resumed elsewhere 60 seconds later. A run that loses its lease (it stalled past it, and another took the job over) stops before its next save. Every save is also conditional on the version the run last read, so two writers never overwrite each other.
 
@@ -111,7 +113,7 @@ iamigrate job --store azblob://migrations/jobs run "$id"
 
 ## Hooks
 
-With `--hooks hooks.yaml`, the jobs run in this process fire [hooks](../../hooks/): `job.before_run` and the state events around every step, the export, validate, import and verify events of the steps, and the handlers of the `--mapping`'s [strategies](../../hooks/strategies/).
+With `--hooks hooks.yaml`, the jobs run in this process fire [hooks](../hooks/): `job.before_run` and the state events around every step, the export, validate, import and verify events of the steps, and the handlers of the `--mapping`'s [strategies](../hooks/strategies/).
 
 
 ```sh
@@ -123,7 +125,7 @@ Hooks aren't stored with a job: pass `--hooks` to every `job run`, a resumed one
 
 ## Driving a server
 
-With `--api-url` (or `$IAMIGRATE_API_URL`) the commands act on the jobs of a running [`iamigrate serve`](../serve/) instead of running them in process, and `--store` is ignored:
+With `--api-url` (or `$IAMIGRATE_API_URL`) the commands act on the jobs of a running [`iamigrate serve`](./serve/) instead of running them in process, and `--store` is ignored:
 
 ```sh
 id=$(iamigrate job --api-url http://127.0.0.1:8080 create --target kratos --admin-url http://kratos:4434 --users /srv/work/users.cmf.jsonl)
@@ -144,11 +146,11 @@ The server starts a job as soon as it is created, so `job run` only waits for it
 | `--upsert` | Allow re-running the import against existing users |
 | `--connection-id`, `--connection` | Auth0 database connection, by ID or name (default: the tenant's only one). Mutually exclusive |
 | `--connection-config` | Auth0 connection JSON, to tighten `validate`'s username rules |
-| `--in`, `--format`, `--source-mapping` | Input of a `flatfile` (`--in`, `--format csv\|json`, `--source-mapping`) or `keycloak` (`--in`) source, as for [`export`](../export/) |
-| `--organizations`, `--roles`, `--memberships` | Files of organizations, roles and memberships of a `flatfile` source, as for [`export`](../export/); the organizations and roles are written next to `--users` |
-| `--driver`, `--dsn-file`, `--query`, `--organizations-query`, `--roles-query`, `--memberships-query` | Database engine, DSN file and queries of the `sql` source, as for [`export`](../export/). The DSN is never stored with the job: without `--dsn-file` it is read from `$SQL_DSN` each time a step runs |
+| `--in`, `--format`, `--source-mapping` | Input of a `flatfile` (`--in`, `--format csv\|json`, `--source-mapping`) or `keycloak` (`--in`) source, as for [`export`](./export/) |
+| `--organizations`, `--roles`, `--memberships` | Files of organizations, roles and memberships of a `flatfile` source, as for [`export`](./export/); the organizations and roles are written next to `--users` |
+| `--driver`, `--dsn-file`, `--query`, `--organizations-query`, `--roles-query`, `--memberships-query` | Database engine, DSN file and queries of the `sql` source, as for [`export`](./export/). The DSN is never stored with the job: without `--dsn-file` it is read from `$SQL_DSN` each time a step runs |
 | `--admin-url`, `--schema-id`, `--schema-file` | Kratos Admin API URL (or `$KRATOS_ADMIN_URL`), identity schema ID, and schema JSON for `validate` |
-| `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options (`--export-limit` also applies to `azure-ad-b2c`), as for [`export`](../export/) |
-| `--tenant`, `--filter`, `--extension-attributes` | Azure AD B2C source options, as for [`export`](../export/); the client ID and secret come from the environment |
+| `--export-connection-id`, `--export-fields`, `--export-limit` | Auth0 source options (`--export-limit` also applies to `azure-ad-b2c`), as for [`export`](./export/) |
+| `--tenant`, `--filter`, `--extension-attributes` | Azure AD B2C source options, as for [`export`](./export/); the client ID and secret come from the environment |
 | `--hash-rounds`, `--hash-mem-cost` | Firebase project's scrypt parameters; the signer key and salt separator come from the environment |
 | `--user-pool-id`, `--region`, `--endpoint-url` | Cognito user pool ID (or `$COGNITO_USER_POOL_ID`), AWS region (default: the pool ID's) and API URL for an emulator; the AWS keys come from the environment |

@@ -73,7 +73,7 @@ iamigrate export --source flatfile --in users.json --format json --mapping mappi
 iamigrate prepare --in users.json --format json --mapping mapping.yaml --out users-prepared.csv
 ```
 
-`prepare` also flags password hashes that `export` couldn't read (wrong algorithm for the digest's size, bad encoding, a salt with no encoding), and the [password hashes guide](https://www.cerberauth.com/docs/iamigrate/guides/prepare-password-hashes/) covers salts, encodings and packed formats.
+`prepare` also flags password hashes that `export` couldn't read (wrong algorithm for the digest's size, bad encoding, a salt with no encoding), and the [password hashes guide](https://www.cerberauth.com/docs/iamigrate/guides/prepare/prepare-password-hashes/) covers salts, encodings and packed formats.
 
 ## Migrating from a SQL database
 

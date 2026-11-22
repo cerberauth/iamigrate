@@ -1,6 +1,8 @@
 ---
 title: Import users into Ory Kratos
 description: Step-by-step guide to importing users and password hashes into a self-hosted Ory Kratos instance with iamigrate, including what doesn't carry over.
+sidebar:
+  order: 5
 ---
 
 import { Aside } from '@/components/docs';
@@ -118,7 +120,7 @@ iamigrate testdata generate \
 
 Leave out `totp` and `recovery_codes` for now: every user with them fails (see [MFA factors](#mfa-factors)). To see how other algorithms behave, add for example `--hash md5` or `--hash pbkdf2`. Those users fail with `TRANSLATION_ERROR`.
 
-For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
+For every option, see [Generate test fixtures](../prepare/generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
 
 ## 3. Review the manifest
 
@@ -147,7 +149,7 @@ With the fixture above, expect problems for the `sms` and `email` users. They're
 
 ### Check your source database
 
-To find users that break Ory Kratos' rules before you export them, without iamigrate, see [Ory Kratos data rules](../../data-rules/kratos/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
+To find users that break Ory Kratos' rules before you export them, without iamigrate, see [Ory Kratos data rules](../validate-data/kratos/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
 
 ## 5. Understand how hashes and factors are translated
 
@@ -316,9 +318,9 @@ If you can write the identity JSON yourself, Ory's tools import more than iamigr
 
 ## See also
 
-- [Export users from Ory Kratos](../../export/kratos/)
+- [Export users from Ory Kratos](../export/kratos/)
 - [`import kratos` reference](../../../reference/cli/import-kratos/)
 - [`validate` reference](../../../reference/cli/validate/)
-- [Ory Kratos data rules](../../data-rules/kratos/)
+- [Ory Kratos data rules](../validate-data/kratos/)
 - [`diff kratos` reference](../../../reference/cli/diff-kratos/)
-- [Generate test fixtures](../../generate-test-fixtures/)
+- [Generate test fixtures](../prepare/generate-test-fixtures/)

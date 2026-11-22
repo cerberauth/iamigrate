@@ -1,6 +1,8 @@
 ---
 title: Events
 description: Every event hook point, what it sends and what its answer can do.
+sidebar:
+  order: 2
 ---
 
 Events are configured under `events` in `hooks.yaml` (see [Hooks](../)). Each is one of three kinds:
@@ -15,7 +17,7 @@ A veto is recorded on the job as `vetoed`.
 
 ## Job events
 
-Fired by a job only ([`job`](../../cli/job/), [`serve`](../../cli/serve/)), never by a standalone command.
+Fired by a job only ([`job`](../cli/job/), [`serve`](../cli/serve/)), never by a standalone command.
 
 | Event | Kind | When |
 | --- | --- | --- |
@@ -43,7 +45,7 @@ A failing `state.enter` or `state.exit` with `on_failure: fail` fails the job in
 
 ## Step events
 
-Fired by a job's steps, and by the standalone commands doing the same work: [`export`](../../cli/export/), [`validate`](../../cli/validate/), `import` and `diff`.
+Fired by a job's steps, and by the standalone commands doing the same work: [`export`](../cli/export/), [`validate`](../cli/validate/), `import` and `diff`.
 
 ### `export.after` (veto)
 
@@ -92,7 +94,7 @@ After the import, every user's outcome, in batches of the handler's `batch_size`
 ]}
 ```
 
-`target_id` is the ID the target gave the user. `follow_ups` lists what the user needs after the import: `password_reset`, `reenrollment` (MFA), `recovery_code_regen`. Users skipped on purpose, by the [`import.user`](../strategies/) strategy or the mapping's [`conflict`](../../mapping/) section, are not included.
+`target_id` is the ID the target gave the user. `follow_ups` lists what the user needs after the import: `password_reset`, `reenrollment` (MFA), `recovery_code_regen`. Users skipped on purpose, by the [`import.user`](./strategies/) strategy or the mapping's [`conflict`](../mapping/) section, are not included.
 
 ### `import.after` (notify)
 

@@ -1,6 +1,8 @@
 ---
 title: Export users from Keycloak
 description: Export users and password hashes from a Keycloak realm export into CMF with iamigrate, and what gets left behind.
+sidebar:
+  order: 4
 ---
 
 import { Aside } from '@/components/docs';
@@ -144,13 +146,13 @@ iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.y
 
 From there, follow the import guide for your target:
 
-- [Import users into Auth0](../../import/auth0/)
-- [Import users into Ory Kratos](../../import/kratos/)
-- [Import users into Keycloak](../../import/keycloak/), for example to move between Keycloak realms or instances
+- [Import users into Auth0](../import/auth0/)
+- [Import users into Ory Kratos](../import/kratos/)
+- [Import users into Keycloak](../import/keycloak/), for example to move between Keycloak realms or instances
 
 ## Rehearse with test data
 
-To try the export without a real instance, import a fixture into a disposable Keycloak (see [Import users into Keycloak](../../import/keycloak/)), export the realm with `kc.sh export`, then run `iamigrate export` against it:
+To try the export without a real instance, import a fixture into a disposable Keycloak (see [Import users into Keycloak](../import/keycloak/)), export the realm with `kc.sh export`, then run `iamigrate export` against it:
 
 ```sh
 iamigrate testdata generate --count 50 --hash pbkdf2:digest=sha256,iterations=27500 --hash argon2 --out ./fixtures/

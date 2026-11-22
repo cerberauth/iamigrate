@@ -1,29 +1,31 @@
 ---
-title: CLI Reference
+title: CLI reference
 description: All iamigrate commands and flags.
+sidebar:
+  order: 1
 ---
 
 | Command | Does |
 | --- | --- |
-| [`testdata generate`](./testdata/) | Generate a synthetic CMF fixture and `answer-key.json` |
+| [`testdata generate`](./testdata-generate/) | Generate a synthetic CMF fixture and `answer-key.json` |
 | [`prepare`](./prepare/) | Rewrite a CSV or JSON file with any column names into the columns the flat-file export reads |
 | [`export`](./export/) | Export identities from a source (`flatfile`, `sql`, `kratos`, `keycloak`, `firebase`, `auth0`, `azure-ad-b2c`) into CMF |
 | [`map`](./map/) | Scaffold or update the CMF → target field mapping |
 | [`validate`](./validate/) | Dry-run a CMF file against a target's capabilities (no network calls) |
-| [`ids assign`](./ids/) | Assign the user IDs a target is to give the users, per the mapping's `ids.target` |
+| [`ids assign`](./ids-assign/) | Assign the user IDs a target is to give the users, per the mapping's `ids.target` |
 | [`set-passwords`](./set-passwords/) | Give users a unique random password in a CMF file, when their real passwords aren't known |
-| [`import auth0`](./import-auth0/) | Chunk, submit, poll, and import a CMF file into an Auth0 tenant |
-| [`import kratos`](./import-kratos/) | Create Ory Kratos identities from a CMF file via the Admin API |
-| [`import keycloak`](./import-keycloak/) | Create Keycloak users from a CMF file via the Admin API |
-| [`import firebase`](./import-firebase/) | Create Firebase Authentication users from a CMF file via the Identity Toolkit API |
-| [`import cognito`](./import-cognito/) | Create AWS Cognito user pool users from a CMF file via the admin API |
-| [`diff auth0`](./diff-auth0/) | Reconcile a CMF file against a live Auth0 tenant |
-| [`diff kratos`](./diff-kratos/) | Reconcile a CMF file against a live Ory Kratos instance |
-| [`diff keycloak`](./diff-keycloak/) | Reconcile a CMF file against a live Keycloak realm |
-| [`diff firebase`](./diff-firebase/) | Reconcile a CMF file against a live Firebase project |
-| [`diff cognito`](./diff-cognito/) | Reconcile a CMF file against a live AWS Cognito user pool |
-| [`rollback auth0`](./rollback-auth0/) | Delete the users of a CMF file from an Auth0 tenant |
-| [`rollback kratos`](./rollback-kratos/) | Delete the users of a CMF file from an Ory Kratos instance |
+| [`import auth0`](./import/auth0/) | Chunk, submit, poll, and import a CMF file into an Auth0 tenant |
+| [`import kratos`](./import/kratos/) | Create Ory Kratos identities from a CMF file via the Admin API |
+| [`import keycloak`](./import/keycloak/) | Create Keycloak users from a CMF file via the Admin API |
+| [`import firebase`](./import/firebase/) | Create Firebase Authentication users from a CMF file via the Identity Toolkit API |
+| [`import cognito`](./import/cognito/) | Create AWS Cognito user pool users from a CMF file via the admin API |
+| [`diff auth0`](./diff/auth0/) | Reconcile a CMF file against a live Auth0 tenant |
+| [`diff kratos`](./diff/kratos/) | Reconcile a CMF file against a live Ory Kratos instance |
+| [`diff keycloak`](./diff/keycloak/) | Reconcile a CMF file against a live Keycloak realm |
+| [`diff firebase`](./diff/firebase/) | Reconcile a CMF file against a live Firebase project |
+| [`diff cognito`](./diff/cognito/) | Reconcile a CMF file against a live AWS Cognito user pool |
+| [`rollback auth0`](./rollback/auth0/) | Delete the users of a CMF file from an Auth0 tenant |
+| [`rollback kratos`](./rollback/kratos/) | Delete the users of a CMF file from an Ory Kratos instance |
 | [`job`](./job/) | Run export, validate, import, and verify as one job that resumes after a crash or restart |
 | [`serve`](./serve/) | Serve those jobs over a REST API, for `job --api-url` to drive, and start them for new objects in a bucket |
 

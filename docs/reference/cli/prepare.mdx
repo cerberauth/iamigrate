@@ -1,9 +1,11 @@
 ---
-title: prepare
+title: iamigrate prepare
 description: Rewrite a CSV or JSON file, with any column names, password hash formats and layout, into the columns the flat-file export reads.
+sidebar:
+  order: 8
 ---
 
-Reads a CSV or JSON file whose columns are named however its source system named them, and writes a new file in the column convention [`export --source flatfile`](../export/) reads. A `mapping.yaml` describes how one file's columns map to the convention, so the same command handles any layout: write one mapping per source.
+Reads a CSV or JSON file whose columns are named however its source system named them, and writes a new file in the column convention [`export --source flatfile`](./export/) reads. A `mapping.yaml` describes how one file's columns map to the convention, so the same command handles any layout: write one mapping per source.
 
 The input is never modified. If you'd rather skip the intermediate file, `export --source flatfile --mapping` applies the same mapping while exporting; a prepared file exports exactly like the original does with its mapping.
 

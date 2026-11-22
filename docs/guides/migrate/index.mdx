@@ -1,6 +1,8 @@
 ---
 title: Migrate between providers
 description: One guide for each pair of supported providers, covering what carries over, how password hashes and second factors are handled, and the steps to run.
+sidebar:
+  order: 1
 ---
 
 iamigrate moves users in three steps: it exports a source into the Canonical Migration Format (CMF), checks the file against what the target can import, and imports it. What changes from one provider to the next is what survives the trip. The biggest difference is passwords: each provider hashes them with its own algorithms, and most can only import some of them. Second factors and profile fields vary too.
@@ -63,50 +65,50 @@ in `roles.cmf.jsonl`. Then give each user record its place in them, using those 
 
 | To | Passwords | Second factors |
 | --- | --- | --- |
-| [AWS Cognito](./auth0-to-cognito/) | Reset, or Lambda trigger | Not exported |
-| [Firebase](./auth0-to-firebase/) | Reset, or merge a hash file | Not exported |
-| [Keycloak](./auth0-to-keycloak/) | Reset | Not exported |
-| [Ory Kratos](./auth0-to-kratos/) | Reset, or merge a hash file | Not exported |
+| [AWS Cognito](./from-auth0/to-cognito/) | Reset, or Lambda trigger | Not exported |
+| [Firebase](./from-auth0/to-firebase/) | Reset, or merge a hash file | Not exported |
+| [Keycloak](./from-auth0/to-keycloak/) | Reset | Not exported |
+| [Ory Kratos](./from-auth0/to-kratos/) | Reset, or merge a hash file | Not exported |
 
 ### From Azure AD B2C
 
 | To | Passwords | Second factors |
 | --- | --- | --- |
-| [Auth0](./azure-ad-b2c-to-auth0/) | Reset, or check at sign-in | Not exported |
-| [AWS Cognito](./azure-ad-b2c-to-cognito/) | Reset, or check at sign-in | Not exported |
-| [Firebase](./azure-ad-b2c-to-firebase/) | Reset | Not exported |
-| [Keycloak](./azure-ad-b2c-to-keycloak/) | Reset, or check at sign-in | Not exported |
-| [Ory Kratos](./azure-ad-b2c-to-kratos/) | Reset | Not exported |
+| [Auth0](./from-azure-ad-b2c/to-auth0/) | Reset, or check at sign-in | Not exported |
+| [AWS Cognito](./from-azure-ad-b2c/to-cognito/) | Reset, or check at sign-in | Not exported |
+| [Firebase](./from-azure-ad-b2c/to-firebase/) | Reset | Not exported |
+| [Keycloak](./from-azure-ad-b2c/to-keycloak/) | Reset, or check at sign-in | Not exported |
+| [Ory Kratos](./from-azure-ad-b2c/to-kratos/) | Reset | Not exported |
 
 ### From Firebase
 
 | To | Passwords | Second factors |
 | --- | --- | --- |
-| [Auth0](./firebase-to-auth0/) | Reset | SMS carries over |
-| [AWS Cognito](./firebase-to-cognito/) | Reset, or Lambda trigger | Re-enroll |
-| [Keycloak](./firebase-to-keycloak/) | Reset | Re-enroll |
-| [Ory Kratos](./firebase-to-kratos/) | Reset | Re-enroll |
+| [Auth0](./from-firebase/to-auth0/) | Reset | SMS carries over |
+| [AWS Cognito](./from-firebase/to-cognito/) | Reset, or Lambda trigger | Re-enroll |
+| [Keycloak](./from-firebase/to-keycloak/) | Reset | Re-enroll |
+| [Ory Kratos](./from-firebase/to-kratos/) | Reset | Re-enroll |
 
 ### From Keycloak
 
 | To | Passwords | Second factors |
 | --- | --- | --- |
-| [Auth0](./keycloak-to-auth0/) | Kept | TOTP carries over |
-| [AWS Cognito](./keycloak-to-cognito/) | Reset, or Lambda trigger | Re-enroll |
-| [Firebase](./keycloak-to-firebase/) | Reset | Re-enroll |
-| [Ory Kratos](./keycloak-to-kratos/) | Partly kept (Argon2 only) | TOTP blocks the import, re-enroll |
+| [Auth0](./from-keycloak/to-auth0/) | Kept | TOTP carries over |
+| [AWS Cognito](./from-keycloak/to-cognito/) | Reset, or Lambda trigger | Re-enroll |
+| [Firebase](./from-keycloak/to-firebase/) | Reset | Re-enroll |
+| [Ory Kratos](./from-keycloak/to-kratos/) | Partly kept (Argon2 only) | TOTP blocks the import, re-enroll |
 
 ### From Ory Kratos
 
 | To | Passwords | Second factors |
 | --- | --- | --- |
-| [Auth0](./kratos-to-auth0/) | Kept | Not exported |
-| [AWS Cognito](./kratos-to-cognito/) | Reset, or Lambda trigger | Not exported |
-| [Firebase](./kratos-to-firebase/) | Partly kept (bcrypt only) | Not exported |
-| [Keycloak](./kratos-to-keycloak/) | Partly kept (Argon2 only) | Not exported |
+| [Auth0](./from-kratos/to-auth0/) | Kept | Not exported |
+| [AWS Cognito](./from-kratos/to-cognito/) | Reset, or Lambda trigger | Not exported |
+| [Firebase](./from-kratos/to-firebase/) | Partly kept (bcrypt only) | Not exported |
+| [Keycloak](./from-kratos/to-keycloak/) | Partly kept (Argon2 only) | Not exported |
 
 ## See also
 
-- [Generate test fixtures](../generate-test-fixtures/), to rehearse a migration with synthetic users
-- [Prepare password hashes](../prepare-password-hashes/), for a flat file whose hashes iamigrate can't read as they are
+- [Generate test fixtures](../prepare/generate-test-fixtures/), to rehearse a migration with synthetic users
+- [Prepare password hashes](../prepare/prepare-password-hashes/), for a flat file whose hashes iamigrate can't read as they are
 - [CLI reference](../../reference/cli/)

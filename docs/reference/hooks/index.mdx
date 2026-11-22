@@ -1,6 +1,8 @@
 ---
 title: Hooks
 description: React to a migration's events and hand its per-user decisions to your own code.
+sidebar:
+  order: 1
 ---
 
 Hooks let you customize a migration without forking iamigrate. There are two kinds:
@@ -46,7 +48,7 @@ strategies:
 
 A mapping can't hold a URL or a secret: it can only select a handler `hooks.yaml` declares, and naming one it doesn't is an error. Unknown keys in `hooks.yaml` are an error too, so a misspelled hook name fails at once instead of never firing.
 
-`--hooks` is accepted by [`job`](../cli/job/), [`serve`](../cli/serve/), [`export`](../cli/export/), [`validate`](../cli/validate/), `import`, `diff` and [`ids assign`](../cli/ids/). A handler's secret is read when the command starts, so a missing one stops it before any step runs.
+`--hooks` is accepted by [`job`](../cli/job/), [`serve`](../cli/serve/), [`export`](../cli/export/), [`validate`](../cli/validate/), `import`, `diff` and [`ids assign`](../cli/ids-assign/). A handler's secret is read when the command starts, so a missing one stops it before any step runs.
 
 ### `on_failure`
 

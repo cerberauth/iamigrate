@@ -1,6 +1,8 @@
 ---
 title: Import users into Keycloak
 description: Step-by-step guide to importing users and password hashes into a self-hosted Keycloak realm with iamigrate, including what doesn't carry over.
+sidebar:
+  order: 4
 ---
 
 import { Aside } from '@/components/docs';
@@ -90,7 +92,7 @@ iamigrate testdata generate \
 
 Leave out `recovery_codes` for now: Keycloak hashes recovery codes with its own scheme, so existing codes can never carry over (see [MFA factors](#mfa-factors)). To see how other algorithms behave, add for example `--hash bcrypt` or `--hash md5`. Those users fail with `TRANSLATION_ERROR`.
 
-For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password (and TOTP secret) so you can prove they can sign in. Keep it out of version control.
+For every option, see [Generate test fixtures](../prepare/generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password (and TOTP secret) so you can prove they can sign in. Keep it out of version control.
 
 ## 3. Review the manifest
 
@@ -115,7 +117,7 @@ With the fixture above, expect problems for the `sms` and `webauthn` users. They
 
 ### Check your source database
 
-To find users that break Keycloak's rules before you export them, without iamigrate, see [Keycloak data rules](../../data-rules/keycloak/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
+To find users that break Keycloak's rules before you export them, without iamigrate, see [Keycloak data rules](../validate-data/keycloak/). It lists every field with its required status, length limits, format, and uniqueness, as regular expressions and SQL queries you can run against your current user database.
 
 ## 5. Understand how hashes and factors are translated
 
@@ -289,9 +291,9 @@ Between two Keycloak servers, use Keycloak's own export and import: they carry r
 
 ## See also
 
-- [Export users from Keycloak](../../export/keycloak/)
+- [Export users from Keycloak](../export/keycloak/)
 - [`import keycloak` reference](../../../reference/cli/import-keycloak/)
 - [`validate` reference](../../../reference/cli/validate/)
-- [Keycloak data rules](../../data-rules/keycloak/)
+- [Keycloak data rules](../validate-data/keycloak/)
 - [`diff keycloak` reference](../../../reference/cli/diff-keycloak/)
-- [Generate test fixtures](../../generate-test-fixtures/)
+- [Generate test fixtures](../prepare/generate-test-fixtures/)

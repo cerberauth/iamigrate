@@ -1,6 +1,8 @@
 ---
 title: Export users from CSV or JSON files
 description: Export users, and their organizations, roles and memberships, from CSV or JSON files into CMF with iamigrate.
+sidebar:
+  order: 6
 ---
 
 import { Aside } from '@/components/docs';
@@ -9,7 +11,7 @@ This guide walks through exporting users kept in CSV or JSON files into the Cano
 
 ## How iamigrate reads flat files
 
-`iamigrate export --source flatfile` reads one file of users, one record per user. A file whose columns follow iamigrate's convention (`source_id`, `email`, `email_verified`, `username`, `given_name`, `family_name`, `locale`, `blocked`, `password`, `password_algorithm`, ...) needs nothing else; any other layout is described in a [`mapping.yaml`](../../../reference/mapping/). See [Prepare password hashes from a flat file](../../prepare-password-hashes/) for the password columns.
+`iamigrate export --source flatfile` reads one file of users, one record per user. A file whose columns follow iamigrate's convention (`source_id`, `email`, `email_verified`, `username`, `given_name`, `family_name`, `locale`, `blocked`, `password`, `password_algorithm`, ...) needs nothing else; any other layout is described in a [`mapping.yaml`](../../../reference/mapping/). See [Prepare password hashes from a flat file](../prepare/prepare-password-hashes/) for the password columns.
 
 Organizations, roles and who holds them come in three more files, each optional:
 
@@ -105,5 +107,5 @@ Besides the users' own problems, `validate` reports:
 
 ## Next steps
 
-- [Import into Auth0](../../import/auth0/), which creates the organizations and roles, then assigns the memberships.
+- [Import into Auth0](../import/auth0/), which creates the organizations and roles, then assigns the memberships.
 - The [`mapping.yaml` reference](../../../reference/mapping/) for every field option.
