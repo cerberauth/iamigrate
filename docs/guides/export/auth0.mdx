@@ -1,6 +1,8 @@
 ---
 title: Export users from Auth0
 description: Export the users of an Auth0 tenant into CMF with iamigrate, choose which attributes to export, and get the password hashes through Auth0 support when users must keep their password.
+sidebar:
+  order: 1
 ---
 
 import { Aside } from '@/components/docs';
@@ -23,7 +25,7 @@ Every user of the tenant is exported, whatever their connection, and whether or 
 
 - iamigrate installed (see [Installation](../../../installation/)).
 - A paid Auth0 plan. Auth0 doesn't offer user export jobs on the Free plan.
-- A Management API token, or a Machine-to-Machine application's client ID and secret, with the `read:users` scope. Create one as described in the [import guide](../../import/auth0/#create-a-management-api-token). If waiting for the job fails with a `403`, also grant `create:users`, which Auth0's reference lists for job status requests.
+- A Management API token, or a Machine-to-Machine application's client ID and secret, with the `read:users` scope. Create one as described in the [import guide](../import/auth0/#create-a-management-api-token). If waiting for the job fails with a `403`, also grant `create:users`, which Auth0's reference lists for job status requests.
 
 <Aside type="caution">
   The export contains personal data. Write it somewhere access-controlled, and delete it once the migration is done.
@@ -176,10 +178,10 @@ iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.y
 
 From there, follow the import guide for your target:
 
-- [Import users into Auth0](../../import/auth0/), for example to move between tenants
-- [Import users into Ory Kratos](../../import/kratos/)
-- [Import users into Keycloak](../../import/keycloak/)
-- [Import users into Firebase](../../import/firebase/)
+- [Import users into Auth0](../import/auth0/), for example to move between tenants
+- [Import users into Ory Kratos](../import/kratos/)
+- [Import users into Keycloak](../import/keycloak/)
+- [Import users into Firebase](../import/firebase/)
 
 ## Troubleshooting
 
@@ -211,4 +213,4 @@ Auth0's own job is the only way to reach everything the tenant exposes. iamigrat
 - [`export` reference](../../../reference/cli/export/)
 - [`map` reference](../../../reference/cli/map/)
 - [`validate` reference](../../../reference/cli/validate/)
-- [Auth0 data rules](../../data-rules/auth0/)
+- [Auth0 data rules](../validate-data/auth0/)

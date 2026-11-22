@@ -1,9 +1,11 @@
 ---
-title: mapping.yaml
+title: Mapping file (mapping.yaml)
 description: Every section of mapping.yaml, from field renames to ID strategies and hooks.
+sidebar:
+  order: 3
 ---
 
-`mapping.yaml` describes how fields move between a source, CMF and a target, and which [strategies](../hooks/strategies/) apply. [`export`](../cli/export/) scaffolds one and [`map`](../cli/map/) sets its target; the other commands read it with `--mapping`. Every section is optional except `target` where noted.
+`mapping.yaml` describes how fields move between a source, CMF and a target, and which [strategies](./hooks/strategies/) apply. [`export`](./cli/export/) scaffolds one and [`map`](./cli/map/) sets its target; the other commands read it with `--mapping`. Every section is optional except `target` where noted.
 
 ```yaml
 target: auth0
@@ -42,7 +44,7 @@ strategies:
   verify.lookup: {strategy: target_id}
 ```
 
-Handlers are declared in `hooks.yaml` and selected here by name; a mapping can't hold a URL or a secret. See [Hooks](../hooks/).
+Handlers are declared in `hooks.yaml` and selected here by name; a mapping can't hold a URL or a secret. See [Hooks](./hooks/).
 
 ## `target`, `connection_id`
 
@@ -50,7 +52,7 @@ The target connector the mapping is for (`auth0`, `kratos`, `keycloak`, `firebas
 
 ## `fields`, `records_path`
 
-How a flat file's own columns become CMF fields, on `export --source flatfile` (and [`prepare`](../cli/prepare/)). See [`export`](../cli/export/) for the column convention and [`prepare`](../cli/prepare/) for the full options of a field: `source`, `cmf`, `pattern`, `values`, `transform` and `default`. `records_path` is the dotted path to the array of users in a JSON file whose root is an object.
+How a flat file's own columns become CMF fields, on `export --source flatfile` (and [`prepare`](./cli/prepare/)). See [`export`](./cli/export/) for the column convention and [`prepare`](./cli/prepare/) for the full options of a field: `source`, `cmf`, `pattern`, `values`, `transform` and `default`. `records_path` is the dotted path to the array of users in a JSON file whose root is an object.
 
 A `transform` is a pipeline of transforms joined with `|`, run left to right: the built-ins `trim`, `lowercase`, `uppercase`, `bool` (true/false, yes/no, 1/0, on/off... into `true` or `false`) and `not` (`bool`, inverted), and the custom ones under `transforms`. An empty value stays empty.
 
@@ -86,7 +88,7 @@ A membership row with an organization and no role makes the user a member withou
 
 ## `transforms`
 
-Custom transforms, each handed to a handler: on export as the [`map.field`](../hooks/strategies/) strategy, on import as `map.target_field`. A name can't be a built-in's.
+Custom transforms, each handed to a handler: on export as the [`map.field`](./hooks/strategies/) strategy, on import as `map.target_field`. A name can't be a built-in's.
 
 ```yaml
 transforms:
@@ -95,7 +97,7 @@ transforms:
 
 ## `ids`
 
-`ids.target` decides the user ID each user gets in the target: `preserve` (the source ID, the default), `prefix`, `template`, `uuidv5`, or a handler. It is assigned once into the users file's `target_ids`, by a job's export or [`ids assign`](../cli/ids/), and only Auth0 and Firebase accept it. See [`id.target`](../hooks/strategies/).
+`ids.target` decides the user ID each user gets in the target: `preserve` (the source ID, the default), `prefix`, `template`, `uuidv5`, or a handler. It is assigned once into the users file's `target_ids`, by a job's export or [`ids assign`](./cli/ids-assign/), and only Auth0 and Firebase accept it. See [`id.target`](./hooks/strategies/).
 
 ## `target_fields`
 
@@ -134,7 +136,7 @@ metadata:
 
 Use it for a key that would collide with something the connector sets: the Kratos connector copies `user_metadata` into the identity's traits, so a `user_metadata.email` collides with the user's email trait. The user's own identifier wins and the key stays in `metadata_public` only, and `validate` reports the collision.
 
-The routes are the same for every user. To place keys differently per user, delegate to a handler with [`metadata.place`](../hooks/strategies/#metadataplace): the keys it places are taken before the routes, which then apply to the rest.
+The routes are the same for every user. To place keys differently per user, delegate to a handler with [`metadata.place`](./hooks/strategies/#metadataplace): the keys it places are taken before the routes, which then apply to the rest.
 
 ## `conflict`
 
@@ -148,7 +150,7 @@ What an import does with a user the target already has:
 
 ## `strategies`
 
-The strategies handed to handlers, by name, and the built-in alternatives of `verify.lookup` and `identity.primary` (`email_first`, `username_first`, `phone_first`). See [Strategies](../hooks/strategies/) for each: `export.record`, `id.source`, `hash.detect`, `export.user`, `validate.user`, `validate.dedup_key`, `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, `metadata.place`, `import.payload`, `org.resolve`, `role.resolve`, `verify.lookup`, `verify.compare`.
+The strategies handed to handlers, by name, and the built-in alternatives of `verify.lookup` and `identity.primary` (`email_first`, `username_first`, `phone_first`). See [Strategies](./hooks/strategies/) for each: `export.record`, `id.source`, `hash.detect`, `export.user`, `validate.user`, `validate.dedup_key`, `import.user`, `identity.primary`, `hash.translate`, `mfa.translate`, `metadata.place`, `import.payload`, `org.resolve`, `role.resolve`, `verify.lookup`, `verify.compare`.
 
 ```yaml
 strategies:

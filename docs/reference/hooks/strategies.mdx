@@ -1,9 +1,11 @@
 ---
 title: Strategies
 description: Every strategy hook point, how to configure it, what it sends and what it answers.
+sidebar:
+  order: 3
 ---
 
-A strategy is a decision iamigrate makes for each user (or record, role, organization) that you can hand to a handler declared in `hooks.yaml` (see [Hooks](../)). Strategies are configured in [`mapping.yaml`](../../mapping/), and each keeps today's behavior unless configured.
+A strategy is a decision iamigrate makes for each user (or record, role, organization) that you can hand to a handler declared in `hooks.yaml` (see [Hooks](../)). Strategies are configured in [`mapping.yaml`](../mapping/), and each keeps today's behavior unless configured.
 
 Most go under `strategies`, by name:
 
@@ -14,7 +16,7 @@ strategies:
   verify.lookup: {strategy: target_id}     # a built-in alternative
 ```
 
-`id.target` goes under `ids`, and custom transforms (`map.field`, `map.target_field`) under `transforms`. See [`mapping.yaml`](../../mapping/).
+`id.target` goes under `ids`, and custom transforms (`map.field`, `map.target_field`) under `transforms`. See [`mapping.yaml`](../mapping/).
 
 Every strategy is batched: one request carries up to the handler's `batch_size` items, `{"items": {"<key>": <item>}}`, and the answer holds one result per key, `{"results": {"<key>": <result>}}`. The key is the user's `source_id` unless said otherwise. A strategy's `on_failure` defaults to `fail`; with `ignore`, a failed call leaves the users of that batch to the built-in behavior.
 
@@ -83,7 +85,7 @@ Each CMF user the export produced, whatever the source, before it is written to 
 
 ### `id.target`
 
-The user ID each user gets in the target, assigned once into the users file's `target_ids` so that every import of it, a resumed one included, sends the same. Configured under `ids.target`, with a built-in or a handler; a job's export applies it, and [`ids assign`](../../cli/ids/) does for a users file that didn't come from one.
+The user ID each user gets in the target, assigned once into the users file's `target_ids` so that every import of it, a resumed one included, sends the same. Configured under `ids.target`, with a built-in or a handler; a job's export applies it, and [`ids assign`](../cli/ids-assign/) does for a users file that didn't come from one.
 
 | `ids.target` | ID |
 | --- | --- |
@@ -156,7 +158,7 @@ Verify looks users up as the import saw them, replaying a built-in's choice and 
 
 ### `metadata.place`
 
-Where each user's metadata keys go on the target, when it isn't the same for every user. The mapping's [`metadata`](../../mapping/#metadata) routes are static; this asks a handler, user by user, and the routes then apply to the keys it didn't place. Only users with `app_metadata` or `user_metadata` are sent.
+Where each user's metadata keys go on the target, when it isn't the same for every user. The mapping's [`metadata`](../mapping/#metadata) routes are static; this asks a handler, user by user, and the routes then apply to the keys it didn't place. Only users with `app_metadata` or `user_metadata` are sent.
 
 - Item: the user (their `app_metadata` and `user_metadata` among the rest, never their credentials).
 - Result: a list of placements, `[{"key": "plan", "from": "app_metadata", "destination": "metadata_admin.plan"}]`. `from` is `app_metadata` or `user_metadata`, and `destination` a target field path, or `drop` to leave the key out. `[]` places nothing.

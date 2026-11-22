@@ -1,6 +1,8 @@
 ---
 title: Export users from Azure AD B2C
 description: Export the users of an Azure AD B2C tenant into CMF with iamigrate through Microsoft Graph, choose which users and custom attributes to export, and know what is left behind.
+sidebar:
+  order: 2
 ---
 
 import { Aside } from '@/components/docs';
@@ -137,10 +139,10 @@ iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.y
 
 From there, follow the import guide for your target:
 
-- [Import users into Auth0](../../import/auth0/)
-- [Import users into Ory Kratos](../../import/kratos/)
-- [Import users into Keycloak](../../import/keycloak/)
-- [Import users into Firebase](../../import/firebase/)
+- [Import users into Auth0](../import/auth0/)
+- [Import users into Ory Kratos](../import/kratos/)
+- [Import users into Keycloak](../import/keycloak/)
+- [Import users into Firebase](../import/firebase/)
 
 ## Troubleshooting
 

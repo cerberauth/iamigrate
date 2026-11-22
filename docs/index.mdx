@@ -36,6 +36,21 @@ import { Card, CardGrid, LinkCard } from '@/components/docs';
   </Card>
 </CardGrid>
 
+## Provider coverage
+
+Not every provider supports every step. A dash means there is no guide or command for it yet.
+
+| Provider | Export | Data rules | Import | Diff | Rollback |
+| --- | --- | --- | --- | --- | --- |
+| Auth0 | [Yes](./guides/export/auth0/) | [Yes](./guides/validate-data/auth0/) | [Yes](./guides/import/auth0/) | [Yes](./reference/cli/diff/auth0/) | [Yes](./reference/cli/rollback/auth0/) |
+| AWS Cognito | — | — | [Yes](./guides/import/cognito/) | [Yes](./reference/cli/diff/cognito/) | — |
+| Azure AD B2C | [Yes](./guides/export/azure-ad-b2c/) | — | — | — | — |
+| Firebase | [Yes](./guides/export/firebase/) | — | [Yes](./guides/import/firebase/) | [Yes](./reference/cli/diff/firebase/) | — |
+| Keycloak | [Yes](./guides/export/keycloak/) | [Yes](./guides/validate-data/keycloak/) | [Yes](./guides/import/keycloak/) | [Yes](./reference/cli/diff/keycloak/) | — |
+| Ory Kratos | [Yes](./guides/export/kratos/) | [Yes](./guides/validate-data/kratos/) | [Yes](./guides/import/kratos/) | [Yes](./reference/cli/diff/kratos/) | [Yes](./reference/cli/rollback/kratos/) |
+| CSV or JSON files | [Yes](./guides/export/flatfile/) | — | — | — | — |
+| SQL database | [Yes](./guides/export/sql/) | — | — | — | — |
+
 ## Quick start
 
 ```sh
@@ -75,6 +90,6 @@ iamigrate import keycloak --in ./fixtures/users.cmf.jsonl.gz \
   <LinkCard title="Export users from Firebase" description="Export identities and password hashes with the project's hash parameters, and what gets left behind." href="./guides/export/firebase/" />
   <LinkCard title="Export users from Auth0" description="Export users without passwords, choose the attributes, and get the hashes from Auth0 support." href="./guides/export/auth0/" />
   <LinkCard title="Export users from Azure AD B2C" description="Export users through Microsoft Graph without passwords, choose the users and custom attributes." href="./guides/export/azure-ad-b2c/" />
-  <LinkCard title="Generate test fixtures" description="Synthetic users with every hash algorithm and MFA factor type, plus an answer key." href="./guides/generate-test-fixtures/" />
+  <LinkCard title="Generate test fixtures" description="Synthetic users with every hash algorithm and MFA factor type, plus an answer key." href="./guides/prepare/generate-test-fixtures/" />
   <LinkCard title="CLI reference" description="All commands and flags." href="./reference/cli/" />
 </CardGrid>

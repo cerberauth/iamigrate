@@ -1,9 +1,11 @@
 ---
-title: serve
+title: iamigrate serve
 description: Serve jobs over a REST API.
+sidebar:
+  order: 13
 ---
 
-Runs the [`job`](../job/) state machine as a long-lived HTTP service, and with `--watch` starts jobs on its own for new objects in a bucket. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
+Runs the [`job`](./job/) state machine as a long-lived HTTP service, and with `--watch` starts jobs on its own for new objects in a bucket. The endpoints are thin wrappers over the same jobs the CLI runs in process, so a job behaves the same either way, and a job interrupted by a restart of the server stays in the state it was in on disk.
 
 ```sh
 iamigrate serve --listen 127.0.0.1:8080 --store ./jobs/
@@ -12,9 +14,9 @@ iamigrate serve --listen 127.0.0.1:8080 --store ./jobs/
 | Flag | Description |
 | --- | --- |
 | `--listen` | Address to listen on (default `127.0.0.1:8080`) |
-| `--store` | Where the jobs' state is kept: a local directory (default `./jobs/`), or a remote store URI, see [Job stores](../job/#job-stores). `--dir` is its deprecated former name |
+| `--store` | Where the jobs' state is kept: a local directory (default `./jobs/`), or a remote store URI, see [Job stores](./job/#job-stores). `--dir` is its deprecated former name |
 | `--rescan` | How often to look for unfinished jobs nobody runs, such as those of a replica that stopped (default `30s`; `0` only looks at start) |
-| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) every job fires, and the handlers job mappings can hand strategies to |
+| `--hooks` | `hooks.yaml` path: the [hooks](../hooks/) every job fires, and the handlers job mappings can hand strategies to |
 | `--watch` | `watchers.yaml` path: [watchers](#watchers) that start a job from a template for each new object in a bucket |
 
 ## Endpoints
@@ -58,7 +60,7 @@ watchers:
 | Key | Description |
 | --- | --- |
 | `name` | Identifies the watcher in `GET /` and in its jobs' IDs. Letters, digits, `-` and `_` |
-| `bucket` | Where new objects are looked for: a local directory, or `s3://bucket/prefix/`, `gs://bucket/prefix/` or `azblob://container/prefix/`, with the credentials of the [job stores](../job/#job-stores) of the same scheme. The bucket is only read |
+| `bucket` | Where new objects are looked for: a local directory, or `s3://bucket/prefix/`, `gs://bucket/prefix/` or `azblob://container/prefix/`, with the credentials of the [job stores](./job/#job-stores) of the same scheme. The bucket is only read |
 | `match` | Optional pattern the object's base name must match (`*`, `?`, `[...]`). Without it every object counts. Names starting with `.` never do |
 | `template` | The job template file, relative to this file |
 | `interval` | How often the bucket is listed (default `1m`) |
@@ -134,8 +136,8 @@ Set `$IAMIGRATE_API_TOKEN` to require it as a bearer token (`Authorization: Bear
 
 ## Several replicas
 
-With a remote `--store`, such as `gs://bucket/prefix`, `s3://bucket/prefix` or `azblob://container/prefix` (see [Job stores](../job/#job-stores)), several `serve` replicas can share the jobs: each job runs on one replica at a time, the one holding its lease. A job is started by the replica that received its `POST /jobs` (or `retry`), and the others pick up unfinished jobs nobody holds when they rescan, such as those of a replica that crashed, once its leases expire (60 seconds after its last renewal). The job's files (`users`, `mapping`, ...) must be at the same paths on every replica.
+With a remote `--store`, such as `gs://bucket/prefix`, `s3://bucket/prefix` or `azblob://container/prefix` (see [Job stores](./job/#job-stores)), several `serve` replicas can share the jobs: each job runs on one replica at a time, the one holding its lease. A job is started by the replica that received its `POST /jobs` (or `retry`), and the others pick up unfinished jobs nobody holds when they rescan, such as those of a replica that crashed, once its leases expire (60 seconds after its last renewal). The job's files (`users`, `mapping`, ...) must be at the same paths on every replica.
 
 ## Hooks
 
-A server fires the hooks of the `hooks.yaml` it was started with, for every job. They come only from `--hooks`: a request can't add a hook or change where one points. A job's params have no hook key, and the mapping a job's `mapping` param names can only select handlers that file declares, by name, never hold a URL. See [Hooks](../../hooks/) for what fires when, and how to verify a request's signature.
+A server fires the hooks of the `hooks.yaml` it was started with, for every job. They come only from `--hooks`: a request can't add a hook or change where one points. A job's params have no hook key, and the mapping a job's `mapping` param names can only select handlers that file declares, by name, never hold a URL. See [Hooks](../hooks/) for what fires when, and how to verify a request's signature.

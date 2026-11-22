@@ -1,0 +1,37 @@
+---
+title: iamigrate diff auth0
+description: Reconcile a CMF file against a live Auth0 tenant.
+sidebar:
+  order: 2
+---
+
+Looks up every CMF user in the live tenant by email (via Auth0's Get Users by Email endpoint), or, for users without an email, by username or phone number (via user search). Users with no email, username, or phone number can't be looked up and are listed as `no identifier`.
+
+Every finding is keyed by the CMF `source_id`:
+
+- **Counts**: how many users the CMF file holds against how many were found in the tenant. They differ by the missing and `no identifier` users.
+- **Missing**: users not found in the tenant.
+- **Attribute drift**: for users found, each field whose value differs from the CMF file: `blocked`, `email_verified`, `username`, `given_name`, `family_name`, `name`, `nickname` and `picture`. Profile fields the CMF user has no value for are skipped, since Auth0 fills in its own defaults. When an email matches users in several connections, the one `import auth0` created is compared.
+
+## Usage
+
+```sh
+iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --token $AUTH0_TOKEN
+# or with client credentials:
+iamigrate diff auth0 --in users.cmf.jsonl.gz --domain your-tenant.us.auth0.com --client-id $AUTH0_CLIENT_ID --client-secret $AUTH0_CLIENT_SECRET
+```
+
+Authenticate with either a Management API token (`--token`) or a Machine-to-Machine application's client ID and secret (`--client-id`/`--client-secret`). Flags take precedence over environment variables; if both `$AUTH0_TOKEN` and `$AUTH0_CLIENT_ID`/`$AUTH0_CLIENT_SECRET` are set, the token is used.
+
+## Flags
+
+| Flag | Description |
+| --- | --- |
+| `--in` | CMF `users.cmf.jsonl.gz` or uncompressed `users.cmf.jsonl` path; gzip is detected automatically (required) |
+| `--domain` | Auth0 tenant domain (or `$AUTH0_DOMAIN`) |
+| `--token` | Auth0 Management API token (or `$AUTH0_TOKEN`) |
+| `--client-id` | Machine-to-Machine application client ID (or `$AUTH0_CLIENT_ID`). With `--client-secret`, iamigrate gets the Management API token itself through the `client_credentials` grant and renews it before it expires. Can't be combined with `--token`. |
+| `--client-secret` | Machine-to-Machine application client secret (or `$AUTH0_CLIENT_SECRET`) |
+| `--mapping` | `mapping.yaml` path: its `verify.lookup` and `verify.compare` [strategies](../../hooks/strategies/) (optional) |
+| `--report` | `import-report.json` of the import being verified: its target IDs, for `verify.lookup: {strategy: target_id}`, and the users it skipped on purpose, which aren't looked for (optional) |
+| `--hooks` | `hooks.yaml` path: the [hooks](../../hooks/) this command fires (optional) |

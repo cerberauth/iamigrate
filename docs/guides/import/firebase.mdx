@@ -1,6 +1,8 @@
 ---
 title: Import users into Firebase Authentication
 description: Step-by-step guide to importing users and password hashes into a Firebase Authentication project with iamigrate, including what doesn't carry over.
+sidebar:
+  order: 3
 ---
 
 import { Aside } from '@/components/docs';
@@ -64,7 +66,7 @@ iamigrate testdata generate \
 | `sms` | The only second factor Firebase can import. |
 | `totp` | MFA Firebase can't import. Affected users need follow-up. |
 
-To see how other algorithms behave, add for example `--hash argon2` or `--hash md5`. Those users fail validation. For every option, see [Generate test fixtures](../../generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
+To see how other algorithms behave, add for example `--hash argon2` or `--hash md5`. Those users fail validation. For every option, see [Generate test fixtures](../prepare/generate-test-fixtures/). The command writes `users.cmf.jsonl.gz`, `manifest.json`, and `answer-key.json`, which holds each user's cleartext password so you can prove they can sign in. Keep it out of version control.
 
 ## 3. Review the manifest
 
@@ -244,8 +246,8 @@ If your source hashes with `md5`, `sha256` or `pbkdf2`, Firebase's own tools can
 
 ## See also
 
-- [Export users from Firebase](../../export/firebase/)
+- [Export users from Firebase](../export/firebase/)
 - [`import firebase` reference](../../../reference/cli/import-firebase/)
 - [`validate` reference](../../../reference/cli/validate/)
 - [`diff firebase` reference](../../../reference/cli/diff-firebase/)
-- [Generate test fixtures](../../generate-test-fixtures/)
+- [Generate test fixtures](../prepare/generate-test-fixtures/)

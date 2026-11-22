@@ -1,6 +1,8 @@
 ---
 title: Export users from Ory Kratos
 description: Export identities and password hashes from a self-hosted Ory Kratos instance into CMF with iamigrate, and what gets left behind.
+sidebar:
+  order: 5
 ---
 
 import { Aside } from '@/components/docs';
@@ -125,12 +127,12 @@ iamigrate validate --in ./export/users.cmf.jsonl.gz --mapping ./export/mapping.y
 
 From there, follow the import guide for your target:
 
-- [Import users into Auth0](../../import/auth0/)
-- [Import users into Ory Kratos](../../import/kratos/), for example to move between Kratos instances
+- [Import users into Auth0](../import/auth0/)
+- [Import users into Ory Kratos](../import/kratos/), for example to move between Kratos instances
 
 ## Rehearse with test data
 
-To try the export without a real instance, import a fixture into a disposable Kratos (see [Import users into Ory Kratos](../../import/kratos/)), then export it back:
+To try the export without a real instance, import a fixture into a disposable Kratos (see [Import users into Ory Kratos](../import/kratos/)), then export it back:
 
 ```sh
 iamigrate testdata generate --count 50 --hash bcrypt:cost=10 --hash argon2 --out ./fixtures/

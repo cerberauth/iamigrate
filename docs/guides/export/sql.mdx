@@ -1,6 +1,8 @@
 ---
 title: Export users from a SQL database
 description: Export users, and optionally organizations, roles and memberships, from a query over an application's own database into CMF with iamigrate.
+sidebar:
+  order: 7
 ---
 
 import { Aside } from '@/components/docs';
@@ -9,7 +11,7 @@ This guide walks through exporting users stored in an application's own database
 
 ## How iamigrate reads a database
 
-`iamigrate export --source sql` runs the query you give it and turns each row into one record. The column names are the record's source fields, so everything that works on a [flat file](../flatfile/) works on a query: [`mapping.yaml`](../../../reference/mapping/) renames and transforms the columns, password hashes are detected or described the same way (see [Prepare password hashes](../../prepare-password-hashes/)), and the export strategies apply unchanged.
+`iamigrate export --source sql` runs the query you give it and turns each row into one record. The column names are the record's source fields, so everything that works on a [flat file](./flatfile/) works on a query: [`mapping.yaml`](../../../reference/mapping/) renames and transforms the columns, password hashes are detected or described the same way (see [Prepare password hashes](../prepare/prepare-password-hashes/)), and the export strategies apply unchanged.
 
 - **`--driver`** names the database engine. It is required: there is no default. Today `sqlite` is available.
 - **`--query`** is the SQL selecting the users, or `@users.sql` to read it from a file.
@@ -69,7 +71,7 @@ memberships:
     - {source: perm, cmf: role}
 ```
 
-These queries are read whole, as memberships are joined into the users as they stream by. See [Export from CSV or JSON files](../flatfile/) for how memberships name organizations and roles, and what the manifest reports.
+These queries are read whole, as memberships are joined into the users as they stream by. See [Export from CSV or JSON files](./flatfile/) for how memberships name organizations and roles, and what the manifest reports.
 
 ## 3. Export
 
@@ -114,6 +116,6 @@ iamigrate validate --in ./export/users.cmf.jsonl.gz --target auth0
 
 ## Next steps
 
-- [Prepare password hashes](../../prepare-password-hashes/) to describe the algorithm, encoding and salt of your hashes.
+- [Prepare password hashes](../prepare/prepare-password-hashes/) to describe the algorithm, encoding and salt of your hashes.
 - The [`mapping.yaml` reference](../../../reference/mapping/) for every field option.
 - The [`export` reference](../../../reference/cli/export/) for every flag.
